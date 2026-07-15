@@ -90,8 +90,22 @@ A documentação interativa do Swagger OpenAPI estará disponível em: `http://l
 
 ## 📊 Endpoints de Transações e BI (Business Intelligence)
 
+### 🛡️ Autenticação da API (Lovable para Backend)
+Os endpoints de dados e dashboard da API (`/api/transactions`, `/api/transactions/{id}` e `/api/dashboard/*`) exigem autenticação segura por meio de uma chave interna definida no ambiente do servidor.
+* **Cabeçalho Obrigatório:** `X-Backend-API-Key`
+* **Configuração:** O valor do token de acesso deve ser configurado na variável de ambiente `BACKEND_API_KEY`. Caso não esteja configurado no servidor, as requisições retornarão status HTTP 401 Unauthorized.
+
+---
+
+### 🔒 Camada de Sanitização de Dados Pessoais (LGPD)
+Por motivos de segurança e privacidade, por padrão, o backend sanitiza os dados das transações de forma que nenhuma informação pessoal ou sensível dos compradores, vendedores ou corretores seja exposta publicamente.
+
+* **Filtro de Exposição:** `EXPOSE_RAW_TRANSACTIONS` (booleano, padrão: `false`)
+  * `false`: Remove campos sensíveis como `cpf_cnpj`, `cpf_cnpj_conjuge`, `data_nascimento`, `celular`, emails, `link_acesso`, `documentos`, `cobrancas_bancarias`, e dados detalhados de pagadores. Reduz compradores/vendedores a quantidades numéricas e comissionados a nome, participação e valor.
+  * `true`: Expõe os dados completos da transação (não recomendado em produção).
+
 O backend possui suporte a **modo dual**:
-1. **Live Mode:** As transações são buscadas em tempo real da API V2 do Pipeimob de forma paralela. As chaves de acesso (`PIPEIMOB_API_KEY` e `PIPEIMOB_SECRET_KEY`) são carregadas exclusivamente das variáveis de ambiente configuradas de forma segura no servidor (Render) ou no arquivo `.env` local. **Nenhum cabeçalho HTTP (como X-API-Key ou X-Secret-Key) ou parâmetro de requisição é aceito para envio de credenciais por segurança.**
+1. **Live Mode:** As transações são buscadas em tempo real da API V2 do Pipeimob de forma paralela. As chaves de acesso (`PIPEIMOB_API_KEY` e `PIPEIMOB_SECRET_KEY`) são carregadas exclusivamente das variáveis de ambiente configuradas de forma segura no servidor (Render) ou no arquivo `.env` local. **Nenhum cabeçalho HTTP (como X-API-Key ou X-Secret-Key) ou parâmetro de requisição é aceito para envio de credenciais do Pipeimob por segurança.**
 2. **Mock Mode (Fallback):** Caso não haja credenciais, o servidor retorna um conjunto de **60 negócios simulados** contendo dados demográficos e corretores fictícios estruturados de forma anônima, ideal para o desenvolvimento local do frontend no Lovable.
 
 ### Filtros Comuns (Query Parameters)
@@ -110,14 +124,14 @@ Todas as rotas de listagem e BI suportam os seguintes filtros opcionais:
   - `category`: Filtro pela categoria do imóvel (`categoria_crm`).
   - `financing`: Boleano (`true`/`false`) para filtrar se houve financiamento bancário.
 
-### Relação de Endpoints
+### Relação de Endpoints (Exigem cabeçalho `X-Backend-API-Key`)
 
 * **Listar Transações:** `GET /api/transactions`
-  * Retorna o JSON completo com a lista de transações filtradas.
+  * Retorna a lista de transações filtradas de forma sanitizada.
 * **Detalhar Transação:** `GET /api/transactions/{id}`
-  * Detalha uma única transação buscando por `transacao_unique_id_pipeimob` ou `codigo_contrato`.
+  * Detalha uma única transação de forma sanitizada, buscando por `transacao_unique_id_pipeimob` ou `codigo_contrato`.
 * **Métricas Gerais (KPIs):** `GET /api/dashboard/summary`
-  * Vendas totais, comissões acumuladas, comissão média em % e total de contratos.
+  * Vendas totais, comissões acumuladas, comissão média em % e total de contratos (agregado).
 * **Mídias de Origem:** `GET /api/dashboard/origins`
   * Contagem e volume financeiro agrupados por canal de captação (`midia_origem_compradores`).
 * **Etapas do Funil:** `GET /api/dashboard/stages`
@@ -127,7 +141,7 @@ Todas as rotas de listagem e BI suportam os seguintes filtros opcionais:
 * **Meios de Pagamento:** `GET /api/dashboard/payments`
   * Distribuição de bancos de financiamento, percentual de financiamento vs direto e formas de parcelamento.
 * **Análise de Comissões:** `GET /api/dashboard/commissions`
-  * Lista detalhada das taxas de comissão por contrato e média global.
+  * Taxas de comissão por contrato (apenas código do contrato e comissão, sem dados de corretor ou e-mails) e média global.
 * **Linha do Tempo (Timelines):** `GET /api/dashboard/timeline`
   * Progresso cronológico mensal do volume e quantidade de vendas (ex: `Jan/26`, `Fev/26`).
 

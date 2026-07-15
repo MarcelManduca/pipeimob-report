@@ -10,12 +10,12 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 # Force development environment for local localhost CORS tests
 os.environ["APP_ENV"] = "development"
 os.environ["ALLOWED_ORIGINS"] = "https://lovable-test-origin.app"
+os.environ["BACKEND_API_KEY"] = "test_backend_key"
 
-# Import mock data to assert absence of real spreadsheet names in codebase mocks
 from mock_data import MOCK_TRANSACTIONS
 from main import app
 
-client = TestClient(app)
+client = TestClient(app, headers={"X-Backend-API-Key": "test_backend_key"})
 
 def test_app_starts_without_credentials():
     assert app is not None
@@ -711,3 +711,107 @@ def test_live_mode_pagina_with_direct_filter_is_allowed(mock_urlopen):
     # Query with direct filter AND pagina
     response = client.get("/api/transactions?data_inicio_ccv=2026-07-01&pagina=1")
     assert response.status_code == 200
+
+def test_unauthorized_endpoints_without_key():
+    # Use a clean, unauthenticated client
+    unauth_client = TestClient(app)
+    
+    endpoints = [
+        "/api/transactions",
+        "/api/transactions/some_id",
+        "/api/dashboard/summary",
+        "/api/dashboard/origins",
+        "/api/dashboard/stages",
+        "/api/dashboard/managers",
+        "/api/dashboard/payments",
+        "/api/dashboard/commissions",
+        "/api/dashboard/timeline"
+    ]
+    for ep in endpoints:
+        response = unauth_client.get(ep)
+        assert response.status_code == 401
+        assert "Unauthorized: Invalid or missing backend api key." in response.json()["detail"]
+
+    # Also test with an invalid key
+    bad_client = TestClient(app, headers={"X-Backend-API-Key": "wrong_key"})
+    for ep in endpoints:
+        response = bad_client.get(ep)
+        assert response.status_code == 401
+        assert "Unauthorized: Invalid or missing backend api key." in response.json()["detail"]
+
+
+def test_privacy_compliance_on_public_responses():
+    # Set demo data mode to use mock transactions
+    os.environ["PIPEIMOB_DATA_MODE"] = "demo"
+    os.environ["EXPOSE_RAW_TRANSACTIONS"] = "false"
+    
+    # 1. Fetch transactions list
+    response = client.get("/api/transactions")
+    assert response.status_code == 200
+    data = response.json()
+    
+    # Assert that EXPOSE_RAW_TRANSACTIONS defaults to false and payload is sanitized
+    assert os.getenv("EXPOSE_RAW_TRANSACTIONS", "false").lower() == "false"
+    
+    # Let's perform recursive checks on all keys and values in the response JSON
+    sensitive_keys = {
+        "cpf", "cnpj", "celular", "email", "link_acesso", "documentos", 
+        "cobrancas_bancarias", "url", "token", "api_key", "secret_key"
+    }
+    
+    def verify_no_sensitive_data(node):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                k_lower = k.lower()
+                for sensitive in sensitive_keys:
+                    assert sensitive not in k_lower, f"Sensitive key '{k}' found in response!"
+                verify_no_sensitive_data(v)
+        elif isinstance(node, list):
+            for item in node:
+                verify_no_sensitive_data(item)
+        elif isinstance(node, str):
+            val_lower = node.lower()
+            # Assert that no value contains sensitive-looking substrings like typical emails or keys in plain text
+            for sensitive in ["@gralha", "secret_key", "api_key", "bearer"]:
+                assert sensitive not in val_lower, f"Sensitive substring '{sensitive}' found in string value: {node}"
+
+    verify_no_sensitive_data(data)
+    
+    # 2. Fetch single transaction details
+    tx_id = data["data"]["transactions"][0]["transacao_unique_id_pipeimob"]
+    detail_res = client.get(f"/api/transactions/{tx_id}")
+    assert detail_res.status_code == 200
+    verify_no_sensitive_data(detail_res.json())
+
+    # 3. Check all dashboard endpoints as well
+    dashboard_endpoints = [
+        "/api/dashboard/summary",
+        "/api/dashboard/origins",
+        "/api/dashboard/stages",
+        "/api/dashboard/managers",
+        "/api/dashboard/payments",
+        "/api/dashboard/commissions",
+        "/api/dashboard/timeline"
+    ]
+    for ep in dashboard_endpoints:
+        res = client.get(ep)
+        assert res.status_code == 200
+        verify_no_sensitive_data(res.json())
+
+
+def test_expose_raw_transactions_flag():
+    # If EXPOSE_RAW_TRANSACTIONS is set to true, raw transactions (including raw buyers/sellers lists) are returned
+    os.environ["EXPOSE_RAW_TRANSACTIONS"] = "true"
+    try:
+        os.environ["PIPEIMOB_DATA_MODE"] = "demo"
+        response = client.get("/api/transactions")
+        assert response.status_code == 200
+        txs = response.json()["data"]["transactions"]
+        if txs:
+            # Raw transaction should expose full mock compradores list (represented by 'clientes' list in mock data)
+            # whereas sanitized transaction only has counts.
+            first_tx = txs[0]
+            assert "clientes" in first_tx
+            assert isinstance(first_tx["clientes"], list)
+    finally:
+        os.environ["EXPOSE_RAW_TRANSACTIONS"] = "false"

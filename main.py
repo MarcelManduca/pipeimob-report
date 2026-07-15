@@ -4,8 +4,8 @@ import json
 import ssl
 import time
 from datetime import datetime, timezone
-from typing import List, Optional
-from fastapi import FastAPI, Header, Query, HTTPException, Response, Request
+from typing import List, Optional, Union
+from fastapi import FastAPI, Header, Query, HTTPException, Response, Request, Depends
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -510,6 +510,90 @@ def get_filtered_transactions(
     return filtered
 
 
+def sanitize_transaction(tx: dict) -> dict:
+    # 1. compradores count
+    compradores_raw = tx.get("compradores")
+    if compradores_raw is None:
+        # Fallback to checking tx.get("clientes")
+        clientes = tx.get("clientes") or []
+        compradores_count = sum(1 for c in clientes if isinstance(c, dict) and c.get("papel") == "Comprador")
+    else:
+        compradores_count = len(compradores_raw) if isinstance(compradores_raw, list) else int(compradores_raw or 0)
+    
+    # 2. vendedores count
+    vendedores_raw = tx.get("vendedores")
+    if vendedores_raw is None:
+        # Fallback to checking tx.get("clientes")
+        clientes = tx.get("clientes") or []
+        vendedores_count = sum(1 for c in clientes if isinstance(c, dict) and c.get("papel") == "Vendedor")
+    else:
+        vendedores_count = len(vendedores_raw) if isinstance(vendedores_raw, list) else int(vendedores_raw or 0)
+    
+    # 3. forma_pagamento summarized (natureza/nome e valor)
+    forma_pagamento_raw = tx.get("forma_pagamento") or []
+    forma_pagamento_clean = []
+    if isinstance(forma_pagamento_raw, list):
+        for fp in forma_pagamento_raw:
+            if isinstance(fp, dict):
+                nome = fp.get("nome") or fp.get("natureza") or "Forma de Pagamento"
+                valor = fp.get("valor") or 0.0
+                forma_pagamento_clean.append({"nome": nome, "valor": float(valor)})
+                
+    # 4. comissionados sanitizados (apenas nome, tipo e valor)
+    comissionados_raw = tx.get("comissionados") or []
+    comissionados_clean = []
+    if isinstance(comissionados_raw, list):
+        for c in comissionados_raw:
+            if isinstance(c, dict):
+                nome = c.get("nome") or c.get("comissionado_nome") or "Comissionado"
+                tipo = c.get("tipo") or c.get("participacao") or c.get("papel") or "Corretor"
+                valor = c.get("valor") or c.get("comissionado_valor") or 0.0
+                comissionados_clean.append({
+                    "nome": nome,
+                    "tipo": tipo,
+                    "valor": float(valor)
+                })
+
+    # 5. Build sanitized object
+    return {
+        "transacao_unique_id_pipeimob": tx.get("transacao_unique_id_pipeimob"),
+        "codigo_contrato": tx.get("codigo_contrato"),
+        "codigo_imovel": tx.get("codigo_imovel"),
+        "data_contrato": tx.get("data_contrato"),
+        "data_inicio_venda": tx.get("data_inicio_venda"),
+        "endereco_bairro": tx.get("endereco_bairro"),
+        "endereco_cidade": tx.get("endereco_cidade"),
+        "endereco_uf": tx.get("endereco_uf"),
+        "categoria_crm": tx.get("categoria_crm"),
+        "residencial_comercial": tx.get("residencial_comercial"),
+        "area_total": tx.get("area_total"),
+        "area_util": tx.get("area_util"),
+        "qtd_quartos": tx.get("qtd_quartos"),
+        "qtd_vagas": tx.get("qtd_vagas"),
+        "agente_gestor": tx.get("agente_gestor"),
+        "valor_contrato": tx.get("valor_contrato"),
+        "total_comissao": tx.get("total_comissao"),
+        "comissao_imobiliaria": tx.get("comissao_imobiliaria"),
+        "midia_origem_compradores": tx.get("midia_origem_compradores"),
+        "midia_origem_vendedores": tx.get("midia_origem_vendedores"),
+        "etapa_atual": tx.get("etapa_atual"),
+        "diasemestoque": tx.get("diasemestoque"),
+        "financiamento": tx.get("financiamento"),
+        "financiamento_banco": tx.get("financiamento_banco"),
+        "forma_pagamento": forma_pagamento_clean,
+        "compradores": compradores_count,
+        "vendedores": vendedores_count,
+        "comissionados": comissionados_clean
+    }
+
+
+def process_transactions_exposure(dataset: list) -> list:
+    expose_raw = os.getenv("EXPOSE_RAW_TRANSACTIONS", "false").strip().lower() == "true"
+    if expose_raw:
+        return dataset
+    return [sanitize_transaction(tx) for tx in dataset]
+
+
 # Pydantic Schemas for OpenAPI documentation
 class HealthResponse(BaseModel):
     status: str = Field(..., description="Status of the API service", json_schema_extra={"example": "ok"})
@@ -614,9 +698,48 @@ RESPONSES_503 = {
     }
 }
 
+class SanitizedPaymentMethod(BaseModel):
+    nome: Optional[str] = Field(None, description="Nome ou natureza da forma de pagamento", json_schema_extra={"example": "Sinal"})
+    valor: Optional[float] = Field(None, description="Valor pago", json_schema_extra={"example": 50000.0})
+
+class SanitizedCommissioned(BaseModel):
+    nome: Optional[str] = Field(None, description="Nome do comissionado", json_schema_extra={"example": "Corretor X"})
+    tipo: Optional[str] = Field(None, description="Tipo de participação ou papel", json_schema_extra={"example": "Captador"})
+    valor: Optional[float] = Field(None, description="Valor da comissão em R$", json_schema_extra={"example": 4000.0})
+
+class SanitizedTransaction(BaseModel):
+    transacao_unique_id_pipeimob: Optional[str] = Field(None, description="ID único do Pipeimob")
+    codigo_contrato: Optional[str] = Field(None, description="Código do contrato")
+    codigo_imovel: Optional[str] = Field(None, description="Código do imóvel")
+    data_contrato: Optional[str] = Field(None, description="Data do contrato")
+    data_inicio_venda: Optional[str] = Field(None, description="Data de início da venda")
+    endereco_bairro: Optional[str] = Field(None, description="Bairro")
+    endereco_cidade: Optional[str] = Field(None, description="Cidade")
+    endereco_uf: Optional[str] = Field(None, description="UF")
+    categoria_crm: Optional[str] = Field(None, description="Categoria do imóvel")
+    residencial_comercial: Optional[str] = Field(None, description="Finalidade residencial ou comercial")
+    area_total: Optional[float] = Field(None, description="Área total")
+    area_util: Optional[float] = Field(None, description="Área útil")
+    qtd_quartos: Optional[int] = Field(None, description="Quantidade de quartos")
+    qtd_vagas: Optional[int] = Field(None, description="Quantidade de vagas de garagem")
+    agente_gestor: Optional[str] = Field(None, description="Agente gestor da transação")
+    valor_contrato: Optional[float] = Field(None, description="Valor do contrato")
+    total_comissao: Optional[float] = Field(None, description="Total geral de comissão (VGC)")
+    comissao_imobiliaria: Optional[float] = Field(None, description="Fração de comissão destinada à imobiliária")
+    midia_origem_compradores: Optional[str] = Field(None, description="Origem da mídia do comprador")
+    midia_origem_vendedores: Optional[str] = Field(None, description="Origem da mídia do vendedor")
+    etapa_atual: Optional[str] = Field(None, description="Etapa atual da transação no CRM")
+    diasemestoque: Optional[int] = Field(None, description="Dias em estoque")
+    financiamento: Optional[bool] = Field(None, description="Indica se houve financiamento bancário")
+    financiamento_banco: Optional[str] = Field(None, description="Banco financiador")
+    forma_pagamento: List[SanitizedPaymentMethod] = Field(default_factory=list, description="Formas de pagamento resumidas")
+    compradores: int = Field(0, description="Quantidade de compradores")
+    vendedores: int = Field(0, description="Quantidade de vendedores")
+    comissionados: List[SanitizedCommissioned] = Field(default_factory=list, description="Lista de comissionados sanitizada")
+
 class TransactionsDataPayload(BaseModel):
     count: int = Field(..., description="Count of returned transactions", json_schema_extra={"example": 60})
-    transactions: List[dict] = Field(..., description="List of transaction objects")
+    transactions: List[dict] = Field(..., description="List of transaction objects (sanitized by default in production)")
 
 class TransactionsListResponse(BaseModel):
     data_mode: str = Field(..., description="Active data mode: demo, live, or unconfigured", json_schema_extra={"example": "live"})
@@ -1167,12 +1290,26 @@ async def get_catalog():
         resources=[transactions_resource]
     )
 
+async def verify_backend_api_key(x_backend_api_key: Optional[str] = Header(None)):
+    expected_key = os.getenv("BACKEND_API_KEY")
+    if not expected_key:
+        raise HTTPException(
+            status_code=401,
+            detail="Unauthorized: Backend API key is not configured on the server."
+        )
+    if x_backend_api_key != expected_key:
+        raise HTTPException(
+            status_code=401,
+            detail="Unauthorized: Invalid or missing backend api key."
+        )
+
 @app.get(
     "/api/transactions",
     response_model=TransactionsListResponse,
     responses={**RESPONSES_503},
     summary="List Transactions",
-    description="Returns list of transactions matching the specified query filters. In live mode, period filters (data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim) and direct search filters (codigo_imovel, codigo_contrato, transacao_unique_id) are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. The 'pagina' parameter is a pagination parameter and does NOT satisfy the direct filter requirement on its own. Demo mode is restricted to development and tests."
+    description="Returns list of transactions matching the specified query filters. In live mode, period filters (data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim) and direct search filters (codigo_imovel, codigo_contrato, transacao_unique_id) are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. The 'pagina' parameter is a pagination parameter and does NOT satisfy the direct filter requirement on its own. Demo mode is restricted to development and tests.",
+    dependencies=[Depends(verify_backend_api_key)]
 )
 async def get_transactions(
     response: Response,
@@ -1202,9 +1339,11 @@ async def get_transactions(
         agent, category, financing, etapa_atual
     )
     
+    exposed_txs = process_transactions_exposure(filtered)
+    
     response.headers["X-Data-Mode"] = mode
     meta = get_metadata_wrapper(mode, src)
-    meta["data"] = TransactionsDataPayload(count=len(filtered), transactions=filtered)
+    meta["data"] = TransactionsDataPayload(count=len(exposed_txs), transactions=exposed_txs)
     return meta
 
 @app.get(
@@ -1212,7 +1351,8 @@ async def get_transactions(
     response_model=TransactionDetailResponse,
     responses={**RESPONSES_503},
     summary="Get Transaction by ID",
-    description="Returns the details of a single transaction by ID (transacao_unique_id_pipeimob or codigo_contrato). In live mode, fetches real transaction from Pipeimob. Demo mode is restricted to development and tests."
+    description="Returns the details of a single transaction by ID (transacao_unique_id_pipeimob or codigo_contrato). In live mode, fetches real transaction from Pipeimob. Demo mode is restricted to development and tests.",
+    dependencies=[Depends(verify_backend_api_key)]
 )
 async def get_transaction_by_id(
     id: str,
@@ -1240,9 +1380,12 @@ async def get_transaction_by_id(
     if not target_tx:
         raise HTTPException(status_code=404, detail="Transaction not found")
         
+    expose_raw = os.getenv("EXPOSE_RAW_TRANSACTIONS", "false").strip().lower() == "true"
+    exposed_tx = target_tx if expose_raw else sanitize_transaction(target_tx)
+        
     response.headers["X-Data-Mode"] = mode
     meta = get_metadata_wrapper(mode, src)
-    meta["data"] = target_tx
+    meta["data"] = exposed_tx
     return meta
 
 @app.get(
@@ -1250,7 +1393,8 @@ async def get_transaction_by_id(
     response_model=DashboardSummaryResponse,
     responses={**RESPONSES_503},
     summary="Get Dashboard BI Summary metrics",
-    description="Computes total sales volume, commissions, weighted avg commission rate, and transaction count. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. The 'pagina' parameter is a pagination parameter and does NOT satisfy the direct filter requirement on its own. Demo mode is restricted to development and tests."
+    description="Computes total sales volume, commissions, weighted avg commission rate, and transaction count. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. The 'pagina' parameter is a pagination parameter and does NOT satisfy the direct filter requirement on its own. Demo mode is restricted to development and tests.",
+    dependencies=[Depends(verify_backend_api_key)]
 )
 async def get_dashboard_summary(
     response: Response,
@@ -1299,7 +1443,8 @@ async def get_dashboard_summary(
     response_model=DashboardOriginsResponse,
     responses={**RESPONSES_503},
     summary="Get Buyer Origins distribution",
-    description="Groups sales volume and transaction count by lead origin source. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. The 'pagina' parameter is a pagination parameter and does NOT satisfy the direct filter requirement on its own. Demo mode is restricted to development and tests."
+    description="Groups sales volume and transaction count by lead origin source. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. The 'pagina' parameter is a pagination parameter and does NOT satisfy the direct filter requirement on its own. Demo mode is restricted to development and tests.",
+    dependencies=[Depends(verify_backend_api_key)]
 )
 async def get_dashboard_origins(
     response: Response,
@@ -1354,7 +1499,8 @@ async def get_dashboard_origins(
     response_model=DashboardStagesResponse,
     responses={**RESPONSES_503},
     summary="Get Stages distribution",
-    description="Groups sales volume and transaction count by CRM pipeline stage. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. The 'pagina' parameter is a pagination parameter and does NOT satisfy the direct filter requirement on its own. Demo mode is restricted to development and tests."
+    description="Groups sales volume and transaction count by CRM pipeline stage. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. The 'pagina' parameter is a pagination parameter and does NOT satisfy the direct filter requirement on its own. Demo mode is restricted to development and tests.",
+    dependencies=[Depends(verify_backend_api_key)]
 )
 async def get_dashboard_stages(
     response: Response,
@@ -1409,7 +1555,8 @@ async def get_dashboard_stages(
     response_model=DashboardManagersResponse,
     responses={**RESPONSES_503},
     summary="Get Manager Leaderboard",
-    description="Computes leaderboard ranking of managers by sales volume, transaction count, and average ticket size. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. The 'pagina' parameter is a pagination parameter and does NOT satisfy the direct filter requirement on its own. Demo mode is restricted to development and tests."
+    description="Computes leaderboard ranking of managers by sales volume, transaction count, and average ticket size. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. The 'pagina' parameter is a pagination parameter and does NOT satisfy the direct filter requirement on its own. Demo mode is restricted to development and tests.",
+    dependencies=[Depends(verify_backend_api_key)]
 )
 async def get_dashboard_managers(
     response: Response,
@@ -1471,7 +1618,8 @@ async def get_dashboard_managers(
     response_model=DashboardPaymentsResponse,
     responses={**RESPONSES_503},
     summary="Get Payment Methods and Financing distribution",
-    description="Aggregates payment direct vs financing ratio, bank distributions, and detailed signals/methods volumes. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. The 'pagina' parameter is a pagination parameter and does NOT satisfy the direct filter requirement on its own. Demo mode is restricted to development and tests."
+    description="Aggregates payment direct vs financing ratio, bank distributions, and detailed signals/methods volumes. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. The 'pagina' parameter is a pagination parameter and does NOT satisfy the direct filter requirement on its own. Demo mode is restricted to development and tests.",
+    dependencies=[Depends(verify_backend_api_key)]
 )
 async def get_dashboard_payments(
     response: Response,
@@ -1556,7 +1704,8 @@ async def get_dashboard_payments(
     response_model=DashboardCommissionsResponse,
     responses={**RESPONSES_503},
     summary="Get Commission detailed metrics",
-    description="Returns aggregate commission values and individual contract commission details. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. The 'pagina' parameter is a pagination parameter and does NOT satisfy the direct filter requirement on its own. Demo mode is restricted to development and tests."
+    description="Returns aggregate commission values and individual contract commission details. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. The 'pagina' parameter is a pagination parameter and does NOT satisfy the direct filter requirement on its own. Demo mode is restricted to development and tests.",
+    dependencies=[Depends(verify_backend_api_key)]
 )
 async def get_dashboard_commissions(
     response: Response,
@@ -1630,7 +1779,8 @@ MONTHS_PT = {
     response_model=DashboardTimelineResponse,
     responses={**RESPONSES_503},
     summary="Get Monthly Sales Timeline",
-    description="Groups contract sales volume and count chronologically by month. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. The 'pagina' parameter is a pagination parameter and does NOT satisfy the direct filter requirement on its own. Demo mode is restricted to development and tests."
+    description="Groups contract sales volume and count chronologically by month. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. The 'pagina' parameter is a pagination parameter and does NOT satisfy the direct filter requirement on its own. Demo mode is restricted to development and tests.",
+    dependencies=[Depends(verify_backend_api_key)]
 )
 async def get_dashboard_timeline(
     response: Response,
