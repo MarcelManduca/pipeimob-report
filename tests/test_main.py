@@ -12,10 +12,24 @@ os.environ["APP_ENV"] = "development"
 os.environ["ALLOWED_ORIGINS"] = "https://lovable-test-origin.app"
 os.environ["BACKEND_API_KEY"] = "test_backend_key"
 
+import jwt
+import time
+
+def create_mock_jwt(email="user@gralhaimoveis.com.br", expired=False):
+    payload = {
+        "email": email,
+        "sub": "mock_user_123",
+        "aud": "authenticated",
+        "exp": time.time() - 3600 if expired else time.time() + 3600
+    }
+    return jwt.encode(payload, "secret", algorithm="HS256")
+
+mock_token = create_mock_jwt()
+
 from mock_data import MOCK_TRANSACTIONS
 from main import app
 
-client = TestClient(app, headers={"X-Backend-API-Key": "test_backend_key"})
+client = TestClient(app, headers={"Authorization": f"Bearer {mock_token}"})
 
 def test_app_starts_without_credentials():
     assert app is not None
@@ -234,6 +248,7 @@ def test_production_unconfigured_without_mode():
     assert data["pipeimob_connection"] == "pending_configuration"
     # Verify production does not automatically assume live mode
     assert data["data_mode"] != "live"
+    os.environ["APP_ENV"] = "development"
 
 def test_live_without_credentials_missing_credentials():
     os.environ["APP_ENV"] = "production"
@@ -246,19 +261,22 @@ def test_live_without_credentials_missing_credentials():
     data = response.json()
     assert data["data_mode"] == "live"
     assert data["pipeimob_connection"] == "missing_credentials"
+    os.environ["APP_ENV"] = "development"
 
 def test_unconfigured_endpoints_return_503():
     os.environ["APP_ENV"] = "production"
     os.environ.pop("PIPEIMOB_DATA_MODE", None)
     
     # Endpoints must fail with 503 while unconfigured, never returning demo data silently
-    response = client.get("/api/transactions")
+    response = client.get("/api/transactions", headers={"X-Backend-API-Key": "test_backend_key"})
     assert response.status_code == 503
     assert "Configuration pending" in response.json()["detail"]
     
-    response = client.get("/api/dashboard/summary")
+    response = client.get("/api/dashboard/summary", headers={"X-Backend-API-Key": "test_backend_key"})
     assert response.status_code == 503
     assert "Configuration pending" in response.json()["detail"]
+    
+    os.environ["APP_ENV"] = "development"
 
 def test_six_filters_appear_in_catalog():
     response = client.get("/api/catalog")
@@ -318,6 +336,7 @@ def test_catalog_status_states():
     os.environ.pop("PIPEIMOB_DATA_MODE", None)
     response = client.get("/api/catalog")
     assert response.json()["resources"][0]["status"] == "implemented_pending_live_validation"
+    os.environ["APP_ENV"] = "development"
     
     # 4. Live Mode (with credentials configured but validation pending)
     os.environ["PIPEIMOB_DATA_MODE"] = "live"
@@ -643,7 +662,10 @@ def test_openapi_includes_new_endpoints_and_schemas():
     # 503 errors do not leak secrets
     os.environ["APP_ENV"] = "production"
     os.environ.pop("PIPEIMOB_DATA_MODE", None)
-    err_res = client.get("/api/transactions?data_inicio_criacao=2026-01-01")
+    err_res = client.get(
+        "/api/transactions?data_inicio_criacao=2026-01-01",
+        headers={"X-Backend-API-Key": "test_backend_key"}
+    )
     assert err_res.status_code == 503
     err_body = err_res.json()
     for val in err_body.values():
@@ -651,6 +673,8 @@ def test_openapi_includes_new_endpoints_and_schemas():
         assert "api_key" not in val_str
         assert "secret_key" not in val_str
         assert "token" not in val_str
+    
+    os.environ["APP_ENV"] = "development"
 
 def test_live_mode_only_pagina_returns_400():
     os.environ["PIPEIMOB_DATA_MODE"] = "live"
@@ -712,10 +736,19 @@ def test_live_mode_pagina_with_direct_filter_is_allowed(mock_urlopen):
     response = client.get("/api/transactions?data_inicio_ccv=2026-07-01&pagina=1")
     assert response.status_code == 200
 
-def test_unauthorized_endpoints_without_key():
-    # Use a clean, unauthenticated client
+def test_public_endpoints_accessible_without_token():
     unauth_client = TestClient(app)
+    # GET /api/health is public
+    res_health = unauth_client.get("/api/health")
+    assert res_health.status_code == 200
     
+    # GET /api/catalog is public
+    res_catalog = unauth_client.get("/api/catalog")
+    assert res_catalog.status_code == 200
+
+
+def test_protected_endpoints_auth_failures():
+    unauth_client = TestClient(app)
     endpoints = [
         "/api/transactions",
         "/api/transactions/some_id",
@@ -727,17 +760,72 @@ def test_unauthorized_endpoints_without_key():
         "/api/dashboard/commissions",
         "/api/dashboard/timeline"
     ]
+    
+    # 1. Missing Authorization header -> HTTP 401 (Authentication required)
     for ep in endpoints:
-        response = unauth_client.get(ep)
-        assert response.status_code == 401
-        assert "Unauthorized: Invalid or missing backend api key." in response.json()["detail"]
+        res = unauth_client.get(ep)
+        assert res.status_code == 401
+        body = res.json()
+        assert body["detail"] == "Authentication required."
+        assert body["error_code"] == "authentication_required"
 
-    # Also test with an invalid key
-    bad_client = TestClient(app, headers={"X-Backend-API-Key": "wrong_key"})
+    # 2. Invalid/malformed token header -> HTTP 401 (Invalid or expired access token)
+    bad_token_client = TestClient(app, headers={"Authorization": "Bearer bad-token-format"})
     for ep in endpoints:
-        response = bad_client.get(ep)
-        assert response.status_code == 401
-        assert "Unauthorized: Invalid or missing backend api key." in response.json()["detail"]
+        res = bad_token_client.get(ep)
+        assert res.status_code == 401
+        body = res.json()
+        assert body["detail"] == "Invalid or expired access token."
+        assert body["error_code"] == "invalid_access_token"
+
+    # 3. Expired token -> HTTP 401 (Invalid or expired access token)
+    expired_token = create_mock_jwt(expired=True)
+    expired_client = TestClient(app, headers={"Authorization": f"Bearer {expired_token}"})
+    for ep in endpoints:
+        res = expired_client.get(ep)
+        assert res.status_code == 401
+        body = res.json()
+        assert body["detail"] == "Invalid or expired access token."
+        assert body["error_code"] == "invalid_access_token"
+
+
+def test_user_authorization_allowlists():
+    os.environ["PIPEIMOB_DATA_MODE"] = "demo"
+    # 1. User email/domain outside allowlist -> HTTP 403 Forbidden
+    unauthorized_token = create_mock_jwt(email="hacker@gmail.com")
+    unauth_user_client = TestClient(app, headers={"Authorization": f"Bearer {unauthorized_token}"})
+    
+    # Temporarily set allowed env variables to gralhaimoveis.com.br only (which doesn't match gmail.com)
+    os.environ["ALLOWED_EMAIL_DOMAINS"] = "gralhaimoveis.com.br"
+    os.environ["ALLOWED_USER_EMAILS"] = ""
+    
+    res = unauth_user_client.get("/api/dashboard/summary")
+    assert res.status_code == 403
+    body = res.json()
+    assert body["detail"] == "User is not authorized to access this resource."
+    assert body["error_code"] == "forbidden"
+
+    # 2. Domain matches ALLOWED_EMAIL_DOMAINS -> HTTP 200 OK
+    authorized_token = create_mock_jwt(email="corretor@gralhaimoveis.com.br")
+    auth_user_client = TestClient(app, headers={"Authorization": f"Bearer {authorized_token}"})
+    res_ok = auth_user_client.get("/api/dashboard/summary")
+    assert res_ok.status_code == 200
+
+    # 3. Email specifically listed in ALLOWED_USER_EMAILS -> HTTP 200 OK
+    special_token = create_mock_jwt(email="guest-external@example.com")
+    special_client = TestClient(app, headers={"Authorization": f"Bearer {special_token}"})
+    os.environ["ALLOWED_USER_EMAILS"] = "guest-external@example.com,other@domain.com"
+    res_special = special_client.get("/api/dashboard/summary")
+    assert res_special.status_code == 200
+
+
+def test_server_to_server_bypass_key():
+    os.environ["PIPEIMOB_DATA_MODE"] = "demo"
+    unauth_client = TestClient(app)
+    
+    # Passing X-Backend-API-Key server-to-server bypass -> HTTP 200 OK
+    res = unauth_client.get("/api/dashboard/summary", headers={"X-Backend-API-Key": "test_backend_key"})
+    assert res.status_code == 200
 
 
 def test_privacy_compliance_on_public_responses():
@@ -773,6 +861,8 @@ def test_privacy_compliance_on_public_responses():
             val_lower = node.lower()
             # Assert that no value contains sensitive-looking substrings like typical emails or keys in plain text
             for sensitive in ["@gralha", "secret_key", "api_key", "bearer"]:
+                # Ignore the default server-to-server mock email in the response if it pops up under manager or other fields,
+                # but assert actual spreadsheet PII does not exist.
                 assert sensitive not in val_lower, f"Sensitive substring '{sensitive}' found in string value: {node}"
 
     verify_no_sensitive_data(data)

@@ -62,6 +62,22 @@ async def integration_unavailable_exception_handler(request: Request, exc: Integ
         }
     )
 
+class AuthException(Exception):
+    def __init__(self, status_code: int, detail: str, error_code: str):
+        self.status_code = status_code
+        self.detail = detail
+        self.error_code = error_code
+
+@app.exception_handler(AuthException)
+async def auth_exception_handler(request: Request, exc: AuthException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "detail": exc.detail,
+            "error_code": exc.error_code
+        }
+    )
+
 # CORS Configuration
 allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "")
 allowed_origins: List[str] = []
@@ -698,6 +714,54 @@ RESPONSES_503 = {
     }
 }
 
+class AuthErrorResponse(BaseModel):
+    detail: str = Field(..., description="Error message detail", json_schema_extra={"example": "Authentication required."})
+    error_code: str = Field(..., description="Standardized error code classification", json_schema_extra={"example": "authentication_required"})
+
+RESPONSES_AUTH = {
+    401: {
+        "model": AuthErrorResponse,
+        "description": "401 — Autenticação necessária ou token inválido/expirado.",
+        "content": {
+            "application/json": {
+                "examples": {
+                    "authentication_required": {
+                        "summary": "Token de autenticação ausente",
+                        "value": {
+                            "detail": "Authentication required.",
+                            "error_code": "authentication_required"
+                        }
+                    },
+                    "invalid_access_token": {
+                        "summary": "Token inválido ou expirado",
+                        "value": {
+                            "detail": "Invalid or expired access token.",
+                            "error_code": "invalid_access_token"
+                        }
+                    }
+                }
+            }
+        }
+    },
+    403: {
+        "model": AuthErrorResponse,
+        "description": "403 — Usuário não autorizado.",
+        "content": {
+            "application/json": {
+                "examples": {
+                    "forbidden": {
+                        "summary": "Permissão negada (domínio/e-mail fora da allowlist)",
+                        "value": {
+                            "detail": "User is not authorized to access this resource.",
+                            "error_code": "forbidden"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 class SanitizedPaymentMethod(BaseModel):
     nome: Optional[str] = Field(None, description="Nome ou natureza da forma de pagamento", json_schema_extra={"example": "Sinal"})
     valor: Optional[float] = Field(None, description="Valor pago", json_schema_extra={"example": 50000.0})
@@ -1290,23 +1354,127 @@ async def get_catalog():
         resources=[transactions_resource]
     )
 
-async def verify_backend_api_key(x_backend_api_key: Optional[str] = Header(None)):
-    expected_key = os.getenv("BACKEND_API_KEY")
-    if not expected_key:
-        raise HTTPException(
+_jwk_client = None
+
+def get_jwk_client():
+    global _jwk_client
+    if _jwk_client is None:
+        jwks_url = os.getenv("SUPABASE_JWKS_URL")
+        if jwks_url:
+            from jwt import PyJWKClient
+            _jwk_client = PyJWKClient(jwks_url)
+    return _jwk_client
+
+async def verify_backend_api_key(
+    authorization: Optional[str] = Header(None),
+    x_backend_api_key: Optional[str] = Header(None)
+):
+    # Server-to-server fallback bypass
+    expected_server_key = os.getenv("BACKEND_API_KEY")
+    if expected_server_key and x_backend_api_key == expected_server_key:
+        return {"email": "server-to-server@gralhaimoveis.com.br", "sub": "server-to-server"}
+
+    import jwt
+
+    if not authorization:
+        raise AuthException(
             status_code=401,
-            detail="Unauthorized: Backend API key is not configured on the server."
+            detail="Authentication required.",
+            error_code="authentication_required"
         )
-    if x_backend_api_key != expected_key:
-        raise HTTPException(
+        
+    if not authorization.startswith("Bearer "):
+        raise AuthException(
             status_code=401,
-            detail="Unauthorized: Invalid or missing backend api key."
+            detail="Invalid or expired access token.",
+            error_code="invalid_access_token"
         )
+        
+    token = authorization.split(" ")[1]
+    
+    try:
+        app_env = os.getenv("APP_ENV", "production").lower()
+        jwks_url = os.getenv("SUPABASE_JWKS_URL")
+        
+        if not jwks_url and app_env == "production":
+            raise AuthException(
+                status_code=401,
+                detail="Invalid or expired access token.",
+                error_code="invalid_access_token"
+            )
+            
+        if jwks_url:
+            client = get_jwk_client()
+            signing_key = client.get_signing_key_from_jwt(token)
+            aud = os.getenv("SUPABASE_JWT_AUDIENCE", "authenticated")
+            payload = jwt.decode(
+                token,
+                signing_key.key,
+                algorithms=["RS256"],
+                audience=aud
+            )
+        else:
+            # Dev/Test fallback: decode without signature verification
+            # but validate expiration if present
+            payload = jwt.decode(
+                token,
+                options={"verify_signature": False}
+            )
+            if "exp" in payload:
+                import time
+                if payload["exp"] < time.time():
+                    raise jwt.ExpiredSignatureError("Token has expired")
+                    
+    except jwt.ExpiredSignatureError:
+        raise AuthException(
+            status_code=401,
+            detail="Invalid or expired access token.",
+            error_code="invalid_access_token"
+        )
+    except Exception:
+        raise AuthException(
+            status_code=401,
+            detail="Invalid or expired access token.",
+            error_code="invalid_access_token"
+        )
+        
+    user_email = payload.get("email")
+    if not user_email:
+        raise AuthException(
+            status_code=403,
+            detail="User is not authorized to access this resource.",
+            error_code="forbidden"
+        )
+        
+    user_email = user_email.lower().strip()
+    allowed_emails_env = os.getenv("ALLOWED_USER_EMAILS", "")
+    allowed_domains_env = os.getenv("ALLOWED_EMAIL_DOMAINS", "gralhaimoveis.com.br")
+    
+    allowed_emails = [e.strip().lower() for e in allowed_emails_env.split(",") if e.strip()]
+    allowed_domains = [d.strip().lower() for d in allowed_domains_env.split(",") if d.strip()]
+    
+    email_parts = user_email.split("@")
+    user_domain = email_parts[1] if len(email_parts) > 1 else ""
+    
+    is_authorized = False
+    if user_email in allowed_emails:
+        is_authorized = True
+    elif user_domain in allowed_domains:
+        is_authorized = True
+        
+    if not is_authorized:
+        raise AuthException(
+            status_code=403,
+            detail="User is not authorized to access this resource.",
+            error_code="forbidden"
+        )
+        
+    return payload
 
 @app.get(
     "/api/transactions",
     response_model=TransactionsListResponse,
-    responses={**RESPONSES_503},
+    responses={**RESPONSES_503, **RESPONSES_AUTH},
     summary="List Transactions",
     description="Returns list of transactions matching the specified query filters. In live mode, period filters (data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim) and direct search filters (codigo_imovel, codigo_contrato, transacao_unique_id) are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. The 'pagina' parameter is a pagination parameter and does NOT satisfy the direct filter requirement on its own. Demo mode is restricted to development and tests.",
     dependencies=[Depends(verify_backend_api_key)]
@@ -1349,7 +1517,7 @@ async def get_transactions(
 @app.get(
     "/api/transactions/{id}",
     response_model=TransactionDetailResponse,
-    responses={**RESPONSES_503},
+    responses={**RESPONSES_503, **RESPONSES_AUTH},
     summary="Get Transaction by ID",
     description="Returns the details of a single transaction by ID (transacao_unique_id_pipeimob or codigo_contrato). In live mode, fetches real transaction from Pipeimob. Demo mode is restricted to development and tests.",
     dependencies=[Depends(verify_backend_api_key)]
@@ -1391,7 +1559,7 @@ async def get_transaction_by_id(
 @app.get(
     "/api/dashboard/summary",
     response_model=DashboardSummaryResponse,
-    responses={**RESPONSES_503},
+    responses={**RESPONSES_503, **RESPONSES_AUTH},
     summary="Get Dashboard BI Summary metrics",
     description="Computes total sales volume, commissions, weighted avg commission rate, and transaction count. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. The 'pagina' parameter is a pagination parameter and does NOT satisfy the direct filter requirement on its own. Demo mode is restricted to development and tests.",
     dependencies=[Depends(verify_backend_api_key)]
@@ -1441,7 +1609,7 @@ async def get_dashboard_summary(
 @app.get(
     "/api/dashboard/origins",
     response_model=DashboardOriginsResponse,
-    responses={**RESPONSES_503},
+    responses={**RESPONSES_503, **RESPONSES_AUTH},
     summary="Get Buyer Origins distribution",
     description="Groups sales volume and transaction count by lead origin source. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. The 'pagina' parameter is a pagination parameter and does NOT satisfy the direct filter requirement on its own. Demo mode is restricted to development and tests.",
     dependencies=[Depends(verify_backend_api_key)]
@@ -1497,7 +1665,7 @@ async def get_dashboard_origins(
 @app.get(
     "/api/dashboard/stages",
     response_model=DashboardStagesResponse,
-    responses={**RESPONSES_503},
+    responses={**RESPONSES_503, **RESPONSES_AUTH},
     summary="Get Stages distribution",
     description="Groups sales volume and transaction count by CRM pipeline stage. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. The 'pagina' parameter is a pagination parameter and does NOT satisfy the direct filter requirement on its own. Demo mode is restricted to development and tests.",
     dependencies=[Depends(verify_backend_api_key)]
@@ -1553,7 +1721,7 @@ async def get_dashboard_stages(
 @app.get(
     "/api/dashboard/managers",
     response_model=DashboardManagersResponse,
-    responses={**RESPONSES_503},
+    responses={**RESPONSES_503, **RESPONSES_AUTH},
     summary="Get Manager Leaderboard",
     description="Computes leaderboard ranking of managers by sales volume, transaction count, and average ticket size. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. The 'pagina' parameter is a pagination parameter and does NOT satisfy the direct filter requirement on its own. Demo mode is restricted to development and tests.",
     dependencies=[Depends(verify_backend_api_key)]
@@ -1616,7 +1784,7 @@ async def get_dashboard_managers(
 @app.get(
     "/api/dashboard/payments",
     response_model=DashboardPaymentsResponse,
-    responses={**RESPONSES_503},
+    responses={**RESPONSES_503, **RESPONSES_AUTH},
     summary="Get Payment Methods and Financing distribution",
     description="Aggregates payment direct vs financing ratio, bank distributions, and detailed signals/methods volumes. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. The 'pagina' parameter is a pagination parameter and does NOT satisfy the direct filter requirement on its own. Demo mode is restricted to development and tests.",
     dependencies=[Depends(verify_backend_api_key)]
@@ -1702,7 +1870,7 @@ async def get_dashboard_payments(
 @app.get(
     "/api/dashboard/commissions",
     response_model=DashboardCommissionsResponse,
-    responses={**RESPONSES_503},
+    responses={**RESPONSES_503, **RESPONSES_AUTH},
     summary="Get Commission detailed metrics",
     description="Returns aggregate commission values and individual contract commission details. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. The 'pagina' parameter is a pagination parameter and does NOT satisfy the direct filter requirement on its own. Demo mode is restricted to development and tests.",
     dependencies=[Depends(verify_backend_api_key)]
@@ -1777,7 +1945,7 @@ MONTHS_PT = {
 @app.get(
     "/api/dashboard/timeline",
     response_model=DashboardTimelineResponse,
-    responses={**RESPONSES_503},
+    responses={**RESPONSES_503, **RESPONSES_AUTH},
     summary="Get Monthly Sales Timeline",
     description="Groups contract sales volume and count chronologically by month. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. The 'pagina' parameter is a pagination parameter and does NOT satisfy the direct filter requirement on its own. Demo mode is restricted to development and tests.",
     dependencies=[Depends(verify_backend_api_key)]
