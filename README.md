@@ -91,9 +91,16 @@ A documentação interativa do Swagger OpenAPI estará disponível em: `http://l
 ## 📊 Endpoints de Transações e BI (Business Intelligence)
 
 ### 🛡️ Autenticação da API (Lovable para Backend)
-Os endpoints de dados e dashboard da API (`/api/transactions`, `/api/transactions/{id}` e `/api/dashboard/*`) exigem autenticação segura por meio de uma chave interna definida no ambiente do servidor.
-* **Cabeçalho Obrigatório:** `X-Backend-API-Key`
-* **Configuração:** O valor do token de acesso deve ser configurado na variável de ambiente `BACKEND_API_KEY`. Caso não esteja configurado no servidor, as requisições retornarão status HTTP 401 Unauthorized.
+Os endpoints de dados e dashboard da API (`/api/transactions`, `/api/transactions/{id}` e `/api/dashboard/*`) exigem autenticação segura por meio de validação de token JWT assinado pelo Supabase Auth.
+* **Cabeçalho Obrigatório:** `Authorization: Bearer <supabase_access_token>`
+* **Configurações Server-side Obrigatórias:**
+  - `SUPABASE_JWKS_URL`: URL oficial do JWKS para verificar assinaturas assimétricas. Ex: `https://<project-ref>.supabase.co/auth/v1/.well-known/jwks.json`
+  - `SUPABASE_ISSUER`: O issuer oficial do JWT. Ex: `https://<project-ref>.supabase.co/auth/v1`
+  - `SUPABASE_JWT_AUDIENCE`: Audiência esperada (geralmente `authenticated`).
+  - `ALLOWED_USER_EMAILS`: E-mails específicos autorizados (separados por vírgula).
+  - `ALLOWED_EMAIL_DOMAINS`: Domínios autorizados. Padrão: `gralhaimoveis.com.br`
+
+* **Bypass de Integração (Opcional):** Chave server-to-server configurada em `BACKEND_API_KEY` que pode ser enviada no cabeçalho `X-Backend-API-Key` (nunca expor no frontend).
 
 ---
 

@@ -1404,28 +1404,89 @@ async def verify_backend_api_key(
             )
             
         if jwks_url:
-            client = get_jwk_client()
-            signing_key = client.get_signing_key_from_jwt(token)
+            try:
+                client = get_jwk_client()
+                signing_key = client.get_signing_key_from_jwt(token)
+            except Exception:
+                raise AuthException(
+                    status_code=503,
+                    detail="Supabase project does not expose asymmetric JWT signing keys.",
+                    error_code="supabase_jwks_unavailable"
+                )
+            
             aud = os.getenv("SUPABASE_JWT_AUDIENCE", "authenticated")
+            iss = os.getenv("SUPABASE_ISSUER")
+            
             payload = jwt.decode(
                 token,
                 signing_key.key,
-                algorithms=["RS256"],
-                audience=aud
+                algorithms=["RS256", "ES256"],
+                audience=aud,
+                issuer=iss,
+                options={"require": ["exp", "iss", "aud", "sub"]}
             )
         else:
             # Dev/Test fallback: decode without signature verification
-            # but validate expiration if present
+            # but manually validate claims to align with production checks
             payload = jwt.decode(
                 token,
                 options={"verify_signature": False}
             )
+            
+            # Explicit exp check
             if "exp" in payload:
                 import time
                 if payload["exp"] < time.time():
                     raise jwt.ExpiredSignatureError("Token has expired")
-                    
+            else:
+                raise jwt.MissingRequiredClaimError("exp")
+                
+            # Explicit iss check
+            expected_iss = os.getenv("SUPABASE_ISSUER")
+            if expected_iss and payload.get("iss") != expected_iss:
+                raise jwt.InvalidIssuerError("Invalid issuer")
+                
+            # Explicit aud check
+            expected_aud = os.getenv("SUPABASE_JWT_AUDIENCE", "authenticated")
+            if payload.get("aud") != expected_aud:
+                raise jwt.InvalidAudienceError("Invalid audience")
+
+            # Explicit sub check
+            if not payload.get("sub"):
+                raise jwt.MissingRequiredClaimError("sub")
+
+        # Additional required claims validation (both JWKS & Dev)
+        # 1. role must be authenticated
+        if payload.get("role") != "authenticated":
+            raise AuthException(
+                status_code=401,
+                detail="Invalid or expired access token.",
+                error_code="invalid_access_token"
+            )
+            
+        # 2. email must be present
+        if not payload.get("email") or not isinstance(payload.get("email"), str):
+            raise AuthException(
+                status_code=401,
+                detail="Invalid or expired access token.",
+                error_code="invalid_access_token"
+            )
+            
+    except AuthException:
+        raise
     except jwt.ExpiredSignatureError:
+        raise AuthException(
+            status_code=401,
+            detail="Invalid or expired access token.",
+            error_code="invalid_access_token"
+        )
+    except jwt.InvalidIssuerError:
+        raise AuthException(
+            status_code=401,
+            detail="Invalid or expired access token.",
+            error_code="invalid_access_token"
+        )
+    except jwt.InvalidAudienceError:
         raise AuthException(
             status_code=401,
             detail="Invalid or expired access token.",
@@ -1439,13 +1500,6 @@ async def verify_backend_api_key(
         )
         
     user_email = payload.get("email")
-    if not user_email:
-        raise AuthException(
-            status_code=403,
-            detail="User is not authorized to access this resource.",
-            error_code="forbidden"
-        )
-        
     user_email = user_email.lower().strip()
     allowed_emails_env = os.getenv("ALLOWED_USER_EMAILS", "")
     allowed_domains_env = os.getenv("ALLOWED_EMAIL_DOMAINS", "gralhaimoveis.com.br")

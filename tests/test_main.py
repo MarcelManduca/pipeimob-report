@@ -11,18 +11,32 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 os.environ["APP_ENV"] = "development"
 os.environ["ALLOWED_ORIGINS"] = "https://lovable-test-origin.app"
 os.environ["BACKEND_API_KEY"] = "test_backend_key"
+os.environ["SUPABASE_ISSUER"] = "https://mock.supabase.co/auth/v1"
+os.environ["SUPABASE_JWT_AUDIENCE"] = "authenticated"
 
 import jwt
 import time
 
-def create_mock_jwt(email="user@gralhaimoveis.com.br", expired=False):
+def create_mock_jwt(
+    email="user@gralhaimoveis.com.br",
+    expired=False,
+    iss="https://mock.supabase.co/auth/v1",
+    aud="authenticated",
+    role="authenticated",
+    sub="mock_user_123",
+    alg="HS256"
+):
     payload = {
         "email": email,
-        "sub": "mock_user_123",
-        "aud": "authenticated",
+        "sub": sub,
+        "aud": aud,
+        "role": role,
+        "iss": iss,
         "exp": time.time() - 3600 if expired else time.time() + 3600
     }
-    return jwt.encode(payload, "secret", algorithm="HS256")
+    # Filter out None values to test missing claims
+    payload = {k: v for k, v in payload.items() if v is not None}
+    return jwt.encode(payload, "secret", algorithm=alg)
 
 mock_token = create_mock_jwt()
 
@@ -905,3 +919,73 @@ def test_expose_raw_transactions_flag():
             assert isinstance(first_tx["clientes"], list)
     finally:
         os.environ["EXPOSE_RAW_TRANSACTIONS"] = "false"
+
+def test_supabase_jwt_validation_claims_and_unsafe_jwks():
+    os.environ["PIPEIMOB_DATA_MODE"] = "demo"
+    
+    # 1. Incorrect Issuer (expected: https://mock.supabase.co/auth/v1) -> HTTP 401
+    bad_iss_token = create_mock_jwt(iss="https://hacker-issuer.supabase.co/auth/v1")
+    bad_iss_client = TestClient(app, headers={"Authorization": f"Bearer {bad_iss_token}"})
+    res = bad_iss_client.get("/api/dashboard/summary")
+    assert res.status_code == 401
+    assert "Invalid or expired access token." in res.json()["detail"]
+    
+    # 2. Incorrect Audience (expected: authenticated) -> HTTP 401
+    bad_aud_token = create_mock_jwt(aud="hacker-audience")
+    bad_aud_client = TestClient(app, headers={"Authorization": f"Bearer {bad_aud_token}"})
+    res = bad_aud_client.get("/api/dashboard/summary")
+    assert res.status_code == 401
+    assert "Invalid or expired access token." in res.json()["detail"]
+    
+    # 3. JWKS empty / unavailable -> HTTP 503 Service Unavailable
+    os.environ["SUPABASE_JWKS_URL"] = "https://mock.supabase.co/auth/v1/.well-known/jwks.json"
+    try:
+        jwks_client = TestClient(app, headers={"Authorization": f"Bearer {mock_token}"})
+        res = jwks_client.get("/api/dashboard/summary")
+        assert res.status_code == 503
+        assert res.json()["detail"] == "Supabase project does not expose asymmetric JWT signing keys."
+        assert res.json()["error_code"] == "supabase_jwks_unavailable"
+    finally:
+        os.environ.pop("SUPABASE_JWKS_URL", None)
+
+    # 4. Missing sub claim -> HTTP 401
+    no_sub_token = create_mock_jwt(sub=None)
+    no_sub_client = TestClient(app, headers={"Authorization": f"Bearer {no_sub_token}"})
+    res = no_sub_client.get("/api/dashboard/summary")
+    assert res.status_code == 401
+    assert "Invalid or expired access token." in res.json()["detail"]
+
+    # 5. Missing email claim -> HTTP 401
+    no_email_token = create_mock_jwt(email=None)
+    no_email_client = TestClient(app, headers={"Authorization": f"Bearer {no_email_token}"})
+    res = no_email_client.get("/api/dashboard/summary")
+    assert res.status_code == 401
+    assert "Invalid or expired access token." in res.json()["detail"]
+
+    # 6. Incorrect role (expected: authenticated) -> HTTP 401
+    bad_role_token = create_mock_jwt(role="guest")
+    bad_role_client = TestClient(app, headers={"Authorization": f"Bearer {bad_role_token}"})
+    res = bad_role_client.get("/api/dashboard/summary")
+    assert res.status_code == 401
+    assert "Invalid or expired access token." in res.json()["detail"]
+
+@patch("main.get_jwk_client")
+def test_disallowed_algorithm_returns_401(mock_get_jwk_client):
+    os.environ["SUPABASE_JWKS_URL"] = "https://mock.supabase.co/auth/v1/.well-known/jwks.json"
+    os.environ["PIPEIMOB_DATA_MODE"] = "demo"
+    try:
+        mock_jwk_client = MagicMock()
+        mock_key = MagicMock()
+        mock_key.key = "dummy_public_key"
+        mock_jwk_client.get_signing_key_from_jwt.return_value = mock_key
+        mock_get_jwk_client.return_value = mock_jwk_client
+        
+        # Create token signed with HS256
+        hs256_token = create_mock_jwt(alg="HS256")
+        hs256_client = TestClient(app, headers={"Authorization": f"Bearer {hs256_token}"})
+        
+        res = hs256_client.get("/api/dashboard/summary")
+        assert res.status_code == 401
+        assert "Invalid or expired access token." in res.json()["detail"]
+    finally:
+        os.environ.pop("SUPABASE_JWKS_URL", None)
