@@ -509,14 +509,14 @@ async def get_catalog():
             "data_arquivamento_fim"
         ],
         filters_api_direct=[
-            "data_inicio_criacao"
-        ],
-        filters_local_backend=[
+            "data_inicio_criacao",
             "data_fim_criacao",
             "data_inicio_ccv",
             "data_fim_ccv",
             "data_arquivamento_inicio",
-            "data_arquivamento_fim",
+            "data_arquivamento_fim"
+        ],
+        filters_local_backend=[
             "agent",
             "category",
             "financing"

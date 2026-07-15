@@ -275,8 +275,19 @@ def test_six_filters_appear_in_catalog():
     for filter_name in expected_filters:
         assert filter_name in resource["supported_filters"]
         
-    assert "data_inicio_criacao" in resource["filters_api_direct"]
-    assert "data_fim_criacao" in resource["filters_local_backend"]
+    assert resource["filters_api_direct"] == [
+        "data_inicio_criacao",
+        "data_fim_criacao",
+        "data_inicio_ccv",
+        "data_fim_ccv",
+        "data_arquivamento_inicio",
+        "data_arquivamento_fim"
+    ]
+    assert resource["filters_local_backend"] == [
+        "agent",
+        "category",
+        "financing"
+    ]
 
 def test_catalog_status_states():
     # 1. Demo Mode
