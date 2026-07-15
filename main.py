@@ -4,7 +4,8 @@ import json
 import ssl
 from datetime import datetime, timezone
 from typing import List, Optional
-from fastapi import FastAPI, Header, Query, HTTPException, Response
+from fastapi import FastAPI, Header, Query, HTTPException, Response, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
@@ -20,6 +21,26 @@ app = FastAPI(
     description="Backend API for Pipeimob reports and Lovable integration (BI Dashboard - Phase 2)",
     version="0.1.0",
 )
+
+class IntegrationUnavailableError(Exception):
+    def __init__(self, status_code: int, detail: str, error_code: str, data_mode: str, pipeimob_connection: str):
+        self.status_code = status_code
+        self.detail = detail
+        self.error_code = error_code
+        self.data_mode = data_mode
+        self.pipeimob_connection = pipeimob_connection
+
+@app.exception_handler(IntegrationUnavailableError)
+async def integration_unavailable_exception_handler(request: Request, exc: IntegrationUnavailableError):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "detail": exc.detail,
+            "error_code": exc.error_code,
+            "data_mode": exc.data_mode,
+            "pipeimob_connection": exc.pipeimob_connection
+        }
+    )
 
 # CORS Configuration
 allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "")
@@ -60,13 +81,55 @@ def get_auth_token(api_key: str, api_secret: str) -> Optional[str]:
         headers={'Content-Type': 'application/json'}
     )
     try:
-        with urllib.request.urlopen(req, context=ssl_context) as response:
+        # Use a short timeout to handle hanging requests
+        with urllib.request.urlopen(req, context=ssl_context, timeout=8) as response:
             res_body = json.loads(response.read().decode('utf-8'))
             if res_body.get("success"):
                 return res_body.get("data", {}).get("access_token")
+            else:
+                raise IntegrationUnavailableError(
+                    status_code=503,
+                    detail="Authentication payload returned success=False. Invalid API Key or Secret Key.",
+                    error_code="authentication_failed",
+                    data_mode="live",
+                    pipeimob_connection="authentication_failed"
+                )
+    except urllib.error.HTTPError as e:
+        if e.code in [401, 403]:
+            raise IntegrationUnavailableError(
+                status_code=503,
+                detail=f"Failed to authenticate with Pipeimob CRM API (HTTP {e.code}).",
+                error_code="authentication_failed",
+                data_mode="live",
+                pipeimob_connection="authentication_failed"
+            )
+        else:
+            raise IntegrationUnavailableError(
+                status_code=503,
+                detail=f"Pipeimob API is temporarily unavailable (HTTP {e.code}).",
+                error_code="pipeimob_unavailable",
+                data_mode="live",
+                pipeimob_connection="unavailable"
+            )
+    except urllib.error.URLError as e:
+        is_timeout = "timeout" in str(e.reason).lower() if hasattr(e, 'reason') else False
+        raise IntegrationUnavailableError(
+            status_code=503,
+            detail="Pipeimob CRM API request timed out." if is_timeout else "Pipeimob CRM API request is unreachable.",
+            error_code="pipeimob_timeout" if is_timeout else "pipeimob_unavailable",
+            data_mode="live",
+            pipeimob_connection="unavailable"
+        )
     except Exception as e:
-        print(f"Error authenticating with Pipeimob: {e}")
-    return None
+        if isinstance(e, IntegrationUnavailableError):
+            raise e
+        raise IntegrationUnavailableError(
+            status_code=503,
+            detail=f"Invalid response format from Pipeimob: {e}",
+            error_code="invalid_pipeimob_response",
+            data_mode="live",
+            pipeimob_connection="unavailable"
+        )
 
 # Live transaction page fetcher (concurrent thread execution)
 def fetch_all_transactions_live(
@@ -81,7 +144,14 @@ def fetch_all_transactions_live(
 ) -> list:
     token = get_auth_token(api_key, api_secret)
     if not token:
-        return []
+        # Fallback in case auth somehow passed without returning a token
+        raise IntegrationUnavailableError(
+            status_code=503,
+            detail="Authentication succeeded but failed to retrieve access token.",
+            error_code="authentication_failed",
+            data_mode="live",
+            pipeimob_connection="authentication_failed"
+        )
         
     query_parts = []
     if data_inicio_criacao: query_parts.append(f"data_inicio_criacao={data_inicio_criacao}")
@@ -103,20 +173,48 @@ def fetch_all_transactions_live(
     all_transactions = []
     total_pages = 1
     try:
-        with urllib.request.urlopen(req_p1, context=ssl_context) as response:
+        with urllib.request.urlopen(req_p1, context=ssl_context, timeout=8) as response:
             res_body = json.loads(response.read().decode('utf-8'))
             if res_body.get("success"):
                 txs = res_body.get("data", {}).get("transacoes", [])
                 all_transactions.extend(txs)
                 pagination = res_body.get("meta", {}).get("pagination", {})
                 total_pages = pagination.get("total_pages", 1)
+            else:
+                raise IntegrationUnavailableError(
+                    status_code=503,
+                    detail="Pipeimob transactions API returned success=False.",
+                    error_code="invalid_pipeimob_response",
+                    data_mode="live",
+                    pipeimob_connection="unavailable"
+                )
+    except urllib.error.HTTPError as e:
+        raise IntegrationUnavailableError(
+            status_code=503,
+            detail=f"Pipeimob API is temporarily unavailable (HTTP {e.code}).",
+            error_code="pipeimob_unavailable",
+            data_mode="live",
+            pipeimob_connection="unavailable"
+        )
+    except urllib.error.URLError as e:
+        is_timeout = "timeout" in str(e.reason).lower() if hasattr(e, 'reason') else False
+        raise IntegrationUnavailableError(
+            status_code=503,
+            detail="Pipeimob CRM API request timed out." if is_timeout else "Pipeimob CRM API request is unreachable.",
+            error_code="pipeimob_timeout" if is_timeout else "pipeimob_unavailable",
+            data_mode="live",
+            pipeimob_connection="unavailable"
+        )
     except Exception as e:
-        print(f"Error fetching page 1 of transactions: {e}")
-        return []
-
-    # If first page failed, treat integration as failed
-    if not all_transactions:
-        return []
+        if isinstance(e, IntegrationUnavailableError):
+            raise e
+        raise IntegrationUnavailableError(
+            status_code=503,
+            detail=f"Invalid response format from Pipeimob: {e}",
+            error_code="invalid_pipeimob_response",
+            data_mode="live",
+            pipeimob_connection="unavailable"
+        )
 
     def fetch_page_worker(p):
         url = f"{BASE_URL}/negocios/transacoes?pagina={p}{prefix}"
@@ -125,12 +223,12 @@ def fetch_all_transactions_live(
             headers={'Authorization': f'Bearer {token}', 'User-Agent': 'Mozilla/5.0'}
         )
         try:
-            with urllib.request.urlopen(req, context=ssl_context) as response:
+            with urllib.request.urlopen(req, context=ssl_context, timeout=8) as response:
                 res_body = json.loads(response.read().decode('utf-8'))
                 if res_body.get("success"):
                     return res_body.get("data", {}).get("transacoes", [])
-        except Exception as e:
-            print(f"Error page {p}: {e}")
+        except Exception:
+            pass
         return []
 
     max_pages = 12
@@ -180,9 +278,12 @@ def load_transactions_dataset(
     data_mode, conn_status = get_current_data_mode_and_connection()
     
     if data_mode == "unconfigured":
-        raise HTTPException(
+        raise IntegrationUnavailableError(
             status_code=503,
-            detail="Configuration pending. Please set PIPEIMOB_DATA_MODE environment variable."
+            detail="Configuration pending. Please set PIPEIMOB_DATA_MODE environment variable.",
+            error_code="integration_unconfigured",
+            data_mode="unconfigured",
+            pipeimob_connection="pending_configuration"
         )
         
     if data_mode == "demo":
@@ -190,9 +291,12 @@ def load_transactions_dataset(
         
     # Live mode: require credentials. Never fallback silently to mock.
     if conn_status == "missing_credentials":
-        raise HTTPException(
-            status_code=400, 
-            detail="Configuration pending. Valid Pipeimob API credentials are required in Live mode."
+        raise IntegrationUnavailableError(
+            status_code=503,
+            detail="Pipeimob credentials are not configured on the server.",
+            error_code="missing_credentials",
+            data_mode="live",
+            pipeimob_connection="missing_credentials"
         )
         
     api_key = os.getenv("PIPEIMOB_API_KEY").strip()
@@ -210,9 +314,12 @@ def load_transactions_dataset(
     )
     
     if not live_txs:
-        raise HTTPException(
-            status_code=503, 
-            detail="Pipeimob connection failed or returned no data. Live request aborted."
+        raise IntegrationUnavailableError(
+            status_code=503,
+            detail="Pipeimob CRM API returned empty transactions dataset.",
+            error_code="invalid_pipeimob_response",
+            data_mode="live",
+            pipeimob_connection="unavailable"
         )
         
     return "live", "pipeimob_api_v2", live_txs
@@ -277,15 +384,15 @@ class HealthResponse(BaseModel):
     service: str = Field(..., description="Name of the service", json_schema_extra={"example": "pipeimob-report"})
     version: str = Field(..., description="Version of the service", json_schema_extra={"example": "0.1.0"})
     api_version: str = Field(..., description="API version of the service", json_schema_extra={"example": "v2"})
-    pipeimob_connection: str = Field(..., description="Connection status to Pipeimob CRM", json_schema_extra={"example": "not_tested"})
-    data_mode: str = Field(..., description="Active data mode: demo or live", json_schema_extra={"example": "demo"})
-    timestamp: str = Field(..., description="Current timestamp in UTC ISO-8601 format", json_schema_extra={"example": "2026-01-01T00:00:00Z"})
+    pipeimob_connection: str = Field(..., description="Connection status to Pipeimob CRM", json_schema_extra={"example": "pending_configuration"})
+    data_mode: str = Field(..., description="Active data mode: demo, live, or unconfigured", json_schema_extra={"example": "unconfigured"})
+    timestamp: str = Field(..., description="Current timestamp in UTC ISO-8601 format", json_schema_extra={"example": "2026-07-15T12:00:00Z"})
 
 class ResourceCatalog(BaseModel):
     id: str = Field(..., description="Unique resource ID", json_schema_extra={"example": "transactions"})
     name: str = Field(..., description="Resource name", json_schema_extra={"example": "Transações"})
     backend_endpoint: str = Field(..., description="Local backend endpoint for the resource", json_schema_extra={"example": "/api/transactions"})
-    pipeimob_endpoint: Optional[str] = Field(None, description="Confirmed Pipeimob endpoint (null if unconfirmed or divergent)", json_schema_extra={"example": None})
+    pipeimob_endpoint: Optional[str] = Field(None, description="Confirmed Pipeimob endpoint (null if unconfirmed or divergent)", json_schema_extra={"example": "/api/v2/negocios/transacoes"})
     status: str = Field(..., description="Status of the resource integration", json_schema_extra={"example": "implemented_pending_live_configuration"})
     implemented: bool = Field(..., description="Indicates if the resource integration is fully implemented", json_schema_extra={"example": True})
     validated: bool = Field(..., description="Indicates if the resource integration is validated with live credentials", json_schema_extra={"example": False})
@@ -301,21 +408,154 @@ class CatalogResponse(BaseModel):
     api_version: str = Field(..., description="API version of the service", json_schema_extra={"example": "v2"})
     resources: List[ResourceCatalog] = Field(..., description="List of supported resources in the catalog")
 
+class IntegrationUnavailableResponse(BaseModel):
+    detail: str = Field(..., description="Error message detail", json_schema_extra={"example": "Configuration pending. Please set PIPEIMOB_DATA_MODE environment variable."})
+    error_code: str = Field(..., description="Standardized error code classification", json_schema_extra={"example": "integration_unconfigured"})
+    data_mode: str = Field(..., description="Active data mode", json_schema_extra={"example": "unconfigured"})
+    pipeimob_connection: str = Field(..., description="Active connection status", json_schema_extra={"example": "pending_configuration"})
+
+RESPONSES_503 = {
+    503: {
+        "model": IntegrationUnavailableResponse,
+        "description": "503 — Integração Pipeimob não configurada ou temporariamente indisponível.",
+        "content": {
+            "application/json": {
+                "examples": {
+                    "integration_unconfigured": {
+                        "summary": "Integração não configurada — produção",
+                        "value": {
+                            "detail": "Configuration pending. Please set PIPEIMOB_DATA_MODE environment variable.",
+                            "error_code": "integration_unconfigured",
+                            "data_mode": "unconfigured",
+                            "pipeimob_connection": "pending_configuration"
+                        }
+                    },
+                    "missing_credentials": {
+                        "summary": "Modo live sem credenciais",
+                        "value": {
+                            "detail": "Pipeimob credentials are not configured on the server.",
+                            "error_code": "missing_credentials",
+                            "data_mode": "live",
+                            "pipeimob_connection": "missing_credentials"
+                        }
+                    },
+                    "authentication_failed": {
+                        "summary": "Autenticação falhou",
+                        "value": {
+                            "detail": "Failed to authenticate with Pipeimob CRM API. Check credentials.",
+                            "error_code": "authentication_failed",
+                            "data_mode": "live",
+                            "pipeimob_connection": "authentication_failed"
+                        }
+                    },
+                    "pipeimob_unavailable": {
+                        "summary": "Integração temporariamente indisponível",
+                        "value": {
+                            "detail": "Pipeimob API is temporarily unavailable.",
+                            "error_code": "pipeimob_unavailable",
+                            "data_mode": "live",
+                            "pipeimob_connection": "unavailable"
+                        }
+                    },
+                    "pipeimob_timeout": {
+                        "summary": "Timeout de requisição",
+                        "value": {
+                            "detail": "Pipeimob CRM API request timed out.",
+                            "error_code": "pipeimob_timeout",
+                            "data_mode": "live",
+                            "pipeimob_connection": "unavailable"
+                        }
+                    },
+                    "invalid_pipeimob_response": {
+                        "summary": "Resposta inválida ou vazia",
+                        "value": {
+                            "detail": "Pipeimob CRM API returned empty transactions dataset.",
+                            "error_code": "invalid_pipeimob_response",
+                            "data_mode": "live",
+                            "pipeimob_connection": "unavailable"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 class TransactionsDataPayload(BaseModel):
     count: int = Field(..., description="Count of returned transactions", json_schema_extra={"example": 60})
     transactions: List[dict] = Field(..., description="List of transaction objects")
 
 class TransactionsListResponse(BaseModel):
-    data_mode: str = Field(..., description="Active data mode: demo or live", json_schema_extra={"example": "demo"})
-    source: str = Field(..., description="Source of data", json_schema_extra={"example": "synthetic_mock"})
+    data_mode: str = Field(..., description="Active data mode: demo, live, or unconfigured", json_schema_extra={"example": "live"})
+    source: str = Field(..., description="Source of data", json_schema_extra={"example": "pipeimob_api_v2"})
     generated_at: str = Field(..., description="ISO-8601 UTC timestamp", json_schema_extra={"example": "2026-07-15T12:00:00Z"})
     data: TransactionsDataPayload = Field(...)
 
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "summary": "Resposta live — exemplo estrutural",
+                    "description": "Resposta retornada em modo de integração real com a API do Pipeimob.",
+                    "value": {
+                        "data_mode": "live",
+                        "source": "pipeimob_api_v2",
+                        "generated_at": "2026-07-15T12:00:00Z",
+                        "data": {
+                            "count": 0,
+                            "transactions": []
+                        }
+                    }
+                },
+                {
+                    "summary": "Resposta demo — somente desenvolvimento/testes",
+                    "description": "Exemplo demonstrativo utilizado apenas em desenvolvimento ou testes. Não representa dados reais do Pipeimob.",
+                    "value": {
+                        "data_mode": "demo",
+                        "source": "synthetic_mock",
+                        "generated_at": "2026-07-15T12:00:00Z",
+                        "data": {
+                            "count": 60,
+                            "transactions": []
+                        }
+                    }
+                }
+            ]
+        }
+    }
+
 class TransactionDetailResponse(BaseModel):
-    data_mode: str = Field(..., description="Active data mode: demo or live", json_schema_extra={"example": "demo"})
-    source: str = Field(..., description="Source of data", json_schema_extra={"example": "synthetic_mock"})
+    data_mode: str = Field(..., description="Active data mode: demo, live, or unconfigured", json_schema_extra={"example": "live"})
+    source: str = Field(..., description="Source of data", json_schema_extra={"example": "pipeimob_api_v2"})
     generated_at: str = Field(..., description="ISO-8601 UTC timestamp", json_schema_extra={"example": "2026-07-15T12:00:00Z"})
     data: dict = Field(..., description="Detailed transaction object")
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "summary": "Resposta live — exemplo estrutural",
+                    "description": "Resposta retornada em modo de integração real com a API do Pipeimob.",
+                    "value": {
+                        "data_mode": "live",
+                        "source": "pipeimob_api_v2",
+                        "generated_at": "2026-07-15T12:00:00Z",
+                        "data": {}
+                    }
+                },
+                {
+                    "summary": "Resposta demo — somente desenvolvimento/testes",
+                    "description": "Exemplo demonstrativo utilizado apenas em desenvolvimento ou testes. Não representa dados reais do Pipeimob.",
+                    "value": {
+                        "data_mode": "demo",
+                        "source": "synthetic_mock",
+                        "generated_at": "2026-07-15T12:00:00Z",
+                        "data": {}
+                    }
+                }
+            ]
+        }
+    }
 
 class SummaryDataPayload(BaseModel):
     total_sales: float = Field(..., description="Sum of all contract values", json_schema_extra={"example": 323764790.0})
@@ -324,10 +564,47 @@ class SummaryDataPayload(BaseModel):
     transaction_count: int = Field(..., description="Total count of deals/transactions", json_schema_extra={"example": 60})
 
 class DashboardSummaryResponse(BaseModel):
-    data_mode: str = Field(..., json_schema_extra={"example": "demo"})
-    source: str = Field(..., json_schema_extra={"example": "synthetic_mock"})
+    data_mode: str = Field(..., json_schema_extra={"example": "live"})
+    source: str = Field(..., json_schema_extra={"example": "pipeimob_api_v2"})
     generated_at: str = Field(..., json_schema_extra={"example": "2026-07-15T12:00:00Z"})
     data: SummaryDataPayload = Field(...)
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "summary": "Resposta live — exemplo estrutural",
+                    "description": "Resposta retornada em modo de integração real com a API do Pipeimob.",
+                    "value": {
+                        "data_mode": "live",
+                        "source": "pipeimob_api_v2",
+                        "generated_at": "2026-07-15T12:00:00Z",
+                        "data": {
+                            "total_sales": 1000000.0,
+                            "total_commissions": 60000.0,
+                            "avg_commission_rate": 6.0,
+                            "transaction_count": 1
+                        }
+                    }
+                },
+                {
+                    "summary": "Resposta demo — somente desenvolvimento/testes",
+                    "description": "Exemplo demonstrativo utilizado apenas em desenvolvimento ou testes. Não representa dados reais do Pipeimob.",
+                    "value": {
+                        "data_mode": "demo",
+                        "source": "synthetic_mock",
+                        "generated_at": "2026-07-15T12:00:00Z",
+                        "data": {
+                            "total_sales": 145800000.0,
+                            "total_commissions": 8715600.0,
+                            "avg_commission_rate": 5.98,
+                            "transaction_count": 60
+                        }
+                    }
+                }
+            ]
+        }
+    }
 
 class OriginMetric(BaseModel):
     origin: str = Field(..., description="Lead source name", json_schema_extra={"example": "PORTAL ZAP"})
@@ -338,10 +615,47 @@ class OriginsDataPayload(BaseModel):
     origins: List[OriginMetric] = Field(...)
 
 class DashboardOriginsResponse(BaseModel):
-    data_mode: str = Field(..., json_schema_extra={"example": "demo"})
-    source: str = Field(..., json_schema_extra={"example": "synthetic_mock"})
+    data_mode: str = Field(..., json_schema_extra={"example": "live"})
+    source: str = Field(..., json_schema_extra={"example": "pipeimob_api_v2"})
     generated_at: str = Field(..., json_schema_extra={"example": "2026-07-15T12:00:00Z"})
     data: OriginsDataPayload = Field(...)
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "summary": "Resposta live — exemplo estrutural",
+                    "description": "Resposta retornada em modo de integração real com a API do Pipeimob.",
+                    "value": {
+                        "data_mode": "live",
+                        "source": "pipeimob_api_v2",
+                        "generated_at": "2026-07-15T12:00:00Z",
+                        "data": {
+                            "origins": []
+                        }
+                    }
+                },
+                {
+                    "summary": "Resposta demo — somente desenvolvimento/testes",
+                    "description": "Exemplo demonstrativo utilizado apenas em desenvolvimento ou testes. Não representa dados reais do Pipeimob.",
+                    "value": {
+                        "data_mode": "demo",
+                        "source": "synthetic_mock",
+                        "generated_at": "2026-07-15T12:00:00Z",
+                        "data": {
+                            "origins": [
+                                {
+                                    "origin": "Indicação Direta",
+                                    "count": 9,
+                                    "volume": 24240000.0
+                                }
+                            ]
+                        }
+                    }
+                }
+            ]
+        }
+    }
 
 class StageMetric(BaseModel):
     stage: str = Field(..., description="Pipeline stage name", json_schema_extra={"example": "Fechamento"})
@@ -352,10 +666,47 @@ class StagesDataPayload(BaseModel):
     stages: List[StageMetric] = Field(...)
 
 class DashboardStagesResponse(BaseModel):
-    data_mode: str = Field(..., json_schema_extra={"example": "demo"})
-    source: str = Field(..., json_schema_extra={"example": "synthetic_mock"})
+    data_mode: str = Field(..., json_schema_extra={"example": "live"})
+    source: str = Field(..., json_schema_extra={"example": "pipeimob_api_v2"})
     generated_at: str = Field(..., json_schema_extra={"example": "2026-07-15T12:00:00Z"})
     data: StagesDataPayload = Field(...)
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "summary": "Resposta live — exemplo estrutural",
+                    "description": "Resposta retornada em modo de integração real com a API do Pipeimob.",
+                    "value": {
+                        "data_mode": "live",
+                        "source": "pipeimob_api_v2",
+                        "generated_at": "2026-07-15T12:00:00Z",
+                        "data": {
+                            "stages": []
+                        }
+                    }
+                },
+                {
+                    "summary": "Resposta demo — somente desenvolvimento/testes",
+                    "description": "Exemplo demonstrativo utilizado apenas em desenvolvimento ou testes. Não representa dados reais do Pipeimob.",
+                    "value": {
+                        "data_mode": "demo",
+                        "source": "synthetic_mock",
+                        "generated_at": "2026-07-15T12:00:00Z",
+                        "data": {
+                            "stages": [
+                                {
+                                    "stage": "Fechamento",
+                                    "count": 12,
+                                    "volume": 18500000.0
+                                }
+                            ]
+                        }
+                    }
+                }
+            ]
+        }
+    }
 
 class ManagerMetric(BaseModel):
     manager: str = Field(..., description="Name of the agent/manager", json_schema_extra={"example": "Corretor Alfa"})
@@ -367,10 +718,48 @@ class ManagersDataPayload(BaseModel):
     managers: List[ManagerMetric] = Field(...)
 
 class DashboardManagersResponse(BaseModel):
-    data_mode: str = Field(..., json_schema_extra={"example": "demo"})
-    source: str = Field(..., json_schema_extra={"example": "synthetic_mock"})
+    data_mode: str = Field(..., json_schema_extra={"example": "live"})
+    source: str = Field(..., json_schema_extra={"example": "pipeimob_api_v2"})
     generated_at: str = Field(..., json_schema_extra={"example": "2026-07-15T12:00:00Z"})
     data: ManagersDataPayload = Field(...)
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "summary": "Resposta live — exemplo estrutural",
+                    "description": "Resposta retornada em modo de integração real com a API do Pipeimob.",
+                    "value": {
+                        "data_mode": "live",
+                        "source": "pipeimob_api_v2",
+                        "generated_at": "2026-07-15T12:00:00Z",
+                        "data": {
+                            "managers": []
+                        }
+                    }
+                },
+                {
+                    "summary": "Resposta demo — somente desenvolvimento/testes",
+                    "description": "Exemplo demonstrativo utilizado apenas em desenvolvimento ou testes. Não representa dados reais do Pipeimob.",
+                    "value": {
+                        "data_mode": "demo",
+                        "source": "synthetic_mock",
+                        "generated_at": "2026-07-15T12:00:00Z",
+                        "data": {
+                            "managers": [
+                                {
+                                    "manager": "Corretor Alfa",
+                                    "count": 10,
+                                    "volume": 15210759.0,
+                                    "ticket_medio": 1521075.9
+                                }
+                            ]
+                        }
+                    }
+                }
+            ]
+        }
+    }
 
 class BankMetric(BaseModel):
     bank: str = Field(..., description="Name of financing bank", json_schema_extra={"example": "Instituição A"})
@@ -389,10 +778,49 @@ class PaymentsDataPayload(BaseModel):
     methods: List[PaymentMethodMetric] = Field(..., description="Payment methods distribution")
 
 class DashboardPaymentsResponse(BaseModel):
-    data_mode: str = Field(..., json_schema_extra={"example": "demo"})
-    source: str = Field(..., json_schema_extra={"example": "synthetic_mock"})
+    data_mode: str = Field(..., json_schema_extra={"example": "live"})
+    source: str = Field(..., json_schema_extra={"example": "pipeimob_api_v2"})
     generated_at: str = Field(..., json_schema_extra={"example": "2026-07-15T12:00:00Z"})
     data: PaymentsDataPayload = Field(...)
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "summary": "Resposta live — exemplo estrutural",
+                    "description": "Resposta retornada em modo de integração real com a API do Pipeimob.",
+                    "value": {
+                        "data_mode": "live",
+                        "source": "pipeimob_api_v2",
+                        "generated_at": "2026-07-15T12:00:00Z",
+                        "data": {
+                            "financed_count": 0,
+                            "cash_count": 0,
+                            "financing_ratio": 0.0,
+                            "banks": [],
+                            "methods": []
+                        }
+                    }
+                },
+                {
+                    "summary": "Resposta demo — somente desenvolvimento/testes",
+                    "description": "Exemplo demonstrativo utilizado apenas em desenvolvimento ou testes. Não representa dados reais do Pipeimob.",
+                    "value": {
+                        "data_mode": "demo",
+                        "source": "synthetic_mock",
+                        "generated_at": "2026-07-15T12:00:00Z",
+                        "data": {
+                            "financed_count": 40,
+                            "cash_count": 20,
+                            "financing_ratio": 66.67,
+                            "banks": [],
+                            "methods": []
+                        }
+                    }
+                }
+            ]
+        }
+    }
 
 class CommissionMetric(BaseModel):
     transaction_id: str = Field(..., description="Transaction unique ID", json_schema_extra={"example": "tx_demo_101"})
@@ -408,10 +836,45 @@ class CommissionsDataPayload(BaseModel):
     commissions: List[CommissionMetric] = Field(..., description="List of individual commission rates")
 
 class DashboardCommissionsResponse(BaseModel):
-    data_mode: str = Field(..., json_schema_extra={"example": "demo"})
-    source: str = Field(..., json_schema_extra={"example": "synthetic_mock"})
+    data_mode: str = Field(..., json_schema_extra={"example": "live"})
+    source: str = Field(..., json_schema_extra={"example": "pipeimob_api_v2"})
     generated_at: str = Field(..., json_schema_extra={"example": "2026-07-15T12:00:00Z"})
     data: CommissionsDataPayload = Field(...)
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "summary": "Resposta live — exemplo estrutural",
+                    "description": "Resposta retornada em modo de integração real com a API do Pipeimob.",
+                    "value": {
+                        "data_mode": "live",
+                        "source": "pipeimob_api_v2",
+                        "generated_at": "2026-07-15T12:00:00Z",
+                        "data": {
+                            "total_commissions": 0.0,
+                            "avg_commission_rate": 0.0,
+                            "commissions": []
+                        }
+                    }
+                },
+                {
+                    "summary": "Resposta demo — somente desenvolvimento/testes",
+                    "description": "Exemplo demonstrativo utilizado apenas em desenvolvimento ou testes. Não representa dados reais do Pipeimob.",
+                    "value": {
+                        "data_mode": "demo",
+                        "source": "synthetic_mock",
+                        "generated_at": "2026-07-15T12:00:00Z",
+                        "data": {
+                            "total_commissions": 17409771.0,
+                            "avg_commission_rate": 5.50,
+                            "commissions": []
+                        }
+                    }
+                }
+            ]
+        }
+    }
 
 class TimelineMetric(BaseModel):
     month: str = Field(..., description="Month/Year label", json_schema_extra={"example": "Jan/26"})
@@ -422,10 +885,47 @@ class TimelineDataPayload(BaseModel):
     timeline: List[TimelineMetric] = Field(...)
 
 class DashboardTimelineResponse(BaseModel):
-    data_mode: str = Field(..., json_schema_extra={"example": "demo"})
-    source: str = Field(..., json_schema_extra={"example": "synthetic_mock"})
+    data_mode: str = Field(..., json_schema_extra={"example": "live"})
+    source: str = Field(..., json_schema_extra={"example": "pipeimob_api_v2"})
     generated_at: str = Field(..., json_schema_extra={"example": "2026-07-15T12:00:00Z"})
     data: TimelineDataPayload = Field(...)
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "summary": "Resposta live — exemplo estrutural",
+                    "description": "Resposta retornada em modo de integração real com a API do Pipeimob.",
+                    "value": {
+                        "data_mode": "live",
+                        "source": "pipeimob_api_v2",
+                        "generated_at": "2026-07-15T12:00:00Z",
+                        "data": {
+                            "timeline": []
+                        }
+                    }
+                },
+                {
+                    "summary": "Resposta demo — somente desenvolvimento/testes",
+                    "description": "Exemplo demonstrativo utilizado apenas em desenvolvimento ou testes. Não representa dados reais do Pipeimob.",
+                    "value": {
+                        "data_mode": "demo",
+                        "source": "synthetic_mock",
+                        "generated_at": "2026-07-15T12:00:00Z",
+                        "data": {
+                            "timeline": [
+                                {
+                                    "month": "Jan/26",
+                                    "volume": 15000000.0,
+                                    "count": 12
+                                }
+                            ]
+                        }
+                    }
+                }
+            ]
+        }
+    }
 
 
 # Helper to format and add X-Data-Mode response headers
@@ -538,8 +1038,9 @@ async def get_catalog():
 @app.get(
     "/api/transactions",
     response_model=TransactionsListResponse,
+    responses={**RESPONSES_503},
     summary="List Transactions",
-    description="Returns list of transactions matching the specified query filters. Note: Agent, category, and financing filters are applied locally by the backend. Use PIPEIMOB_DATA_MODE=demo for synthetic mockup runs."
+    description="Returns list of transactions matching the specified query filters. In live mode, period filters (data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim) are sent directly to Pipeimob CRM. Local filters (agent, category, financing) are applied locally by the backend. Demo mode is restricted to development and tests."
 )
 async def get_transactions(
     response: Response,
@@ -568,8 +1069,9 @@ async def get_transactions(
 @app.get(
     "/api/transactions/{id}",
     response_model=TransactionDetailResponse,
+    responses={**RESPONSES_503},
     summary="Get Transaction by ID",
-    description="Returns the details of a single transaction by ID (transacao_unique_id_pipeimob or codigo_contrato)."
+    description="Returns the details of a single transaction by ID (transacao_unique_id_pipeimob or codigo_contrato). In live mode, fetches real transaction from Pipeimob. Demo mode is restricted to development and tests."
 )
 async def get_transaction_by_id(
     id: str,
@@ -594,8 +1096,9 @@ async def get_transaction_by_id(
 @app.get(
     "/api/dashboard/summary",
     response_model=DashboardSummaryResponse,
+    responses={**RESPONSES_503},
     summary="Get Dashboard BI Summary metrics",
-    description="Computes total sales volume, commissions, weighted avg commission rate, and transaction count. Applied locally."
+    description="Computes total sales volume, commissions, weighted avg commission rate, and transaction count. In live mode, period filters (data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim) are sent directly to Pipeimob CRM. Local filters (agent, category, financing) are applied locally by the backend. Demo mode is restricted to development and tests."
 )
 async def get_dashboard_summary(
     response: Response,
@@ -633,8 +1136,9 @@ async def get_dashboard_summary(
 @app.get(
     "/api/dashboard/origins",
     response_model=DashboardOriginsResponse,
+    responses={**RESPONSES_503},
     summary="Get Buyer Origins distribution",
-    description="Groups sales volume and transaction count by lead origin source. Applied locally."
+    description="Groups sales volume and transaction count by lead origin source. In live mode, period filters (data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim) are sent directly to Pipeimob CRM. Local filters (agent, category, financing) are applied locally by the backend. Demo mode is restricted to development and tests."
 )
 async def get_dashboard_origins(
     response: Response,
@@ -678,8 +1182,9 @@ async def get_dashboard_origins(
 @app.get(
     "/api/dashboard/stages",
     response_model=DashboardStagesResponse,
+    responses={**RESPONSES_503},
     summary="Get Stages distribution",
-    description="Groups sales volume and transaction count by CRM pipeline stage. Applied locally."
+    description="Groups sales volume and transaction count by CRM pipeline stage. In live mode, period filters (data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim) are sent directly to Pipeimob CRM. Local filters (agent, category, financing) are applied locally by the backend. Demo mode is restricted to development and tests."
 )
 async def get_dashboard_stages(
     response: Response,
@@ -723,8 +1228,9 @@ async def get_dashboard_stages(
 @app.get(
     "/api/dashboard/managers",
     response_model=DashboardManagersResponse,
+    responses={**RESPONSES_503},
     summary="Get Manager Leaderboard",
-    description="Computes leaderboard ranking of managers by sales volume, transaction count, and average ticket size. Applied locally."
+    description="Computes leaderboard ranking of managers by sales volume, transaction count, and average ticket size. In live mode, period filters (data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim) are sent directly to Pipeimob CRM. Local filters (agent, category, financing) are applied locally by the backend. Demo mode is restricted to development and tests."
 )
 async def get_dashboard_managers(
     response: Response,
@@ -775,8 +1281,9 @@ async def get_dashboard_managers(
 @app.get(
     "/api/dashboard/payments",
     response_model=DashboardPaymentsResponse,
+    responses={**RESPONSES_503},
     summary="Get Payment Methods and Financing distribution",
-    description="Aggregates payment direct vs financing ratio, bank distributions, and detailed signals/methods volumes. Applied locally."
+    description="Aggregates payment direct vs financing ratio, bank distributions, and detailed signals/methods volumes. In live mode, period filters (data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim) are sent directly to Pipeimob CRM. Local filters (agent, category, financing) are applied locally by the backend. Demo mode is restricted to development and tests."
 )
 async def get_dashboard_payments(
     response: Response,
@@ -850,8 +1357,9 @@ async def get_dashboard_payments(
 @app.get(
     "/api/dashboard/commissions",
     response_model=DashboardCommissionsResponse,
+    responses={**RESPONSES_503},
     summary="Get Commission detailed metrics",
-    description="Returns aggregate commission values and individual contract commission details. Applied locally."
+    description="Returns aggregate commission values and individual contract commission details. In live mode, period filters (data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim) are sent directly to Pipeimob CRM. Local filters (agent, category, financing) are applied locally by the backend. Demo mode is restricted to development and tests."
 )
 async def get_dashboard_commissions(
     response: Response,
@@ -914,8 +1422,9 @@ MONTHS_PT = {
 @app.get(
     "/api/dashboard/timeline",
     response_model=DashboardTimelineResponse,
+    responses={**RESPONSES_503},
     summary="Get Monthly Sales Timeline",
-    description="Groups contract sales volume and count chronologically by month. Applied locally."
+    description="Groups contract sales volume and count chronologically by month. In live mode, period filters (data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim) are sent directly to Pipeimob CRM. Local filters (agent, category, financing) are applied locally by the backend. Demo mode is restricted to development and tests."
 )
 async def get_dashboard_timeline(
     response: Response,

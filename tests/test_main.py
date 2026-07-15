@@ -321,8 +321,8 @@ def test_live_mode_without_credentials_returns_error():
     os.environ.pop("PIPEIMOB_SECRET_KEY", None)
     
     response = client.get("/api/transactions")
-    assert response.status_code == 400
-    assert "Configuration pending" in response.json()["detail"]
+    assert response.status_code == 503
+    assert "credentials are not configured" in response.json()["detail"]
 
 def test_headers_credentials_are_ignored():
     os.environ["PIPEIMOB_DATA_MODE"] = "live"
@@ -334,8 +334,8 @@ def test_headers_credentials_are_ignored():
         "X-Secret-Key": "client_supplied_secret"
     }
     response = client.get("/api/transactions", headers=headers)
-    assert response.status_code == 400
-    assert "Configuration pending" in response.json()["detail"]
+    assert response.status_code == 503
+    assert "credentials are not configured" in response.json()["detail"]
 
 def test_live_mode_failure_does_not_return_mock():
     os.environ["PIPEIMOB_DATA_MODE"] = "live"
@@ -344,7 +344,7 @@ def test_live_mode_failure_does_not_return_mock():
     
     response = client.get("/api/transactions")
     assert response.status_code == 503
-    assert "Pipeimob connection failed" in response.json()["detail"]
+    assert "Failed to authenticate" in response.json()["detail"] or "Authentication payload" in response.json()["detail"]
 
 def test_openapi_includes_new_endpoints_and_schemas():
     response = client.get("/openapi.json")
@@ -363,3 +363,41 @@ def test_openapi_includes_new_endpoints_and_schemas():
     schemas = openapi_data["components"]["schemas"]
     assert "TransactionsListResponse" in schemas
     assert "DashboardSummaryResponse" in schemas
+    assert "IntegrationUnavailableResponse" in schemas
+
+    # Verify that all 9 data/dashboard endpoints have 503 response documented in OpenAPI
+    data_endpoints = [
+        "/api/transactions",
+        "/api/transactions/{id}",
+        "/api/dashboard/summary",
+        "/api/dashboard/origins",
+        "/api/dashboard/stages",
+        "/api/dashboard/managers",
+        "/api/dashboard/payments",
+        "/api/dashboard/commissions",
+        "/api/dashboard/timeline"
+    ]
+    for path in data_endpoints:
+        assert path in paths
+        assert "503" in paths[path]["get"]["responses"]
+        
+    # Verify main examples do not use demo mode as production default
+    tx_schema = schemas["TransactionsListResponse"]
+    assert tx_schema["properties"]["data_mode"]["example"] == "live"
+    assert tx_schema["properties"]["source"]["example"] == "pipeimob_api_v2"
+
+    health_schema = schemas["HealthResponse"]
+    assert health_schema["properties"]["data_mode"]["example"] == "unconfigured"
+    assert health_schema["properties"]["pipeimob_connection"]["example"] == "pending_configuration"
+    
+    # 503 errors do not leak secrets
+    os.environ["APP_ENV"] = "production"
+    os.environ.pop("PIPEIMOB_DATA_MODE", None)
+    err_res = client.get("/api/transactions")
+    assert err_res.status_code == 503
+    err_body = err_res.json()
+    for val in err_body.values():
+        val_str = str(val).lower()
+        assert "api_key" not in val_str
+        assert "secret_key" not in val_str
+        assert "token" not in val_str
