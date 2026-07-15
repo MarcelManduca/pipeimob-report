@@ -2,6 +2,7 @@ import os
 import urllib.request
 import json
 import ssl
+import time
 from datetime import datetime, timezone
 from typing import List, Optional
 from fastapi import FastAPI, Header, Query, HTTPException, Response, Request
@@ -9,6 +10,15 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
+
+# Token Cache in memory
+class TokenCache:
+    def __init__(self):
+        self.access_token: Optional[str] = None
+        self.token_type: str = "Bearer"
+        self.expires_at: Optional[float] = None
+
+token_cache = TokenCache()
 
 # Import our synthetic anonymous mock database
 from mock_data import MOCK_TRANSACTIONS
@@ -18,7 +28,17 @@ load_dotenv()
 
 app = FastAPI(
     title="Pipeimob Report API",
-    description="Backend API for Pipeimob reports and Lovable integration (BI Dashboard - Phase 2)",
+    description=(
+        "Backend API for Pipeimob reports and Lovable integration (BI Dashboard - Phase 2).\n\n"
+        "### Especificações Técnicas da Integração Pipeimob CRM:\n"
+        "- **Autenticação:** Realizada via JWT no endpoint `POST /api/v2/auth`. O token de acesso é extraído de `data.access_token` e fornecido via header `Authorization: Bearer <token>` em chamadas subsequentes.\n"
+        "- **Cache de Token:** O token JWT é mantido em cache de memória server-side e renovado automaticamente com uma margem de segurança de 60 segundos antes de expirar.\n"
+        "- **Parâmetro de Busca:** O parâmetro de busca por ID de transação é `transacao_unique_id`, enquanto a chave de identificação do registro retornada no payload é `transacao_unique_id_pipeimob`.\n"
+        "- **Paginação:** Feita exclusivamente via parâmetro de query `pagina` com tamanho de página fixo de 25 registros.\n"
+        "- **Filtros Obrigatórios:** A API do Pipeimob exige pelo menos um filtro direto nas consultas Live (ex.: data de criação, CCV, arquivamento, códigos específicos ou transacao_unique_id). Chamadas live sem filtro direto retornam HTTP 400.\n"
+        "- **Filtros Locais:** Os filtros por gestor (`agent`), categoria (`category`), financiamento (`financing`) e etapa (`etapa_atual`) são processados localmente pelo backend.\n"
+        "- **Comissões:** A métrica oficial do VGC total é `total_comissao`, enquanto a `comissao_imobiliaria` é calculada somando os comissionados com flag comissionado_imobiliária como true."
+    ),
     version="0.1.0",
 )
 
@@ -69,7 +89,12 @@ ssl_context = ssl._create_unverified_context()
 BASE_URL = "https://api.pipeimob.com.br/api/v2"
 
 # Authentication helper
-def get_auth_token(api_key: str, api_secret: str) -> Optional[str]:
+def get_auth_token(api_key: str, api_secret: str, force_refresh: bool = False) -> Optional[str]:
+    global token_cache
+    now = time.time()
+    if not force_refresh and token_cache.access_token and token_cache.expires_at and now < token_cache.expires_at:
+        return token_cache.access_token
+
     url = f"{BASE_URL}/auth"
     payload = {
         "api_key": api_key,
@@ -85,7 +110,24 @@ def get_auth_token(api_key: str, api_secret: str) -> Optional[str]:
         with urllib.request.urlopen(req, context=ssl_context, timeout=8) as response:
             res_body = json.loads(response.read().decode('utf-8'))
             if res_body.get("success"):
-                return res_body.get("data", {}).get("access_token")
+                data = res_body.get("data") or {}
+                token = data.get("access_token")
+                if not token or not isinstance(token, str) or not token.strip():
+                    raise IntegrationUnavailableError(
+                        status_code=503,
+                        detail="Authentication succeeded but access_token is empty or invalid.",
+                        error_code="authentication_failed",
+                        data_mode="live",
+                        pipeimob_connection="authentication_failed"
+                    )
+                expires_in = data.get("expires_in") or 3600
+                token_type = data.get("token_type") or "Bearer"
+                
+                # Cache token - with a margin of 60 seconds
+                token_cache.access_token = token
+                token_cache.token_type = token_type
+                token_cache.expires_at = now + float(expires_in) - 60.0
+                return token
             else:
                 raise IntegrationUnavailableError(
                     status_code=503,
@@ -140,7 +182,10 @@ def fetch_all_transactions_live(
     data_inicio_ccv: Optional[str] = None,
     data_fim_ccv: Optional[str] = None,
     data_arquivamento_inicio: Optional[str] = None,
-    data_arquivamento_fim: Optional[str] = None
+    data_arquivamento_fim: Optional[str] = None,
+    codigo_imovel: Optional[str] = None,
+    codigo_contrato: Optional[str] = None,
+    transacao_unique_id: Optional[str] = None
 ) -> list:
     token = get_auth_token(api_key, api_secret)
     if not token:
@@ -160,64 +205,16 @@ def fetch_all_transactions_live(
     if data_fim_ccv: query_parts.append(f"data_fim_ccv={data_fim_ccv}")
     if data_arquivamento_inicio: query_parts.append(f"data_arquivamento_inicio={data_arquivamento_inicio}")
     if data_arquivamento_fim: query_parts.append(f"data_arquivamento_fim={data_arquivamento_fim}")
+    if codigo_imovel: query_parts.append(f"codigo_imovel={codigo_imovel}")
+    if codigo_contrato: query_parts.append(f"codigo_contrato={codigo_contrato}")
+    if transacao_unique_id: query_parts.append(f"transacao_unique_id={transacao_unique_id}")
     
     query_str = "&".join(query_parts)
     prefix = f"&{query_str}" if query_str else ""
     
-    url_p1 = f"{BASE_URL}/negocios/transacoes?pagina=1{prefix}"
-    req_p1 = urllib.request.Request(
-        url_p1,
-        headers={'Authorization': f'Bearer {token}', 'User-Agent': 'Mozilla/5.0'}
-    )
-    
-    all_transactions = []
-    total_pages = 1
-    try:
-        with urllib.request.urlopen(req_p1, context=ssl_context, timeout=8) as response:
-            res_body = json.loads(response.read().decode('utf-8'))
-            if res_body.get("success"):
-                txs = res_body.get("data", {}).get("transacoes", [])
-                all_transactions.extend(txs)
-                pagination = res_body.get("meta", {}).get("pagination", {})
-                total_pages = pagination.get("total_pages", 1)
-            else:
-                raise IntegrationUnavailableError(
-                    status_code=503,
-                    detail="Pipeimob transactions API returned success=False.",
-                    error_code="invalid_pipeimob_response",
-                    data_mode="live",
-                    pipeimob_connection="unavailable"
-                )
-    except urllib.error.HTTPError as e:
-        raise IntegrationUnavailableError(
-            status_code=503,
-            detail=f"Pipeimob API is temporarily unavailable (HTTP {e.code}).",
-            error_code="pipeimob_unavailable",
-            data_mode="live",
-            pipeimob_connection="unavailable"
-        )
-    except urllib.error.URLError as e:
-        is_timeout = "timeout" in str(e.reason).lower() if hasattr(e, 'reason') else False
-        raise IntegrationUnavailableError(
-            status_code=503,
-            detail="Pipeimob CRM API request timed out." if is_timeout else "Pipeimob CRM API request is unreachable.",
-            error_code="pipeimob_timeout" if is_timeout else "pipeimob_unavailable",
-            data_mode="live",
-            pipeimob_connection="unavailable"
-        )
-    except Exception as e:
-        if isinstance(e, IntegrationUnavailableError):
-            raise e
-        raise IntegrationUnavailableError(
-            status_code=503,
-            detail=f"Invalid response format from Pipeimob: {e}",
-            error_code="invalid_pipeimob_response",
-            data_mode="live",
-            pipeimob_connection="unavailable"
-        )
-
-    def fetch_page_worker(p):
-        url = f"{BASE_URL}/negocios/transacoes?pagina={p}{prefix}"
+    # We define a request helper that supports 401 retry exactly once
+    def request_with_retry(url: str, retry_allowed: bool = True) -> dict:
+        nonlocal token
         req = urllib.request.Request(
             url,
             headers={'Authorization': f'Bearer {token}', 'User-Agent': 'Mozilla/5.0'}
@@ -225,8 +222,79 @@ def fetch_all_transactions_live(
         try:
             with urllib.request.urlopen(req, context=ssl_context, timeout=8) as response:
                 res_body = json.loads(response.read().decode('utf-8'))
-                if res_body.get("success"):
-                    return res_body.get("data", {}).get("transacoes", [])
+                if not res_body.get("success"):
+                    raise IntegrationUnavailableError(
+                        status_code=503,
+                        detail="Pipeimob transactions API returned success=False.",
+                        error_code="invalid_pipeimob_response",
+                        data_mode="live",
+                        pipeimob_connection="unavailable"
+                    )
+                return res_body
+        except urllib.error.HTTPError as e:
+            if e.code == 401 and retry_allowed:
+                # Force reauthentication once
+                token = get_auth_token(api_key, api_secret, force_refresh=True)
+                return request_with_retry(url, retry_allowed=False)
+            raise IntegrationUnavailableError(
+                status_code=503,
+                detail=f"Pipeimob API is temporarily unavailable (HTTP {e.code}).",
+                error_code="pipeimob_unavailable",
+                data_mode="live",
+                pipeimob_connection="unavailable"
+            )
+        except urllib.error.URLError as e:
+            is_timeout = "timeout" in str(e.reason).lower() if hasattr(e, 'reason') else False
+            raise IntegrationUnavailableError(
+                status_code=503,
+                detail="Pipeimob CRM API request timed out." if is_timeout else "Pipeimob CRM API request is unreachable.",
+                error_code="pipeimob_timeout" if is_timeout else "pipeimob_unavailable",
+                data_mode="live",
+                pipeimob_connection="unavailable"
+            )
+        except Exception as e:
+            if isinstance(e, IntegrationUnavailableError):
+                raise e
+            raise IntegrationUnavailableError(
+                status_code=503,
+                detail=f"Invalid response format from Pipeimob: {e}",
+                error_code="invalid_pipeimob_response",
+                data_mode="live",
+                pipeimob_connection="unavailable"
+            )
+
+    url_p1 = f"{BASE_URL}/negocios/transacoes?pagina=1{prefix}"
+    res_body = request_with_retry(url_p1)
+    
+    # Read transactions safely from response.data.transacoes
+    txs = res_body.get("data", {}).get("transacoes", []) if isinstance(res_body.get("data"), dict) else []
+    all_transactions = list(txs)
+    
+    # Read pagination metadata defensively:
+    # 1. response.meta.pagination
+    # 2. response.data.meta.pagination
+    meta_p = None
+    if "meta" in res_body and isinstance(res_body["meta"], dict) and "pagination" in res_body["meta"]:
+        meta_p = res_body["meta"]["pagination"]
+    elif "data" in res_body and isinstance(res_body["data"], dict) and "meta" in res_body["data"] and isinstance(res_body["data"]["meta"], dict) and "pagination" in res_body["data"]["meta"]:
+        meta_p = res_body["data"]["meta"]["pagination"]
+        
+    if meta_p is None:
+        raise IntegrationUnavailableError(
+            status_code=503,
+            detail="Pagination metadata (meta.pagination or data.meta.pagination) not found in Pipeimob response.",
+            error_code="invalid_pipeimob_response",
+            data_mode="live",
+            pipeimob_connection="unavailable"
+        )
+        
+    total_pages = meta_p.get("total_pages") or 1
+
+    def fetch_page_worker(p):
+        url = f"{BASE_URL}/negocios/transacoes?pagina={p}{prefix}"
+        try:
+            body = request_with_retry(url, retry_allowed=True)
+            return body.get("data", {}).get("transacoes", []) if isinstance(body.get("data"), dict) else []
         except Exception:
             pass
         return []
@@ -273,7 +341,10 @@ def load_transactions_dataset(
     data_inicio_ccv: Optional[str] = None,
     data_fim_ccv: Optional[str] = None,
     data_arquivamento_inicio: Optional[str] = None,
-    data_arquivamento_fim: Optional[str] = None
+    data_arquivamento_fim: Optional[str] = None,
+    codigo_imovel: Optional[str] = None,
+    codigo_contrato: Optional[str] = None,
+    transacao_unique_id: Optional[str] = None
 ) -> tuple:
     data_mode, conn_status = get_current_data_mode_and_connection()
     
@@ -289,7 +360,25 @@ def load_transactions_dataset(
     if data_mode == "demo":
         return "demo", "synthetic_mock", MOCK_TRANSACTIONS
         
-    # Live mode: require credentials. Never fallback silently to mock.
+    # Live mode: validate that at least one direct filter is present.
+    has_direct_filter = any([
+        data_inicio_criacao,
+        data_fim_criacao,
+        data_inicio_ccv,
+        data_fim_ccv,
+        data_arquivamento_inicio,
+        data_arquivamento_fim,
+        codigo_imovel,
+        codigo_contrato,
+        transacao_unique_id
+    ])
+    
+    if not has_direct_filter:
+        raise HTTPException(
+            status_code=400,
+            detail="At least one direct filter parameter is required in Live mode: data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id."
+        )
+        
     if conn_status == "missing_credentials":
         raise IntegrationUnavailableError(
             status_code=503,
@@ -310,7 +399,10 @@ def load_transactions_dataset(
         data_inicio_ccv=data_inicio_ccv,
         data_fim_ccv=data_fim_ccv,
         data_arquivamento_inicio=data_arquivamento_inicio,
-        data_arquivamento_fim=data_arquivamento_fim
+        data_arquivamento_fim=data_arquivamento_fim,
+        codigo_imovel=codigo_imovel,
+        codigo_contrato=codigo_contrato,
+        transacao_unique_id=transacao_unique_id
     )
     
     if not live_txs:
@@ -321,6 +413,19 @@ def load_transactions_dataset(
             data_mode="live",
             pipeimob_connection="unavailable"
         )
+        
+    # Enrich comissao_imobiliaria defensively for live transactions
+    for tx in live_txs:
+        comm_imob = 0.0
+        comissionados = tx.get("comissionados") or []
+        for c in comissionados:
+            is_imob = c.get("comissionado_imobiliária")
+            if is_imob is None:
+                is_imob = c.get("comissionado_imobiliaria")
+            if is_imob is True or str(is_imob).lower() in ["true", "1"]:
+                val = c.get("comissionado_valor") or 0.0
+                comm_imob += float(val)
+        tx["comissao_imobiliaria"] = comm_imob
         
     return "live", "pipeimob_api_v2", live_txs
 
@@ -334,9 +439,13 @@ def get_filtered_transactions(
     data_fim_ccv: Optional[str] = None,
     data_arquivamento_inicio: Optional[str] = None,
     data_arquivamento_fim: Optional[str] = None,
+    codigo_imovel: Optional[str] = None,
+    codigo_contrato: Optional[str] = None,
+    transacao_unique_id: Optional[str] = None,
     agent: Optional[str] = None,
     category: Optional[str] = None,
     financing: Optional[bool] = None,
+    etapa_atual: Optional[str] = None
 ) -> list:
     filtered = []
     for tx in transactions:
@@ -361,6 +470,19 @@ def get_filtered_transactions(
                 if data_arquivamento_fim and tx_archived and tx_archived > data_arquivamento_fim:
                     continue
                     
+            if codigo_imovel:
+                tx_imovel = tx.get("codigo_imovel") or ""
+                if codigo_imovel.lower() not in tx_imovel.lower():
+                    continue
+            if codigo_contrato:
+                tx_contrato = tx.get("codigo_contrato") or ""
+                if codigo_contrato.lower() not in tx_contrato.lower():
+                    continue
+            if transacao_unique_id:
+                tx_unique = tx.get("transacao_unique_id_pipeimob") or ""
+                if transacao_unique_id.lower() not in tx_unique.lower():
+                    continue
+                    
         # Local backend-only filters (always applied)
         if agent:
             tx_agent = tx.get("agente_gestor") or ""
@@ -374,9 +496,14 @@ def get_filtered_transactions(
             tx_fin = tx.get("financiamento")
             if tx_fin != financing:
                 continue
+        if etapa_atual:
+            tx_etapa = tx.get("etapa_atual") or ""
+            if etapa_atual.lower() not in tx_etapa.lower():
+                continue
                 
         filtered.append(tx)
     return filtered
+
 
 # Pydantic Schemas for OpenAPI documentation
 class HealthResponse(BaseModel):
@@ -965,21 +1092,12 @@ async def get_health():
     description="Returns the integration roadmap status, available fields, filters and pending items for Pipeimob resources."
 )
 async def get_catalog():
-    data_mode, conn_status = get_current_data_mode_and_connection()
-    
-    if data_mode == "unconfigured" or conn_status == "missing_credentials":
-        status_str = "implemented_pending_live_configuration"
-    elif data_mode == "live":
-        status_str = "implemented_pending_live_validation"
-    else:
-        status_str = "implemented_demo_pending_live_validation"
-        
     transactions_resource = ResourceCatalog(
         id="transactions",
         name="Transações",
         backend_endpoint="/api/transactions",
         pipeimob_endpoint="/api/v2/negocios/transacoes",
-        status=status_str,
+        status="implemented_pending_live_validation",
         implemented=True,
         validated=False,
         description="Transações comerciais do Pipeimob",
@@ -1006,7 +1124,11 @@ async def get_catalog():
             "data_inicio_ccv",
             "data_fim_ccv",
             "data_arquivamento_inicio",
-            "data_arquivamento_fim"
+            "data_arquivamento_fim",
+            "codigo_imovel",
+            "codigo_contrato",
+            "transacao_unique_id",
+            "pagina"
         ],
         filters_api_direct=[
             "data_inicio_criacao",
@@ -1014,19 +1136,22 @@ async def get_catalog():
             "data_inicio_ccv",
             "data_fim_ccv",
             "data_arquivamento_inicio",
-            "data_arquivamento_fim"
+            "data_arquivamento_fim",
+            "codigo_imovel",
+            "codigo_contrato",
+            "transacao_unique_id",
+            "pagina"
         ],
         filters_local_backend=[
             "agent",
             "category",
-            "financing"
+            "financing",
+            "etapa_atual"
         ],
         pending_items=[
-            "Confirmar propriedade que contém o token na resposta de autenticação",
-            "Confirmar header de autenticação na API V2",
-            "Confirmar se existe parâmetro na API para alterar o limite de registros por página (page_limit)",
-            "Validar nova credencial real em produção (Live mode)",
-            "Confirmar eventual suporte a filtro por etapa (etapa_atual) diretamente no Pipeimob"
+            "Validar a credencial real em produção (Live mode)",
+            "Validar o formato real do envelope de resposta e da paginação",
+            "Validar os totais calculados contra o relatório oficial exportado do CRM"
         ]
     )
     
@@ -1040,7 +1165,7 @@ async def get_catalog():
     response_model=TransactionsListResponse,
     responses={**RESPONSES_503},
     summary="List Transactions",
-    description="Returns list of transactions matching the specified query filters. In live mode, period filters (data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim) are sent directly to Pipeimob CRM. Local filters (agent, category, financing) are applied locally by the backend. Demo mode is restricted to development and tests."
+    description="Returns list of transactions matching the specified query filters. In live mode, period filters (data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim) and direct search filters (codigo_imovel, codigo_contrato, transacao_unique_id) are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. Demo mode is restricted to development and tests."
 )
 async def get_transactions(
     response: Response,
@@ -1050,15 +1175,22 @@ async def get_transactions(
     data_fim_ccv: Optional[str] = Query(None),
     data_arquivamento_inicio: Optional[str] = Query(None),
     data_arquivamento_fim: Optional[str] = Query(None),
+    codigo_imovel: Optional[str] = Query(None),
+    codigo_contrato: Optional[str] = Query(None),
+    transacao_unique_id: Optional[str] = Query(None),
     agent: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
-    financing: Optional[bool] = Query(None)
+    financing: Optional[bool] = Query(None),
+    etapa_atual: Optional[str] = Query(None)
 ):
     mode, src, dataset = load_transactions_dataset(
-        data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim
+        data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id
     )
     filtered = get_filtered_transactions(
-        dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim, agent, category, financing
+        dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
+        agent, category, financing, etapa_atual
     )
     
     response.headers["X-Data-Mode"] = mode
@@ -1077,13 +1209,24 @@ async def get_transaction_by_id(
     id: str,
     response: Response
 ):
-    mode, src, dataset = load_transactions_dataset()
+    # In live mode we must pass at least one direct filter, so we pass both or try to load by transacao_unique_id or codigo_contrato
+    mode, src, dataset = load_transactions_dataset(transacao_unique_id=id)
     
     target_tx = None
     for tx in dataset:
         if tx.get("transacao_unique_id_pipeimob") == id or tx.get("codigo_contrato") == id:
             target_tx = tx
             break
+            
+    if not target_tx:
+        try:
+            mode, src, dataset = load_transactions_dataset(codigo_contrato=id)
+            for tx in dataset:
+                if tx.get("transacao_unique_id_pipeimob") == id or tx.get("codigo_contrato") == id:
+                    target_tx = tx
+                    break
+        except Exception:
+            pass
             
     if not target_tx:
         raise HTTPException(status_code=404, detail="Transaction not found")
@@ -1098,7 +1241,7 @@ async def get_transaction_by_id(
     response_model=DashboardSummaryResponse,
     responses={**RESPONSES_503},
     summary="Get Dashboard BI Summary metrics",
-    description="Computes total sales volume, commissions, weighted avg commission rate, and transaction count. In live mode, period filters (data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim) are sent directly to Pipeimob CRM. Local filters (agent, category, financing) are applied locally by the backend. Demo mode is restricted to development and tests."
+    description="Computes total sales volume, commissions, weighted avg commission rate, and transaction count. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. Demo mode is restricted to development and tests."
 )
 async def get_dashboard_summary(
     response: Response,
@@ -1108,15 +1251,22 @@ async def get_dashboard_summary(
     data_fim_ccv: Optional[str] = Query(None),
     data_arquivamento_inicio: Optional[str] = Query(None),
     data_arquivamento_fim: Optional[str] = Query(None),
+    codigo_imovel: Optional[str] = Query(None),
+    codigo_contrato: Optional[str] = Query(None),
+    transacao_unique_id: Optional[str] = Query(None),
     agent: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
-    financing: Optional[bool] = Query(None)
+    financing: Optional[bool] = Query(None),
+    etapa_atual: Optional[str] = Query(None)
 ):
     mode, src, dataset = load_transactions_dataset(
-        data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim
+        data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id
     )
     filtered = get_filtered_transactions(
-        dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim, agent, category, financing
+        dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
+        agent, category, financing, etapa_atual
     )
     
     total_sales = sum(float(tx.get("valor_contrato") or 0.0) for tx in filtered)
@@ -1138,7 +1288,7 @@ async def get_dashboard_summary(
     response_model=DashboardOriginsResponse,
     responses={**RESPONSES_503},
     summary="Get Buyer Origins distribution",
-    description="Groups sales volume and transaction count by lead origin source. In live mode, period filters (data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim) are sent directly to Pipeimob CRM. Local filters (agent, category, financing) are applied locally by the backend. Demo mode is restricted to development and tests."
+    description="Groups sales volume and transaction count by lead origin source. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. Demo mode is restricted to development and tests."
 )
 async def get_dashboard_origins(
     response: Response,
@@ -1148,15 +1298,22 @@ async def get_dashboard_origins(
     data_fim_ccv: Optional[str] = Query(None),
     data_arquivamento_inicio: Optional[str] = Query(None),
     data_arquivamento_fim: Optional[str] = Query(None),
+    codigo_imovel: Optional[str] = Query(None),
+    codigo_contrato: Optional[str] = Query(None),
+    transacao_unique_id: Optional[str] = Query(None),
     agent: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
-    financing: Optional[bool] = Query(None)
+    financing: Optional[bool] = Query(None),
+    etapa_atual: Optional[str] = Query(None)
 ):
     mode, src, dataset = load_transactions_dataset(
-        data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim
+        data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id
     )
     filtered = get_filtered_transactions(
-        dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim, agent, category, financing
+        dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
+        agent, category, financing, etapa_atual
     )
     
     groups = {}
@@ -1184,7 +1341,7 @@ async def get_dashboard_origins(
     response_model=DashboardStagesResponse,
     responses={**RESPONSES_503},
     summary="Get Stages distribution",
-    description="Groups sales volume and transaction count by CRM pipeline stage. In live mode, period filters (data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim) are sent directly to Pipeimob CRM. Local filters (agent, category, financing) are applied locally by the backend. Demo mode is restricted to development and tests."
+    description="Groups sales volume and transaction count by CRM pipeline stage. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. Demo mode is restricted to development and tests."
 )
 async def get_dashboard_stages(
     response: Response,
@@ -1194,15 +1351,22 @@ async def get_dashboard_stages(
     data_fim_ccv: Optional[str] = Query(None),
     data_arquivamento_inicio: Optional[str] = Query(None),
     data_arquivamento_fim: Optional[str] = Query(None),
+    codigo_imovel: Optional[str] = Query(None),
+    codigo_contrato: Optional[str] = Query(None),
+    transacao_unique_id: Optional[str] = Query(None),
     agent: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
-    financing: Optional[bool] = Query(None)
+    financing: Optional[bool] = Query(None),
+    etapa_atual: Optional[str] = Query(None)
 ):
     mode, src, dataset = load_transactions_dataset(
-        data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim
+        data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id
     )
     filtered = get_filtered_transactions(
-        dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim, agent, category, financing
+        dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
+        agent, category, financing, etapa_atual
     )
     
     groups = {}
@@ -1230,7 +1394,7 @@ async def get_dashboard_stages(
     response_model=DashboardManagersResponse,
     responses={**RESPONSES_503},
     summary="Get Manager Leaderboard",
-    description="Computes leaderboard ranking of managers by sales volume, transaction count, and average ticket size. In live mode, period filters (data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim) are sent directly to Pipeimob CRM. Local filters (agent, category, financing) are applied locally by the backend. Demo mode is restricted to development and tests."
+    description="Computes leaderboard ranking of managers by sales volume, transaction count, and average ticket size. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. Demo mode is restricted to development and tests."
 )
 async def get_dashboard_managers(
     response: Response,
@@ -1240,15 +1404,22 @@ async def get_dashboard_managers(
     data_fim_ccv: Optional[str] = Query(None),
     data_arquivamento_inicio: Optional[str] = Query(None),
     data_arquivamento_fim: Optional[str] = Query(None),
+    codigo_imovel: Optional[str] = Query(None),
+    codigo_contrato: Optional[str] = Query(None),
+    transacao_unique_id: Optional[str] = Query(None),
     agent: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
-    financing: Optional[bool] = Query(None)
+    financing: Optional[bool] = Query(None),
+    etapa_atual: Optional[str] = Query(None)
 ):
     mode, src, dataset = load_transactions_dataset(
-        data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim
+        data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id
     )
     filtered = get_filtered_transactions(
-        dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim, agent, category, financing
+        dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
+        agent, category, financing, etapa_atual
     )
     
     groups = {}
@@ -1283,7 +1454,7 @@ async def get_dashboard_managers(
     response_model=DashboardPaymentsResponse,
     responses={**RESPONSES_503},
     summary="Get Payment Methods and Financing distribution",
-    description="Aggregates payment direct vs financing ratio, bank distributions, and detailed signals/methods volumes. In live mode, period filters (data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim) are sent directly to Pipeimob CRM. Local filters (agent, category, financing) are applied locally by the backend. Demo mode is restricted to development and tests."
+    description="Aggregates payment direct vs financing ratio, bank distributions, and detailed signals/methods volumes. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. Demo mode is restricted to development and tests."
 )
 async def get_dashboard_payments(
     response: Response,
@@ -1293,15 +1464,22 @@ async def get_dashboard_payments(
     data_fim_ccv: Optional[str] = Query(None),
     data_arquivamento_inicio: Optional[str] = Query(None),
     data_arquivamento_fim: Optional[str] = Query(None),
+    codigo_imovel: Optional[str] = Query(None),
+    codigo_contrato: Optional[str] = Query(None),
+    transacao_unique_id: Optional[str] = Query(None),
     agent: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
-    financing: Optional[bool] = Query(None)
+    financing: Optional[bool] = Query(None),
+    etapa_atual: Optional[str] = Query(None)
 ):
     mode, src, dataset = load_transactions_dataset(
-        data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim
+        data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id
     )
     filtered = get_filtered_transactions(
-        dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim, agent, category, financing
+        dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
+        agent, category, financing, etapa_atual
     )
     
     financed_count = 0
@@ -1359,7 +1537,7 @@ async def get_dashboard_payments(
     response_model=DashboardCommissionsResponse,
     responses={**RESPONSES_503},
     summary="Get Commission detailed metrics",
-    description="Returns aggregate commission values and individual contract commission details. In live mode, period filters (data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim) are sent directly to Pipeimob CRM. Local filters (agent, category, financing) are applied locally by the backend. Demo mode is restricted to development and tests."
+    description="Returns aggregate commission values and individual contract commission details. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. Demo mode is restricted to development and tests."
 )
 async def get_dashboard_commissions(
     response: Response,
@@ -1369,15 +1547,22 @@ async def get_dashboard_commissions(
     data_fim_ccv: Optional[str] = Query(None),
     data_arquivamento_inicio: Optional[str] = Query(None),
     data_arquivamento_fim: Optional[str] = Query(None),
+    codigo_imovel: Optional[str] = Query(None),
+    codigo_contrato: Optional[str] = Query(None),
+    transacao_unique_id: Optional[str] = Query(None),
     agent: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
-    financing: Optional[bool] = Query(None)
+    financing: Optional[bool] = Query(None),
+    etapa_atual: Optional[str] = Query(None)
 ):
     mode, src, dataset = load_transactions_dataset(
-        data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim
+        data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id
     )
     filtered = get_filtered_transactions(
-        dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim, agent, category, financing
+        dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
+        agent, category, financing, etapa_atual
     )
     
     total_comm = 0.0
@@ -1424,7 +1609,7 @@ MONTHS_PT = {
     response_model=DashboardTimelineResponse,
     responses={**RESPONSES_503},
     summary="Get Monthly Sales Timeline",
-    description="Groups contract sales volume and count chronologically by month. In live mode, period filters (data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim) are sent directly to Pipeimob CRM. Local filters (agent, category, financing) are applied locally by the backend. Demo mode is restricted to development and tests."
+    description="Groups contract sales volume and count chronologically by month. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. Demo mode is restricted to development and tests."
 )
 async def get_dashboard_timeline(
     response: Response,
@@ -1434,15 +1619,22 @@ async def get_dashboard_timeline(
     data_fim_ccv: Optional[str] = Query(None),
     data_arquivamento_inicio: Optional[str] = Query(None),
     data_arquivamento_fim: Optional[str] = Query(None),
+    codigo_imovel: Optional[str] = Query(None),
+    codigo_contrato: Optional[str] = Query(None),
+    transacao_unique_id: Optional[str] = Query(None),
     agent: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
-    financing: Optional[bool] = Query(None)
+    financing: Optional[bool] = Query(None),
+    etapa_atual: Optional[str] = Query(None)
 ):
     mode, src, dataset = load_transactions_dataset(
-        data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim
+        data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id
     )
     filtered = get_filtered_transactions(
-        dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim, agent, category, financing
+        dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
+        agent, category, financing, etapa_atual
     )
     
     timeline_groups = {}

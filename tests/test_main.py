@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 from datetime import datetime, timezone
 from fastapi.testclient import TestClient
 
@@ -60,7 +61,7 @@ def test_get_catalog_returns_transactions_resource():
     assert resource["name"] == "Transações"
     assert resource["backend_endpoint"] == "/api/transactions"
     assert resource["pipeimob_endpoint"] == "/api/v2/negocios/transacoes"
-    assert resource["status"] == "implemented_demo_pending_live_validation"
+    assert resource["status"] == "implemented_pending_live_validation"
     assert resource["implemented"] is True
     assert resource["validated"] is False
     assert resource["primary_key"] == "transacao_unique_id_pipeimob"
@@ -270,7 +271,11 @@ def test_six_filters_appear_in_catalog():
         "data_inicio_ccv",
         "data_fim_ccv",
         "data_arquivamento_inicio",
-        "data_arquivamento_fim"
+        "data_arquivamento_fim",
+        "codigo_imovel",
+        "codigo_contrato",
+        "transacao_unique_id",
+        "pagina"
     ]
     for filter_name in expected_filters:
         assert filter_name in resource["supported_filters"]
@@ -281,32 +286,37 @@ def test_six_filters_appear_in_catalog():
         "data_inicio_ccv",
         "data_fim_ccv",
         "data_arquivamento_inicio",
-        "data_arquivamento_fim"
+        "data_arquivamento_fim",
+        "codigo_imovel",
+        "codigo_contrato",
+        "transacao_unique_id",
+        "pagina"
     ]
     assert resource["filters_local_backend"] == [
         "agent",
         "category",
-        "financing"
+        "financing",
+        "etapa_atual"
     ]
 
 def test_catalog_status_states():
     # 1. Demo Mode
     os.environ["PIPEIMOB_DATA_MODE"] = "demo"
     response = client.get("/api/catalog")
-    assert response.json()["resources"][0]["status"] == "implemented_demo_pending_live_validation"
+    assert response.json()["resources"][0]["status"] == "implemented_pending_live_validation"
     
     # 2. Live Mode (no credentials)
     os.environ["PIPEIMOB_DATA_MODE"] = "live"
     os.environ.pop("PIPEIMOB_API_KEY", None)
     os.environ.pop("PIPEIMOB_SECRET_KEY", None)
     response = client.get("/api/catalog")
-    assert response.json()["resources"][0]["status"] == "implemented_pending_live_configuration"
+    assert response.json()["resources"][0]["status"] == "implemented_pending_live_validation"
     
     # 3. Unconfigured Mode (production)
     os.environ["APP_ENV"] = "production"
     os.environ.pop("PIPEIMOB_DATA_MODE", None)
     response = client.get("/api/catalog")
-    assert response.json()["resources"][0]["status"] == "implemented_pending_live_configuration"
+    assert response.json()["resources"][0]["status"] == "implemented_pending_live_validation"
     
     # 4. Live Mode (with credentials configured but validation pending)
     os.environ["PIPEIMOB_DATA_MODE"] = "live"
@@ -315,12 +325,15 @@ def test_catalog_status_states():
     response = client.get("/api/catalog")
     assert response.json()["resources"][0]["status"] == "implemented_pending_live_validation"
 
+from unittest.mock import patch, MagicMock
+
 def test_live_mode_without_credentials_returns_error():
     os.environ["PIPEIMOB_DATA_MODE"] = "live"
     os.environ.pop("PIPEIMOB_API_KEY", None)
     os.environ.pop("PIPEIMOB_SECRET_KEY", None)
     
-    response = client.get("/api/transactions")
+    # Must supply a direct filter so it doesn't fail on filter check first
+    response = client.get("/api/transactions?data_inicio_criacao=2026-01-01")
     assert response.status_code == 503
     assert "credentials are not configured" in response.json()["detail"]
 
@@ -333,7 +346,7 @@ def test_headers_credentials_are_ignored():
         "X-API-Key": "client_supplied_key",
         "X-Secret-Key": "client_supplied_secret"
     }
-    response = client.get("/api/transactions", headers=headers)
+    response = client.get("/api/transactions?data_inicio_criacao=2026-01-01", headers=headers)
     assert response.status_code == 503
     assert "credentials are not configured" in response.json()["detail"]
 
@@ -342,9 +355,233 @@ def test_live_mode_failure_does_not_return_mock():
     os.environ["PIPEIMOB_API_KEY"] = "fake_key"
     os.environ["PIPEIMOB_SECRET_KEY"] = "fake_secret"
     
-    response = client.get("/api/transactions")
+    response = client.get("/api/transactions?data_inicio_criacao=2026-01-01")
     assert response.status_code == 503
     assert "Failed to authenticate" in response.json()["detail"] or "Authentication payload" in response.json()["detail"]
+
+def test_live_mode_missing_direct_filter_returns_400():
+    os.environ["PIPEIMOB_DATA_MODE"] = "live"
+    os.environ["PIPEIMOB_API_KEY"] = "fake_key"
+    os.environ["PIPEIMOB_SECRET_KEY"] = "fake_secret"
+    
+    response = client.get("/api/transactions")
+    assert response.status_code == 400
+    assert "At least one direct filter parameter is required" in response.json()["detail"]
+
+@patch("urllib.request.urlopen")
+def test_jwt_auth_extraction_and_caching(mock_urlopen):
+    import main
+    main.token_cache.access_token = None
+    main.token_cache.expires_at = None
+
+    # Mock JWT authentication response
+    mock_auth_response = MagicMock()
+    mock_auth_response.__enter__.return_value = mock_auth_response
+    mock_auth_response.read.return_value = json.dumps({
+        "success": True,
+        "status_code": 200,
+        "message": "Autenticação realizada com sucesso",
+        "data": {
+            "access_token": "mocked_jwt_token_12345",
+            "token_type": "Bearer",
+            "expires_in": 3600
+        }
+    }).encode("utf-8")
+    
+    # Mock transactions list response with meta.pagination
+    mock_txs_response = MagicMock()
+    mock_txs_response.__enter__.return_value = mock_txs_response
+    mock_txs_response.read.return_value = json.dumps({
+        "success": True,
+        "data": {
+            "transacoes": [
+                {
+                    "transacao_unique_id_pipeimob": "tx_mock_1",
+                    "codigo_contrato": "CONTRATO-MOCK-1",
+                    "total_comissao": 10000.0,
+                    "comissionados": [
+                        {
+                            "comissionado_imobiliária": True,
+                            "comissionado_valor": 6000.0
+                        }
+                    ]
+                }
+            ]
+        },
+        "meta": {
+            "pagination": {
+                "total_pages": 1
+            }
+        }
+    }).encode("utf-8")
+    
+    # urlopen returns auth first, then txs
+    mock_urlopen.side_effect = [mock_auth_response, mock_txs_response]
+    
+    os.environ["PIPEIMOB_DATA_MODE"] = "live"
+    os.environ["PIPEIMOB_API_KEY"] = "fake_key"
+    os.environ["PIPEIMOB_SECRET_KEY"] = "fake_secret"
+    
+    response = client.get("/api/transactions?data_inicio_criacao=2026-01-01")
+    assert response.status_code == 200
+    res_data = response.json()
+    assert res_data["data_mode"] == "live"
+    assert len(res_data["data"]["transactions"]) == 1
+    assert res_data["data"]["transactions"][0]["transacao_unique_id_pipeimob"] == "tx_mock_1"
+    
+    # Verify comissao_imobiliaria calculation
+    assert res_data["data"]["transactions"][0]["comissao_imobiliaria"] == 6000.0
+
+@patch("urllib.request.urlopen")
+def test_401_retry_once_and_prevent_loop(mock_urlopen):
+    import main
+    main.token_cache.access_token = None
+    main.token_cache.expires_at = None
+
+    # Mock auth response (returns token)
+    mock_auth_response = MagicMock()
+    mock_auth_response.__enter__.return_value = mock_auth_response
+    mock_auth_response.read.return_value = json.dumps({
+        "success": True,
+        "data": {
+            "access_token": "mocked_jwt_token_401",
+            "token_type": "Bearer",
+            "expires_in": 3600
+        }
+    }).encode("utf-8")
+    
+    # Mock HTTP 401 error for transactions call
+    from urllib.error import HTTPError
+    mock_401_err = HTTPError("http://api.pipeimob.com.br/api/v2/negocios/transacoes", 401, "Unauthorized", {}, None)
+    
+    # Mock final transactions success response with meta.pagination
+    mock_txs_response = MagicMock()
+    mock_txs_response.__enter__.return_value = mock_txs_response
+    mock_txs_response.read.return_value = json.dumps({
+        "success": True,
+        "data": {
+            "transacoes": []
+        },
+        "meta": {
+            "pagination": {
+                "total_pages": 1
+            }
+        }
+    }).encode("utf-8")
+    
+    mock_urlopen.side_effect = [mock_auth_response, mock_401_err, mock_auth_response, mock_txs_response]
+    
+    os.environ["PIPEIMOB_DATA_MODE"] = "live"
+    os.environ["PIPEIMOB_API_KEY"] = "fake_key"
+    os.environ["PIPEIMOB_SECRET_KEY"] = "fake_secret"
+    
+    response = client.get("/api/transactions?data_inicio_criacao=2026-01-01")
+    assert response.status_code == 200, response.json()
+    assert response.json()["data_mode"] == "live"
+
+@patch("urllib.request.urlopen")
+def test_401_retry_once_and_prevent_loop(mock_urlopen):
+    import main
+    main.token_cache.access_token = None
+    main.token_cache.expires_at = None
+
+    # Mock auth response (returns token)
+    mock_auth_response = MagicMock()
+    mock_auth_response.__enter__.return_value = mock_auth_response
+    mock_auth_response.read.return_value = json.dumps({
+        "success": True,
+        "data": {
+            "access_token": "mocked_jwt_token_401",
+            "token_type": "Bearer",
+            "expires_in": 3600
+        }
+    }).encode("utf-8")
+    
+    # Mock HTTP 401 error for transactions call
+    from urllib.error import HTTPError
+    mock_401_err = HTTPError("http://api.pipeimob.com.br/api/v2/negocios/transacoes", 401, "Unauthorized", {}, None)
+    
+    # Mock final transactions success response with meta.pagination
+    mock_txs_response = MagicMock()
+    mock_txs_response.__enter__.return_value = mock_txs_response
+    mock_txs_response.read.return_value = json.dumps({
+        "success": True,
+        "data": {
+            "transacoes": [
+                {
+                    "transacao_unique_id_pipeimob": "tx_mock_retry_1",
+                    "codigo_contrato": "CONTRATO-MOCK-RETRY-1",
+                    "total_comissao": 10000.0,
+                    "comissionados": []
+                }
+            ]
+        },
+        "meta": {
+            "pagination": {
+                "total_pages": 1
+            }
+        }
+    }).encode("utf-8")
+    
+    mock_urlopen.side_effect = [mock_auth_response, mock_401_err, mock_auth_response, mock_txs_response]
+    
+    os.environ["PIPEIMOB_DATA_MODE"] = "live"
+    os.environ["PIPEIMOB_API_KEY"] = "fake_key"
+    os.environ["PIPEIMOB_SECRET_KEY"] = "fake_secret"
+    
+    response = client.get("/api/transactions?data_inicio_criacao=2026-01-01")
+    assert response.status_code == 200, response.json()
+    assert response.json()["data_mode"] == "live"
+
+@patch("urllib.request.urlopen")
+def test_data_meta_pagination_fallback(mock_urlopen):
+    import main
+    main.token_cache.access_token = None
+    main.token_cache.expires_at = None
+
+    # Mock auth response
+    mock_auth_response = MagicMock()
+    mock_auth_response.__enter__.return_value = mock_auth_response
+    mock_auth_response.read.return_value = json.dumps({
+        "success": True,
+        "data": {
+            "access_token": "mocked_jwt_token_pagination",
+            "token_type": "Bearer",
+            "expires_in": 3600
+        }
+    }).encode("utf-8")
+    
+    # Mock transactions response with data.meta.pagination (nested pagination)
+    mock_txs_response = MagicMock()
+    mock_txs_response.__enter__.return_value = mock_txs_response
+    mock_txs_response.read.return_value = json.dumps({
+        "success": True,
+        "data": {
+            "transacoes": [
+                {
+                    "transacao_unique_id_pipeimob": "tx_mock_nested_1",
+                    "codigo_contrato": "CONTRATO-MOCK-NESTED-1",
+                    "total_comissao": 10000.0,
+                    "comissionados": []
+                }
+            ],
+            "meta": {
+                "pagination": {
+                    "total_pages": 1
+                }
+            }
+        }
+    }).encode("utf-8")
+    
+    mock_urlopen.side_effect = [mock_auth_response, mock_txs_response]
+    
+    os.environ["PIPEIMOB_DATA_MODE"] = "live"
+    os.environ["PIPEIMOB_API_KEY"] = "fake_key"
+    os.environ["PIPEIMOB_SECRET_KEY"] = "fake_secret"
+    
+    response = client.get("/api/transactions?data_inicio_criacao=2026-01-01")
+    assert response.status_code == 200, response.json()
+    assert response.json()["data_mode"] == "live"
 
 def test_openapi_includes_new_endpoints_and_schemas():
     response = client.get("/openapi.json")
@@ -359,6 +596,17 @@ def test_openapi_includes_new_endpoints_and_schemas():
     param_names = [p["name"].lower() for p in tx_get_params]
     assert "x-api-key" not in param_names
     assert "x-secret-key" not in param_names
+    
+    # Verify new filters appear in Swagger parameters list
+    assert "codigo_imovel" in param_names
+    assert "codigo_contrato" in param_names
+    assert "transacao_unique_id" in param_names
+    assert "etapa_atual" in param_names
+    
+    # Check limit-related parameters are absent
+    assert "limit" not in param_names
+    assert "page_limit" not in param_names
+    assert "page_size" not in param_names
     
     schemas = openapi_data["components"]["schemas"]
     assert "TransactionsListResponse" in schemas
@@ -393,7 +641,7 @@ def test_openapi_includes_new_endpoints_and_schemas():
     # 503 errors do not leak secrets
     os.environ["APP_ENV"] = "production"
     os.environ.pop("PIPEIMOB_DATA_MODE", None)
-    err_res = client.get("/api/transactions")
+    err_res = client.get("/api/transactions?data_inicio_criacao=2026-01-01")
     assert err_res.status_code == 503
     err_body = err_res.json()
     for val in err_body.values():
