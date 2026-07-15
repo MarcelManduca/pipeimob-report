@@ -148,6 +148,14 @@ def test_get_transactions_with_filters():
     payload = response.json()["data"]
     for tx in payload["transactions"]:
         assert "Corretor Alfa" in tx["agente_gestor"]
+        
+    # Test period filter (data_inicio_criacao)
+    response_date = client.get("/api/transactions?data_inicio_criacao=2025-01-01")
+    assert response_date.status_code == 200
+    payload_date = response_date.json()["data"]
+    for tx in payload_date["transactions"]:
+        tx_date = tx.get("data_inicio_venda") or tx.get("data_contrato") or ""
+        assert tx_date >= "2025-01-01"
 
 def test_get_transaction_by_id():
     os.environ["PIPEIMOB_DATA_MODE"] = "demo"

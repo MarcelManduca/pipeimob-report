@@ -96,11 +96,19 @@ O backend possui suporte a **modo dual**:
 
 ### Filtros Comuns (Query Parameters)
 Todas as rotas de listagem e BI suportam os seguintes filtros opcionais:
-- `start_date`: Data mínima de início da venda (`YYYY-MM-DD`).
-- `end_date`: Data máxima de encerramento (`YYYY-MM-DD`).
-- `agent`: Filtro case-insensitive pelo nome do corretor (`agente_gestor`).
-- `category`: Categoria do imóvel (`categoria_crm`).
-- `financing`: Boleano (`true`/`false`) para filtrar se houve financiamento bancário.
+
+* **Filtros de Período Oficiais (Enviados diretamente ao Pipeimob em Live mode):**
+  - `data_inicio_criacao`: Data de criação inicial (`YYYY-MM-DD`).
+  - `data_fim_criacao`: Data de criação final (`YYYY-MM-DD`).
+  - `data_inicio_ccv`: Data de contrato inicial (`YYYY-MM-DD`).
+  - `data_fim_ccv`: Data de contrato final (`YYYY-MM-DD`).
+  - `data_arquivamento_inicio`: Data de arquivamento inicial (`YYYY-MM-DD`).
+  - `data_arquivamento_fim`: Data de arquivamento final (`YYYY-MM-DD`).
+
+* **Filtros Locais (Aplicados localmente pelo backend após o carregamento):**
+  - `agent`: Filtro case-insensitive pelo nome do corretor (`agente_gestor`).
+  - `category`: Filtro pela categoria do imóvel (`categoria_crm`).
+  - `financing`: Boleano (`true`/`false`) para filtrar se houve financiamento bancário.
 
 ### Relação de Endpoints
 

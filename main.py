@@ -69,12 +69,32 @@ def get_auth_token(api_key: str, api_secret: str) -> Optional[str]:
     return None
 
 # Live transaction page fetcher (concurrent thread execution)
-def fetch_all_transactions_live(api_key: str, api_secret: str, start_date: str = "2024-01-01") -> list:
+def fetch_all_transactions_live(
+    api_key: str, 
+    api_secret: str, 
+    data_inicio_criacao: Optional[str] = None,
+    data_fim_criacao: Optional[str] = None,
+    data_inicio_ccv: Optional[str] = None,
+    data_fim_ccv: Optional[str] = None,
+    data_arquivamento_inicio: Optional[str] = None,
+    data_arquivamento_fim: Optional[str] = None
+) -> list:
     token = get_auth_token(api_key, api_secret)
     if not token:
         return []
         
-    url_p1 = f"{BASE_URL}/negocios/transacoes?data_inicio_criacao={start_date}&pagina=1"
+    query_parts = []
+    if data_inicio_criacao: query_parts.append(f"data_inicio_criacao={data_inicio_criacao}")
+    if data_fim_criacao: query_parts.append(f"data_fim_criacao={data_fim_criacao}")
+    if data_inicio_ccv: query_parts.append(f"data_inicio_ccv={data_inicio_ccv}")
+    if data_fim_ccv: query_parts.append(f"data_fim_ccv={data_fim_ccv}")
+    if data_arquivamento_inicio: query_parts.append(f"data_arquivamento_inicio={data_arquivamento_inicio}")
+    if data_arquivamento_fim: query_parts.append(f"data_arquivamento_fim={data_arquivamento_fim}")
+    
+    query_str = "&".join(query_parts)
+    prefix = f"&{query_str}" if query_str else ""
+    
+    url_p1 = f"{BASE_URL}/negocios/transacoes?pagina=1{prefix}"
     req_p1 = urllib.request.Request(
         url_p1,
         headers={'Authorization': f'Bearer {token}', 'User-Agent': 'Mozilla/5.0'}
@@ -99,7 +119,7 @@ def fetch_all_transactions_live(api_key: str, api_secret: str, start_date: str =
         return []
 
     def fetch_page_worker(p):
-        url = f"{BASE_URL}/negocios/transacoes?data_inicio_criacao={start_date}&pagina={p}"
+        url = f"{BASE_URL}/negocios/transacoes?pagina={p}{prefix}"
         req = urllib.request.Request(
             url,
             headers={'Authorization': f'Bearer {token}', 'User-Agent': 'Mozilla/5.0'}
@@ -150,7 +170,12 @@ def get_current_data_mode_and_connection() -> tuple:
 
 # Master dataset loader helper (with strict mode verification)
 def load_transactions_dataset(
-    start_date: Optional[str] = None
+    data_inicio_criacao: Optional[str] = None,
+    data_fim_criacao: Optional[str] = None,
+    data_inicio_ccv: Optional[str] = None,
+    data_fim_ccv: Optional[str] = None,
+    data_arquivamento_inicio: Optional[str] = None,
+    data_arquivamento_fim: Optional[str] = None
 ) -> tuple:
     data_mode, conn_status = get_current_data_mode_and_connection()
     
@@ -173,8 +198,16 @@ def load_transactions_dataset(
     api_key = os.getenv("PIPEIMOB_API_KEY").strip()
     api_secret = os.getenv("PIPEIMOB_SECRET_KEY").strip()
         
-    s_date = start_date or "2024-01-01"
-    live_txs = fetch_all_transactions_live(api_key, api_secret, s_date)
+    live_txs = fetch_all_transactions_live(
+        api_key=api_key,
+        api_secret=api_secret,
+        data_inicio_criacao=data_inicio_criacao,
+        data_fim_criacao=data_fim_criacao,
+        data_inicio_ccv=data_inicio_ccv,
+        data_fim_ccv=data_fim_ccv,
+        data_arquivamento_inicio=data_arquivamento_inicio,
+        data_arquivamento_fim=data_arquivamento_fim
+    )
     
     if not live_txs:
         raise HTTPException(
@@ -187,37 +220,49 @@ def load_transactions_dataset(
 # Apply filters locally on loaded dataset
 def get_filtered_transactions(
     transactions: list,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
+    data_mode: str,
+    data_inicio_criacao: Optional[str] = None,
+    data_fim_criacao: Optional[str] = None,
+    data_inicio_ccv: Optional[str] = None,
+    data_fim_ccv: Optional[str] = None,
+    data_arquivamento_inicio: Optional[str] = None,
+    data_arquivamento_fim: Optional[str] = None,
     agent: Optional[str] = None,
     category: Optional[str] = None,
     financing: Optional[bool] = None,
 ) -> list:
     filtered = []
     for tx in transactions:
-        tx_date_str = tx.get("data_inicio_venda") or tx.get("data_contrato") or ""
-        
-        # Local date range filters
-        if start_date and tx_date_str:
-            if tx_date_str < start_date:
+        # In demo mode, apply period filters locally for fully functional mock visualization
+        if data_mode == "demo":
+            tx_date_str = tx.get("data_inicio_venda") or tx.get("data_contrato") or ""
+            if data_inicio_criacao and tx_date_str and tx_date_str < data_inicio_criacao:
                 continue
-        if end_date and tx_date_str:
-            if tx_date_str > end_date:
+            if data_fim_criacao and tx_date_str and tx_date_str > data_fim_criacao:
                 continue
                 
-        # Local agent filter
+            tx_ccv = tx.get("data_contrato") or ""
+            if data_inicio_ccv and tx_ccv and tx_ccv < data_inicio_ccv:
+                continue
+            if data_fim_ccv and tx_ccv and tx_ccv > data_fim_ccv:
+                continue
+                
+            if tx.get("etapa_atual") == "Arquivado":
+                tx_archived = tx.get("data_contrato") or ""
+                if data_arquivamento_inicio and tx_archived and tx_archived < data_arquivamento_inicio:
+                    continue
+                if data_arquivamento_fim and tx_archived and tx_archived > data_arquivamento_fim:
+                    continue
+                    
+        # Local backend-only filters (always applied)
         if agent:
             tx_agent = tx.get("agente_gestor") or ""
             if agent.lower() not in tx_agent.lower():
                 continue
-                
-        # Local category filter
         if category:
             tx_cat = tx.get("categoria_crm") or ""
             if category.lower() not in tx_cat.lower():
                 continue
-                
-        # Local financing filter
         if financing is not None:
             tx_fin = tx.get("financiamento")
             if tx_fin != financing:
@@ -498,14 +543,22 @@ async def get_catalog():
 )
 async def get_transactions(
     response: Response,
-    start_date: Optional[str] = Query(None, description="Start date filter sent to Pipeimob (YYYY-MM-DD)"),
-    end_date: Optional[str] = Query(None, description="End date filter applied locally (YYYY-MM-DD)"),
-    agent: Optional[str] = Query(None, description="Agent/Manager name filter applied locally"),
-    category: Optional[str] = Query(None, description="Property category filter applied locally"),
-    financing: Optional[bool] = Query(None, description="Filter by financing true/false applied locally")
+    data_inicio_criacao: Optional[str] = Query(None),
+    data_fim_criacao: Optional[str] = Query(None),
+    data_inicio_ccv: Optional[str] = Query(None),
+    data_fim_ccv: Optional[str] = Query(None),
+    data_arquivamento_inicio: Optional[str] = Query(None),
+    data_arquivamento_fim: Optional[str] = Query(None),
+    agent: Optional[str] = Query(None),
+    category: Optional[str] = Query(None),
+    financing: Optional[bool] = Query(None)
 ):
-    mode, src, dataset = load_transactions_dataset(start_date)
-    filtered = get_filtered_transactions(dataset, start_date, end_date, agent, category, financing)
+    mode, src, dataset = load_transactions_dataset(
+        data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim
+    )
+    filtered = get_filtered_transactions(
+        dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim, agent, category, financing
+    )
     
     response.headers["X-Data-Mode"] = mode
     meta = get_metadata_wrapper(mode, src)
@@ -546,14 +599,22 @@ async def get_transaction_by_id(
 )
 async def get_dashboard_summary(
     response: Response,
-    start_date: Optional[str] = Query(None),
-    end_date: Optional[str] = Query(None),
+    data_inicio_criacao: Optional[str] = Query(None),
+    data_fim_criacao: Optional[str] = Query(None),
+    data_inicio_ccv: Optional[str] = Query(None),
+    data_fim_ccv: Optional[str] = Query(None),
+    data_arquivamento_inicio: Optional[str] = Query(None),
+    data_arquivamento_fim: Optional[str] = Query(None),
     agent: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
     financing: Optional[bool] = Query(None)
 ):
-    mode, src, dataset = load_transactions_dataset(start_date)
-    filtered = get_filtered_transactions(dataset, start_date, end_date, agent, category, financing)
+    mode, src, dataset = load_transactions_dataset(
+        data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim
+    )
+    filtered = get_filtered_transactions(
+        dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim, agent, category, financing
+    )
     
     total_sales = sum(float(tx.get("valor_contrato") or 0.0) for tx in filtered)
     total_commissions = sum(float(tx.get("total_comissao") or 0.0) for tx in filtered)
@@ -577,14 +638,22 @@ async def get_dashboard_summary(
 )
 async def get_dashboard_origins(
     response: Response,
-    start_date: Optional[str] = Query(None),
-    end_date: Optional[str] = Query(None),
+    data_inicio_criacao: Optional[str] = Query(None),
+    data_fim_criacao: Optional[str] = Query(None),
+    data_inicio_ccv: Optional[str] = Query(None),
+    data_fim_ccv: Optional[str] = Query(None),
+    data_arquivamento_inicio: Optional[str] = Query(None),
+    data_arquivamento_fim: Optional[str] = Query(None),
     agent: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
     financing: Optional[bool] = Query(None)
 ):
-    mode, src, dataset = load_transactions_dataset(start_date)
-    filtered = get_filtered_transactions(dataset, start_date, end_date, agent, category, financing)
+    mode, src, dataset = load_transactions_dataset(
+        data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim
+    )
+    filtered = get_filtered_transactions(
+        dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim, agent, category, financing
+    )
     
     groups = {}
     for tx in filtered:
@@ -614,14 +683,22 @@ async def get_dashboard_origins(
 )
 async def get_dashboard_stages(
     response: Response,
-    start_date: Optional[str] = Query(None),
-    end_date: Optional[str] = Query(None),
+    data_inicio_criacao: Optional[str] = Query(None),
+    data_fim_criacao: Optional[str] = Query(None),
+    data_inicio_ccv: Optional[str] = Query(None),
+    data_fim_ccv: Optional[str] = Query(None),
+    data_arquivamento_inicio: Optional[str] = Query(None),
+    data_arquivamento_fim: Optional[str] = Query(None),
     agent: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
     financing: Optional[bool] = Query(None)
 ):
-    mode, src, dataset = load_transactions_dataset(start_date)
-    filtered = get_filtered_transactions(dataset, start_date, end_date, agent, category, financing)
+    mode, src, dataset = load_transactions_dataset(
+        data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim
+    )
+    filtered = get_filtered_transactions(
+        dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim, agent, category, financing
+    )
     
     groups = {}
     for tx in filtered:
@@ -651,14 +728,22 @@ async def get_dashboard_stages(
 )
 async def get_dashboard_managers(
     response: Response,
-    start_date: Optional[str] = Query(None),
-    end_date: Optional[str] = Query(None),
+    data_inicio_criacao: Optional[str] = Query(None),
+    data_fim_criacao: Optional[str] = Query(None),
+    data_inicio_ccv: Optional[str] = Query(None),
+    data_fim_ccv: Optional[str] = Query(None),
+    data_arquivamento_inicio: Optional[str] = Query(None),
+    data_arquivamento_fim: Optional[str] = Query(None),
     agent: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
     financing: Optional[bool] = Query(None)
 ):
-    mode, src, dataset = load_transactions_dataset(start_date)
-    filtered = get_filtered_transactions(dataset, start_date, end_date, agent, category, financing)
+    mode, src, dataset = load_transactions_dataset(
+        data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim
+    )
+    filtered = get_filtered_transactions(
+        dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim, agent, category, financing
+    )
     
     groups = {}
     for tx in filtered:
@@ -695,14 +780,22 @@ async def get_dashboard_managers(
 )
 async def get_dashboard_payments(
     response: Response,
-    start_date: Optional[str] = Query(None),
-    end_date: Optional[str] = Query(None),
+    data_inicio_criacao: Optional[str] = Query(None),
+    data_fim_criacao: Optional[str] = Query(None),
+    data_inicio_ccv: Optional[str] = Query(None),
+    data_fim_ccv: Optional[str] = Query(None),
+    data_arquivamento_inicio: Optional[str] = Query(None),
+    data_arquivamento_fim: Optional[str] = Query(None),
     agent: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
     financing: Optional[bool] = Query(None)
 ):
-    mode, src, dataset = load_transactions_dataset(start_date)
-    filtered = get_filtered_transactions(dataset, start_date, end_date, agent, category, financing)
+    mode, src, dataset = load_transactions_dataset(
+        data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim
+    )
+    filtered = get_filtered_transactions(
+        dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim, agent, category, financing
+    )
     
     financed_count = 0
     cash_count = 0
@@ -762,14 +855,22 @@ async def get_dashboard_payments(
 )
 async def get_dashboard_commissions(
     response: Response,
-    start_date: Optional[str] = Query(None),
-    end_date: Optional[str] = Query(None),
+    data_inicio_criacao: Optional[str] = Query(None),
+    data_fim_criacao: Optional[str] = Query(None),
+    data_inicio_ccv: Optional[str] = Query(None),
+    data_fim_ccv: Optional[str] = Query(None),
+    data_arquivamento_inicio: Optional[str] = Query(None),
+    data_arquivamento_fim: Optional[str] = Query(None),
     agent: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
     financing: Optional[bool] = Query(None)
 ):
-    mode, src, dataset = load_transactions_dataset(start_date)
-    filtered = get_filtered_transactions(dataset, start_date, end_date, agent, category, financing)
+    mode, src, dataset = load_transactions_dataset(
+        data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim
+    )
+    filtered = get_filtered_transactions(
+        dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim, agent, category, financing
+    )
     
     total_comm = 0.0
     total_sales = 0.0
@@ -818,14 +919,22 @@ MONTHS_PT = {
 )
 async def get_dashboard_timeline(
     response: Response,
-    start_date: Optional[str] = Query(None),
-    end_date: Optional[str] = Query(None),
+    data_inicio_criacao: Optional[str] = Query(None),
+    data_fim_criacao: Optional[str] = Query(None),
+    data_inicio_ccv: Optional[str] = Query(None),
+    data_fim_ccv: Optional[str] = Query(None),
+    data_arquivamento_inicio: Optional[str] = Query(None),
+    data_arquivamento_fim: Optional[str] = Query(None),
     agent: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
     financing: Optional[bool] = Query(None)
 ):
-    mode, src, dataset = load_transactions_dataset(start_date)
-    filtered = get_filtered_transactions(dataset, start_date, end_date, agent, category, financing)
+    mode, src, dataset = load_transactions_dataset(
+        data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim
+    )
+    filtered = get_filtered_transactions(
+        dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim, agent, category, financing
+    )
     
     timeline_groups = {}
     for tx in filtered:
