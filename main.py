@@ -125,39 +125,53 @@ def fetch_all_transactions_live(api_key: str, api_secret: str, start_date: str =
                 
     return all_transactions
 
+def get_current_data_mode_and_connection() -> tuple:
+    data_mode_env = os.getenv("PIPEIMOB_DATA_MODE")
+    app_env = os.getenv("APP_ENV", "production").lower()
+    
+    api_key = os.getenv("PIPEIMOB_API_KEY")
+    api_secret = os.getenv("PIPEIMOB_SECRET_KEY")
+    has_credentials = bool(api_key and api_secret)
+    
+    if data_mode_env == "demo":
+        return "demo", "not_tested"
+    elif data_mode_env == "live":
+        if has_credentials:
+            return "live", "pending"
+        else:
+            return "live", "missing_credentials"
+    elif not data_mode_env:
+        if app_env == "development":
+            return "demo", "not_tested"
+        else:
+            return "unconfigured", "pending_configuration"
+    else:
+        return "unconfigured", "pending_configuration"
+
 # Master dataset loader helper (with strict mode verification)
 def load_transactions_dataset(
     start_date: Optional[str] = None
 ) -> tuple:
-    # 1. Determine data mode
-    data_mode_env = os.getenv("PIPEIMOB_DATA_MODE")
-    if data_mode_env in ["demo", "live"]:
-        data_mode = data_mode_env
-    else:
-        # Fallback based on APP_ENV
-        if app_env == "development":
-            data_mode = "demo"
-        else:
-            data_mode = "live"
-            
-    # 2. Process based on selected mode
+    data_mode, conn_status = get_current_data_mode_and_connection()
+    
+    if data_mode == "unconfigured":
+        raise HTTPException(
+            status_code=503,
+            detail="Configuration pending. Please set PIPEIMOB_DATA_MODE environment variable."
+        )
+        
     if data_mode == "demo":
         return "demo", "synthetic_mock", MOCK_TRANSACTIONS
         
     # Live mode: require credentials. Never fallback silently to mock.
-    api_key = os.getenv("PIPEIMOB_API_KEY")
-    api_secret = os.getenv("PIPEIMOB_SECRET_KEY")
-    
-    if api_key:
-        api_key = api_key.strip()
-    if api_secret:
-        api_secret = api_secret.strip()
-        
-    if not api_key or not api_secret:
+    if conn_status == "missing_credentials":
         raise HTTPException(
             status_code=400, 
             detail="Configuration pending. Valid Pipeimob API credentials are required in Live mode."
         )
+        
+    api_key = os.getenv("PIPEIMOB_API_KEY").strip()
+    api_secret = os.getenv("PIPEIMOB_SECRET_KEY").strip()
         
     s_date = start_date or "2024-01-01"
     live_txs = fetch_all_transactions_live(api_key, api_secret, s_date)
@@ -227,13 +241,15 @@ class ResourceCatalog(BaseModel):
     name: str = Field(..., description="Resource name", json_schema_extra={"example": "Transações"})
     backend_endpoint: str = Field(..., description="Local backend endpoint for the resource", json_schema_extra={"example": "/api/transactions"})
     pipeimob_endpoint: Optional[str] = Field(None, description="Confirmed Pipeimob endpoint (null if unconfirmed or divergent)", json_schema_extra={"example": None})
-    status: str = Field(..., description="Status of the resource integration", json_schema_extra={"example": "implemented_demo_pending_live_validation"})
+    status: str = Field(..., description="Status of the resource integration", json_schema_extra={"example": "implemented_pending_live_configuration"})
     implemented: bool = Field(..., description="Indicates if the resource integration is fully implemented", json_schema_extra={"example": True})
     validated: bool = Field(..., description="Indicates if the resource integration is validated with live credentials", json_schema_extra={"example": False})
     description: str = Field(..., description="Description of the resource", json_schema_extra={"example": "Transações comerciais do Pipeimob"})
     primary_key: str = Field(..., description="Primary key of the resource records", json_schema_extra={"example": "transacao_unique_id_pipeimob"})
     available_fields: List[str] = Field(..., description="List of available fields for extraction")
     supported_filters: List[str] = Field(..., description="List of supported query filters")
+    filters_api_direct: List[str] = Field(..., description="List of filters processed directly at the Pipeimob CRM side")
+    filters_local_backend: List[str] = Field(..., description="List of filters applied locally at the backend after fetch")
     pending_items: List[str] = Field(..., description="List of pending implementation items")
 
 class CatalogResponse(BaseModel):
@@ -385,15 +401,7 @@ def get_metadata_wrapper(data_mode: str, source: str):
 )
 async def get_health():
     timestamp_utc = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-    
-    # Determine current data mode
-    data_mode_env = os.getenv("PIPEIMOB_DATA_MODE")
-    if data_mode_env in ["demo", "live"]:
-        data_mode = data_mode_env
-    else:
-        data_mode = "demo" if app_env == "development" else "live"
-        
-    conn_status = "not_tested" if data_mode == "demo" else "pending"
+    data_mode, conn_status = get_current_data_mode_and_connection()
     
     return HealthResponse(
         status="ok",
@@ -412,12 +420,21 @@ async def get_health():
     description="Returns the integration roadmap status, available fields, filters and pending items for Pipeimob resources."
 )
 async def get_catalog():
+    data_mode, conn_status = get_current_data_mode_and_connection()
+    
+    if data_mode == "unconfigured" or conn_status == "missing_credentials":
+        status_str = "implemented_pending_live_configuration"
+    elif data_mode == "live":
+        status_str = "implemented_pending_live_validation"
+    else:
+        status_str = "implemented_demo_pending_live_validation"
+        
     transactions_resource = ResourceCatalog(
         id="transactions",
         name="Transações",
         backend_endpoint="/api/transactions",
         pipeimob_endpoint=None,
-        status="implemented_demo_pending_live_validation",
+        status=status_str,
         implemented=True,
         validated=False,
         description="Transações comerciais do Pipeimob",
@@ -439,7 +456,25 @@ async def get_catalog():
             "clientes"
         ],
         supported_filters=[
-            "data_inicio_criacao" # Mapped to live fetch data_inicio_criacao
+            "data_inicio_criacao",
+            "data_fim_criacao",
+            "data_inicio_ccv",
+            "data_fim_ccv",
+            "data_arquivamento_inicio",
+            "data_arquivamento_fim"
+        ],
+        filters_api_direct=[
+            "data_inicio_criacao"
+        ],
+        filters_local_backend=[
+            "data_fim_criacao",
+            "data_inicio_ccv",
+            "data_fim_ccv",
+            "data_arquivamento_inicio",
+            "data_arquivamento_fim",
+            "agent",
+            "category",
+            "financing"
         ],
         pending_items=[
             "Confirmar endpoint definitivo de transações (Divergência entre /api/v2/negocios/transacoes e /api/v2/transacoes)",

@@ -213,10 +213,91 @@ def test_get_dashboard_timeline():
     assert response.status_code == 200
     assert response.json()["data_mode"] == "demo"
 
-def test_live_mode_without_credentials_returns_error():
-    # Force live mode
+def test_production_unconfigured_without_mode():
+    # Production without mode environment variable configured
+    os.environ["APP_ENV"] = "production"
+    os.environ.pop("PIPEIMOB_DATA_MODE", None)
+    
+    response = client.get("/api/health")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["data_mode"] == "unconfigured"
+    assert data["pipeimob_connection"] == "pending_configuration"
+    # Verify production does not automatically assume live mode
+    assert data["data_mode"] != "live"
+
+def test_live_without_credentials_missing_credentials():
+    os.environ["APP_ENV"] = "production"
     os.environ["PIPEIMOB_DATA_MODE"] = "live"
-    # Ensure no credentials in env
+    os.environ.pop("PIPEIMOB_API_KEY", None)
+    os.environ.pop("PIPEIMOB_SECRET_KEY", None)
+    
+    response = client.get("/api/health")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["data_mode"] == "live"
+    assert data["pipeimob_connection"] == "missing_credentials"
+
+def test_unconfigured_endpoints_return_503():
+    os.environ["APP_ENV"] = "production"
+    os.environ.pop("PIPEIMOB_DATA_MODE", None)
+    
+    # Endpoints must fail with 503 while unconfigured, never returning demo data silently
+    response = client.get("/api/transactions")
+    assert response.status_code == 503
+    assert "Configuration pending" in response.json()["detail"]
+    
+    response = client.get("/api/dashboard/summary")
+    assert response.status_code == 503
+    assert "Configuration pending" in response.json()["detail"]
+
+def test_six_filters_appear_in_catalog():
+    response = client.get("/api/catalog")
+    assert response.status_code == 200
+    resource = response.json()["resources"][0]
+    
+    expected_filters = [
+        "data_inicio_criacao",
+        "data_fim_criacao",
+        "data_inicio_ccv",
+        "data_fim_ccv",
+        "data_arquivamento_inicio",
+        "data_arquivamento_fim"
+    ]
+    for filter_name in expected_filters:
+        assert filter_name in resource["supported_filters"]
+        
+    assert "data_inicio_criacao" in resource["filters_api_direct"]
+    assert "data_fim_criacao" in resource["filters_local_backend"]
+
+def test_catalog_status_states():
+    # 1. Demo Mode
+    os.environ["PIPEIMOB_DATA_MODE"] = "demo"
+    response = client.get("/api/catalog")
+    assert response.json()["resources"][0]["status"] == "implemented_demo_pending_live_validation"
+    
+    # 2. Live Mode (no credentials)
+    os.environ["PIPEIMOB_DATA_MODE"] = "live"
+    os.environ.pop("PIPEIMOB_API_KEY", None)
+    os.environ.pop("PIPEIMOB_SECRET_KEY", None)
+    response = client.get("/api/catalog")
+    assert response.json()["resources"][0]["status"] == "implemented_pending_live_configuration"
+    
+    # 3. Unconfigured Mode (production)
+    os.environ["APP_ENV"] = "production"
+    os.environ.pop("PIPEIMOB_DATA_MODE", None)
+    response = client.get("/api/catalog")
+    assert response.json()["resources"][0]["status"] == "implemented_pending_live_configuration"
+    
+    # 4. Live Mode (with credentials configured but validation pending)
+    os.environ["PIPEIMOB_DATA_MODE"] = "live"
+    os.environ["PIPEIMOB_API_KEY"] = "fake_key"
+    os.environ["PIPEIMOB_SECRET_KEY"] = "fake_secret"
+    response = client.get("/api/catalog")
+    assert response.json()["resources"][0]["status"] == "implemented_pending_live_validation"
+
+def test_live_mode_without_credentials_returns_error():
+    os.environ["PIPEIMOB_DATA_MODE"] = "live"
     os.environ.pop("PIPEIMOB_API_KEY", None)
     os.environ.pop("PIPEIMOB_SECRET_KEY", None)
     
@@ -225,9 +306,7 @@ def test_live_mode_without_credentials_returns_error():
     assert "Configuration pending" in response.json()["detail"]
 
 def test_headers_credentials_are_ignored():
-    # Force live mode
     os.environ["PIPEIMOB_DATA_MODE"] = "live"
-    # Ensure no credentials in env
     os.environ.pop("PIPEIMOB_API_KEY", None)
     os.environ.pop("PIPEIMOB_SECRET_KEY", None)
     
@@ -236,19 +315,15 @@ def test_headers_credentials_are_ignored():
         "X-Secret-Key": "client_supplied_secret"
     }
     response = client.get("/api/transactions", headers=headers)
-    # The client-supplied headers MUST be ignored, returning 400 because env vars are missing
     assert response.status_code == 400
     assert "Configuration pending" in response.json()["detail"]
 
 def test_live_mode_failure_does_not_return_mock():
-    # Force live mode
     os.environ["PIPEIMOB_DATA_MODE"] = "live"
-    # Setup invalid/fake credentials that will fail auth request
     os.environ["PIPEIMOB_API_KEY"] = "fake_key"
     os.environ["PIPEIMOB_SECRET_KEY"] = "fake_secret"
     
     response = client.get("/api/transactions")
-    # Must fail with 503 connection error and NEVER return fallback mock data
     assert response.status_code == 503
     assert "Pipeimob connection failed" in response.json()["detail"]
 
@@ -261,7 +336,6 @@ def test_openapi_includes_new_endpoints_and_schemas():
     assert "/api/transactions" in paths
     assert "/api/dashboard/summary" in paths
     
-    # Check that OpenAPI parameters do NOT list X-API-Key or X-Secret-Key headers
     tx_get_params = paths["/api/transactions"]["get"].get("parameters", [])
     param_names = [p["name"].lower() for p in tx_get_params]
     assert "x-api-key" not in param_names
