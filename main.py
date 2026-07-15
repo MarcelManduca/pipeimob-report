@@ -185,7 +185,8 @@ def fetch_all_transactions_live(
     data_arquivamento_fim: Optional[str] = None,
     codigo_imovel: Optional[str] = None,
     codigo_contrato: Optional[str] = None,
-    transacao_unique_id: Optional[str] = None
+    transacao_unique_id: Optional[str] = None,
+    pagina: Optional[int] = None
 ) -> list:
     token = get_auth_token(api_key, api_secret)
     if not token:
@@ -263,7 +264,8 @@ def fetch_all_transactions_live(
                 pipeimob_connection="unavailable"
             )
 
-    url_p1 = f"{BASE_URL}/negocios/transacoes?pagina=1{prefix}"
+    start_page = pagina if pagina is not None else 1
+    url_p1 = f"{BASE_URL}/negocios/transacoes?pagina={start_page}{prefix}"
     res_body = request_with_retry(url_p1)
     
     # Read transactions safely from response.data.transacoes
@@ -300,7 +302,7 @@ def fetch_all_transactions_live(
         return []
 
     max_pages = 12
-    pages_to_fetch = range(2, min(total_pages + 1, max_pages + 1))
+    pages_to_fetch = range(start_page + 1, min(total_pages + 1, start_page + max_pages))
     
     if pages_to_fetch:
         from concurrent.futures import ThreadPoolExecutor
@@ -344,7 +346,8 @@ def load_transactions_dataset(
     data_arquivamento_fim: Optional[str] = None,
     codigo_imovel: Optional[str] = None,
     codigo_contrato: Optional[str] = None,
-    transacao_unique_id: Optional[str] = None
+    transacao_unique_id: Optional[str] = None,
+    pagina: Optional[int] = None
 ) -> tuple:
     data_mode, conn_status = get_current_data_mode_and_connection()
     
@@ -361,6 +364,7 @@ def load_transactions_dataset(
         return "demo", "synthetic_mock", MOCK_TRANSACTIONS
         
     # Live mode: validate that at least one direct filter is present.
+    # The 'pagina' parameter is a pagination parameter and does NOT satisfy this requirement on its own.
     has_direct_filter = any([
         data_inicio_criacao,
         data_fim_criacao,
@@ -402,7 +406,8 @@ def load_transactions_dataset(
         data_arquivamento_fim=data_arquivamento_fim,
         codigo_imovel=codigo_imovel,
         codigo_contrato=codigo_contrato,
-        transacao_unique_id=transacao_unique_id
+        transacao_unique_id=transacao_unique_id,
+        pagina=pagina
     )
     
     if not live_txs:
@@ -529,6 +534,7 @@ class ResourceCatalog(BaseModel):
     supported_filters: List[str] = Field(..., description="List of supported query filters")
     filters_api_direct: List[str] = Field(..., description="List of filters processed directly at the Pipeimob CRM side")
     filters_local_backend: List[str] = Field(..., description="List of filters applied locally at the backend after fetch")
+    pagination_parameters: List[str] = Field(default_factory=list, description="List of pagination parameters accepted by the API")
     pending_items: List[str] = Field(..., description="List of pending implementation items")
 
 class CatalogResponse(BaseModel):
@@ -1127,8 +1133,7 @@ async def get_catalog():
             "data_arquivamento_fim",
             "codigo_imovel",
             "codigo_contrato",
-            "transacao_unique_id",
-            "pagina"
+            "transacao_unique_id"
         ],
         filters_api_direct=[
             "data_inicio_criacao",
@@ -1139,14 +1144,16 @@ async def get_catalog():
             "data_arquivamento_fim",
             "codigo_imovel",
             "codigo_contrato",
-            "transacao_unique_id",
-            "pagina"
+            "transacao_unique_id"
         ],
         filters_local_backend=[
             "agent",
             "category",
             "financing",
             "etapa_atual"
+        ],
+        pagination_parameters=[
+            "pagina"
         ],
         pending_items=[
             "Validar a credencial real em produção (Live mode)",
@@ -1165,7 +1172,7 @@ async def get_catalog():
     response_model=TransactionsListResponse,
     responses={**RESPONSES_503},
     summary="List Transactions",
-    description="Returns list of transactions matching the specified query filters. In live mode, period filters (data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim) and direct search filters (codigo_imovel, codigo_contrato, transacao_unique_id) are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. Demo mode is restricted to development and tests."
+    description="Returns list of transactions matching the specified query filters. In live mode, period filters (data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim) and direct search filters (codigo_imovel, codigo_contrato, transacao_unique_id) are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. The 'pagina' parameter is a pagination parameter and does NOT satisfy the direct filter requirement on its own. Demo mode is restricted to development and tests."
 )
 async def get_transactions(
     response: Response,
@@ -1178,6 +1185,7 @@ async def get_transactions(
     codigo_imovel: Optional[str] = Query(None),
     codigo_contrato: Optional[str] = Query(None),
     transacao_unique_id: Optional[str] = Query(None),
+    pagina: Optional[int] = Query(None),
     agent: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
     financing: Optional[bool] = Query(None),
@@ -1185,7 +1193,8 @@ async def get_transactions(
 ):
     mode, src, dataset = load_transactions_dataset(
         data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
-        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
+        pagina
     )
     filtered = get_filtered_transactions(
         dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
@@ -1241,7 +1250,7 @@ async def get_transaction_by_id(
     response_model=DashboardSummaryResponse,
     responses={**RESPONSES_503},
     summary="Get Dashboard BI Summary metrics",
-    description="Computes total sales volume, commissions, weighted avg commission rate, and transaction count. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. Demo mode is restricted to development and tests."
+    description="Computes total sales volume, commissions, weighted avg commission rate, and transaction count. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. The 'pagina' parameter is a pagination parameter and does NOT satisfy the direct filter requirement on its own. Demo mode is restricted to development and tests."
 )
 async def get_dashboard_summary(
     response: Response,
@@ -1254,6 +1263,7 @@ async def get_dashboard_summary(
     codigo_imovel: Optional[str] = Query(None),
     codigo_contrato: Optional[str] = Query(None),
     transacao_unique_id: Optional[str] = Query(None),
+    pagina: Optional[int] = Query(None),
     agent: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
     financing: Optional[bool] = Query(None),
@@ -1261,7 +1271,8 @@ async def get_dashboard_summary(
 ):
     mode, src, dataset = load_transactions_dataset(
         data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
-        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
+        pagina
     )
     filtered = get_filtered_transactions(
         dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
@@ -1288,7 +1299,7 @@ async def get_dashboard_summary(
     response_model=DashboardOriginsResponse,
     responses={**RESPONSES_503},
     summary="Get Buyer Origins distribution",
-    description="Groups sales volume and transaction count by lead origin source. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. Demo mode is restricted to development and tests."
+    description="Groups sales volume and transaction count by lead origin source. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. The 'pagina' parameter is a pagination parameter and does NOT satisfy the direct filter requirement on its own. Demo mode is restricted to development and tests."
 )
 async def get_dashboard_origins(
     response: Response,
@@ -1301,6 +1312,7 @@ async def get_dashboard_origins(
     codigo_imovel: Optional[str] = Query(None),
     codigo_contrato: Optional[str] = Query(None),
     transacao_unique_id: Optional[str] = Query(None),
+    pagina: Optional[int] = Query(None),
     agent: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
     financing: Optional[bool] = Query(None),
@@ -1308,7 +1320,8 @@ async def get_dashboard_origins(
 ):
     mode, src, dataset = load_transactions_dataset(
         data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
-        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
+        pagina
     )
     filtered = get_filtered_transactions(
         dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
@@ -1341,7 +1354,7 @@ async def get_dashboard_origins(
     response_model=DashboardStagesResponse,
     responses={**RESPONSES_503},
     summary="Get Stages distribution",
-    description="Groups sales volume and transaction count by CRM pipeline stage. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. Demo mode is restricted to development and tests."
+    description="Groups sales volume and transaction count by CRM pipeline stage. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. The 'pagina' parameter is a pagination parameter and does NOT satisfy the direct filter requirement on its own. Demo mode is restricted to development and tests."
 )
 async def get_dashboard_stages(
     response: Response,
@@ -1354,6 +1367,7 @@ async def get_dashboard_stages(
     codigo_imovel: Optional[str] = Query(None),
     codigo_contrato: Optional[str] = Query(None),
     transacao_unique_id: Optional[str] = Query(None),
+    pagina: Optional[int] = Query(None),
     agent: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
     financing: Optional[bool] = Query(None),
@@ -1361,7 +1375,8 @@ async def get_dashboard_stages(
 ):
     mode, src, dataset = load_transactions_dataset(
         data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
-        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
+        pagina
     )
     filtered = get_filtered_transactions(
         dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
@@ -1394,7 +1409,7 @@ async def get_dashboard_stages(
     response_model=DashboardManagersResponse,
     responses={**RESPONSES_503},
     summary="Get Manager Leaderboard",
-    description="Computes leaderboard ranking of managers by sales volume, transaction count, and average ticket size. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. Demo mode is restricted to development and tests."
+    description="Computes leaderboard ranking of managers by sales volume, transaction count, and average ticket size. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. The 'pagina' parameter is a pagination parameter and does NOT satisfy the direct filter requirement on its own. Demo mode is restricted to development and tests."
 )
 async def get_dashboard_managers(
     response: Response,
@@ -1407,6 +1422,7 @@ async def get_dashboard_managers(
     codigo_imovel: Optional[str] = Query(None),
     codigo_contrato: Optional[str] = Query(None),
     transacao_unique_id: Optional[str] = Query(None),
+    pagina: Optional[int] = Query(None),
     agent: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
     financing: Optional[bool] = Query(None),
@@ -1414,7 +1430,8 @@ async def get_dashboard_managers(
 ):
     mode, src, dataset = load_transactions_dataset(
         data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
-        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
+        pagina
     )
     filtered = get_filtered_transactions(
         dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
@@ -1454,7 +1471,7 @@ async def get_dashboard_managers(
     response_model=DashboardPaymentsResponse,
     responses={**RESPONSES_503},
     summary="Get Payment Methods and Financing distribution",
-    description="Aggregates payment direct vs financing ratio, bank distributions, and detailed signals/methods volumes. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. Demo mode is restricted to development and tests."
+    description="Aggregates payment direct vs financing ratio, bank distributions, and detailed signals/methods volumes. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. The 'pagina' parameter is a pagination parameter and does NOT satisfy the direct filter requirement on its own. Demo mode is restricted to development and tests."
 )
 async def get_dashboard_payments(
     response: Response,
@@ -1467,6 +1484,7 @@ async def get_dashboard_payments(
     codigo_imovel: Optional[str] = Query(None),
     codigo_contrato: Optional[str] = Query(None),
     transacao_unique_id: Optional[str] = Query(None),
+    pagina: Optional[int] = Query(None),
     agent: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
     financing: Optional[bool] = Query(None),
@@ -1474,7 +1492,8 @@ async def get_dashboard_payments(
 ):
     mode, src, dataset = load_transactions_dataset(
         data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
-        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
+        pagina
     )
     filtered = get_filtered_transactions(
         dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
@@ -1537,7 +1556,7 @@ async def get_dashboard_payments(
     response_model=DashboardCommissionsResponse,
     responses={**RESPONSES_503},
     summary="Get Commission detailed metrics",
-    description="Returns aggregate commission values and individual contract commission details. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. Demo mode is restricted to development and tests."
+    description="Returns aggregate commission values and individual contract commission details. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. The 'pagina' parameter is a pagination parameter and does NOT satisfy the direct filter requirement on its own. Demo mode is restricted to development and tests."
 )
 async def get_dashboard_commissions(
     response: Response,
@@ -1550,6 +1569,7 @@ async def get_dashboard_commissions(
     codigo_imovel: Optional[str] = Query(None),
     codigo_contrato: Optional[str] = Query(None),
     transacao_unique_id: Optional[str] = Query(None),
+    pagina: Optional[int] = Query(None),
     agent: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
     financing: Optional[bool] = Query(None),
@@ -1557,7 +1577,8 @@ async def get_dashboard_commissions(
 ):
     mode, src, dataset = load_transactions_dataset(
         data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
-        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
+        pagina
     )
     filtered = get_filtered_transactions(
         dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
@@ -1609,7 +1630,7 @@ MONTHS_PT = {
     response_model=DashboardTimelineResponse,
     responses={**RESPONSES_503},
     summary="Get Monthly Sales Timeline",
-    description="Groups contract sales volume and count chronologically by month. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. Demo mode is restricted to development and tests."
+    description="Groups contract sales volume and count chronologically by month. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. The 'pagina' parameter is a pagination parameter and does NOT satisfy the direct filter requirement on its own. Demo mode is restricted to development and tests."
 )
 async def get_dashboard_timeline(
     response: Response,
@@ -1622,6 +1643,7 @@ async def get_dashboard_timeline(
     codigo_imovel: Optional[str] = Query(None),
     codigo_contrato: Optional[str] = Query(None),
     transacao_unique_id: Optional[str] = Query(None),
+    pagina: Optional[int] = Query(None),
     agent: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
     financing: Optional[bool] = Query(None),
@@ -1629,7 +1651,8 @@ async def get_dashboard_timeline(
 ):
     mode, src, dataset = load_transactions_dataset(
         data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
-        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
+        pagina
     )
     filtered = get_filtered_transactions(
         dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,

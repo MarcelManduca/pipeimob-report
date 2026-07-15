@@ -274,8 +274,7 @@ def test_six_filters_appear_in_catalog():
         "data_arquivamento_fim",
         "codigo_imovel",
         "codigo_contrato",
-        "transacao_unique_id",
-        "pagina"
+        "transacao_unique_id"
     ]
     for filter_name in expected_filters:
         assert filter_name in resource["supported_filters"]
@@ -289,14 +288,16 @@ def test_six_filters_appear_in_catalog():
         "data_arquivamento_fim",
         "codigo_imovel",
         "codigo_contrato",
-        "transacao_unique_id",
-        "pagina"
+        "transacao_unique_id"
     ]
     assert resource["filters_local_backend"] == [
         "agent",
         "category",
         "financing",
         "etapa_atual"
+    ]
+    assert resource["pagination_parameters"] == [
+        "pagina"
     ]
 
 def test_catalog_status_states():
@@ -602,6 +603,7 @@ def test_openapi_includes_new_endpoints_and_schemas():
     assert "codigo_contrato" in param_names
     assert "transacao_unique_id" in param_names
     assert "etapa_atual" in param_names
+    assert "pagina" in param_names
     
     # Check limit-related parameters are absent
     assert "limit" not in param_names
@@ -649,3 +651,63 @@ def test_openapi_includes_new_endpoints_and_schemas():
         assert "api_key" not in val_str
         assert "secret_key" not in val_str
         assert "token" not in val_str
+
+def test_live_mode_only_pagina_returns_400():
+    os.environ["PIPEIMOB_DATA_MODE"] = "live"
+    os.environ["PIPEIMOB_API_KEY"] = "fake_key"
+    os.environ["PIPEIMOB_SECRET_KEY"] = "fake_secret"
+    
+    # Query with ONLY pagina (should fail as it doesn't satisfy direct filter requirement on its own)
+    response = client.get("/api/transactions?pagina=1")
+    assert response.status_code == 400
+    assert "At least one direct filter parameter is required" in response.json()["detail"]
+
+@patch("urllib.request.urlopen")
+def test_live_mode_pagina_with_direct_filter_is_allowed(mock_urlopen):
+    import main
+    main.token_cache.access_token = None
+    main.token_cache.expires_at = None
+
+    # Mock auth response
+    mock_auth_response = MagicMock()
+    mock_auth_response.__enter__.return_value = mock_auth_response
+    mock_auth_response.read.return_value = json.dumps({
+        "success": True,
+        "data": {
+            "access_token": "mocked_jwt_token_123",
+            "token_type": "Bearer",
+            "expires_in": 3600
+        }
+    }).encode("utf-8")
+    
+    # Mock transactions list response
+    mock_txs_response = MagicMock()
+    mock_txs_response.__enter__.return_value = mock_txs_response
+    mock_txs_response.read.return_value = json.dumps({
+        "success": True,
+        "data": {
+            "transacoes": [
+                {
+                    "transacao_unique_id_pipeimob": "tx_mock_1",
+                    "codigo_contrato": "CONTRATO-MOCK-1",
+                    "total_comissao": 10000.0,
+                    "comissionados": []
+                }
+            ]
+        },
+        "meta": {
+            "pagination": {
+                "total_pages": 1
+            }
+        }
+    }).encode("utf-8")
+    
+    mock_urlopen.side_effect = [mock_auth_response, mock_txs_response]
+    
+    os.environ["PIPEIMOB_DATA_MODE"] = "live"
+    os.environ["PIPEIMOB_API_KEY"] = "fake_key"
+    os.environ["PIPEIMOB_SECRET_KEY"] = "fake_secret"
+    
+    # Query with direct filter AND pagina
+    response = client.get("/api/transactions?data_inicio_ccv=2026-07-01&pagina=1")
+    assert response.status_code == 200
