@@ -59,7 +59,7 @@ def test_get_catalog_returns_transactions_resource():
     assert resource["id"] == "transactions"
     assert resource["name"] == "Transações"
     assert resource["backend_endpoint"] == "/api/transactions"
-    assert resource["pipeimob_endpoint"] is None
+    assert resource["pipeimob_endpoint"] == "/api/v2/negocios/transacoes"
     assert resource["status"] == "implemented_demo_pending_live_validation"
     assert resource["implemented"] is True
     assert resource["validated"] is False

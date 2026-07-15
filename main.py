@@ -478,7 +478,7 @@ async def get_catalog():
         id="transactions",
         name="Transações",
         backend_endpoint="/api/transactions",
-        pipeimob_endpoint=None,
+        pipeimob_endpoint="/api/v2/negocios/transacoes",
         status=status_str,
         implemented=True,
         validated=False,
@@ -522,11 +522,11 @@ async def get_catalog():
             "financing"
         ],
         pending_items=[
-            "Confirmar endpoint definitivo de transações (Divergência entre /api/v2/negocios/transacoes e /api/v2/transacoes)",
             "Confirmar propriedade que contém o token na resposta de autenticação",
             "Confirmar header de autenticação na API V2",
-            "Confirmar parâmetro de paginação da API",
-            "Validar nova credencial real em produção (Live mode)"
+            "Confirmar se existe parâmetro na API para alterar o limite de registros por página (page_limit)",
+            "Validar nova credencial real em produção (Live mode)",
+            "Confirmar eventual suporte a filtro por etapa (etapa_atual) diretamente no Pipeimob"
         ]
     )
     

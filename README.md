@@ -154,5 +154,5 @@ pytest
 ## ⚠️ Limitações Atuais e Status de Integração
 
 * **Autenticação:** A autenticação com o CRM Pipeimob está marcada como **Pendente** por padrão até a definição das chaves no `.env`.
-* **Endpoint Pipeimob:** O endpoint definitivo de transações está marcado como `null` no catálogo devido a divergências técnicas de mapeamento no Pipeimob entre `/api/v2/negocios/transacoes` e `/api/v2/transacoes`.
+* **Endpoint Pipeimob:** O endpoint definitivo de transações foi oficialmente confirmado como `/api/v2/negocios/transacoes`.
 
