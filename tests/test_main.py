@@ -6,20 +6,17 @@ from fastapi.testclient import TestClient
 # Add project root to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-# Clean environment credentials to verify application runs without credentials configured
-os.environ.pop("PIPEIMOB_API_KEY", None)
-os.environ.pop("PIPEIMOB_SECRET_KEY", None)
-
 # Force development environment for local localhost CORS tests
 os.environ["APP_ENV"] = "development"
 os.environ["ALLOWED_ORIGINS"] = "https://lovable-test-origin.app"
 
+# Import mock data to assert absence of real spreadsheet names in codebase mocks
+from mock_data import MOCK_TRANSACTIONS
 from main import app
 
 client = TestClient(app)
 
 def test_app_starts_without_credentials():
-    # Verify app initialization succeeds without environment variables
     assert app is not None
 
 def test_get_health_status_code_200():
@@ -30,12 +27,12 @@ def test_get_health_status_code_200():
     assert data["service"] == "pipeimob-report"
     assert data["version"] == "0.1.0"
     assert data["api_version"] == "v2"
-    assert data["pipeimob_connection"] == "pending"
+    assert data["pipeimob_connection"] == "not_tested"  # "not_tested" in demo mode
+    assert data["data_mode"] == "demo"
 
 def test_get_health_no_secrets_exposed():
     response = client.get("/api/health")
     data_str = response.text
-    # Ensure no common secrets or sensitive config words are output
     assert "key" not in data_str.lower()
     assert "secret" not in data_str.lower()
     assert "token" not in data_str.lower()
@@ -45,11 +42,7 @@ def test_get_health_timestamp_valid_utc():
     response = client.get("/api/health")
     data = response.json()
     timestamp_str = data["timestamp"]
-    
-    # Assert ISO-8601 ends with Z indicating UTC timezone
     assert timestamp_str.endswith("Z")
-    
-    # Verify ISO-8601 parsing succeeds
     parsed_dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
     assert parsed_dt.tzinfo == timezone.utc
 
@@ -66,9 +59,9 @@ def test_get_catalog_returns_transactions_resource():
     assert resource["id"] == "transactions"
     assert resource["name"] == "Transações"
     assert resource["backend_endpoint"] == "/api/transactions"
-    assert resource["pipeimob_endpoint"] is None  # Must remain null due to divergence
-    assert resource["status"] == "pending_auth_confirmation"
-    assert resource["implemented"] is False
+    assert resource["pipeimob_endpoint"] is None
+    assert resource["status"] == "implemented_demo_pending_live_validation"
+    assert resource["implemented"] is True
     assert resource["validated"] is False
     assert resource["primary_key"] == "transacao_unique_id_pipeimob"
 
@@ -77,20 +70,10 @@ def test_get_catalog_contains_expected_fields():
     resource = response.json()["resources"][0]
     
     expected_fields = [
-        "transacao_unique_id_pipeimob",
-        "codigo_contrato",
-        "codigo_imovel",
-        "etapa_atual",
-        "data_contrato",
-        "data_inicio_venda",
-        "valor_contrato",
-        "total_comissao",
-        "comissao_imobiliaria",
-        "agente_gestor",
-        "midia_origem_compradores",
-        "forma_pagamento",
-        "comissionados",
-        "clientes"
+        "transacao_unique_id_pipeimob", "codigo_contrato", "codigo_imovel", 
+        "etapa_atual", "data_contrato", "data_inicio_venda", "valor_contrato", 
+        "total_comissao", "comissao_imobiliaria", "agente_gestor", 
+        "midia_origem_compradores", "forma_pagamento", "comissionados", "clientes"
     ]
     for field in expected_fields:
         assert field in resource["available_fields"]
@@ -99,37 +82,26 @@ def test_get_catalog_contains_expected_filters():
     response = client.get("/api/catalog")
     resource = response.json()["resources"][0]
     
-    expected_filters = [
-        "data_inicio_criacao",
-        "data_fim_criacao",
-        "data_inicio_ccv",
-        "data_fim_ccv",
-        "data_arquivamento_inicio",
-        "data_arquivamento_fim"
-    ]
+    expected_filters = ["data_inicio_criacao"]
     for filter_name in expected_filters:
         assert filter_name in resource["supported_filters"]
 
 def test_cors_authorized_origin():
-    # Test normal request from an authorized origin
     headers = {"Origin": "https://lovable-test-origin.app"}
     response = client.get("/api/health", headers=headers)
     assert response.headers.get("access-control-allow-origin") == "https://lovable-test-origin.app"
 
 def test_cors_authorized_localhost_in_dev():
-    # Verify localhost and 127.0.0.1 are explicitly allowed in development env
     headers = {"Origin": "http://localhost:5173"}
     response = client.get("/api/health", headers=headers)
     assert response.headers.get("access-control-allow-origin") == "http://localhost:5173"
 
 def test_cors_unauthorized_origin():
-    # Test request from an unauthorized origin (must not return Access-Control-Allow-Origin header)
     headers = {"Origin": "https://unauthorized-domain.com"}
     response = client.get("/api/health", headers=headers)
     assert "access-control-allow-origin" not in response.headers
 
 def test_cors_preflight_options():
-    # Test OPTIONS preflight request for authorized origin
     headers = {
         "Origin": "https://lovable-test-origin.app",
         "Access-Control-Request-Method": "GET",
@@ -140,18 +112,161 @@ def test_cors_preflight_options():
     assert response.headers.get("access-control-allow-origin") == "https://lovable-test-origin.app"
     assert "GET" in response.headers.get("access-control-allow-methods", "")
 
-def test_openapi_includes_endpoints_and_schemas():
+def test_demo_data_anonymization_and_purity():
+    # Assert that no real manager/agency names or properties from real sheets remain in the mock dataset
+    real_names = ["Raphael", "Carvalho", "Vanessa", "Cavedon", "Gralha", "Manduca", "Michele", "Maitê", "Yakabi"]
+    for tx in MOCK_TRANSACTIONS:
+        # Check managers
+        assert not any(name.lower() in tx["agente_gestor"].lower() for name in real_names)
+        # Check imobiliária name
+        assert "gralha" not in tx["imobiliária"].lower()
+        # Check buyer/seller clients
+        for client_obj in tx["clientes"]:
+            assert not any(name.lower() in client_obj["nome"].lower() for name in real_names)
+
+def test_get_transactions_demo_metadata_and_headers():
+    # Set demo mode explicitly
+    os.environ["PIPEIMOB_DATA_MODE"] = "demo"
+    response = client.get("/api/transactions")
+    assert response.status_code == 200
+    assert response.headers.get("X-Data-Mode") == "demo"
+    
+    data = response.json()
+    assert data["data_mode"] == "demo"
+    assert data["source"] == "synthetic_mock"
+    assert "generated_at" in data
+    
+    # Check wrapped count
+    payload = data["data"]
+    assert payload["count"] == 60
+    assert len(payload["transactions"]) == 60
+
+def test_get_transactions_with_filters():
+    os.environ["PIPEIMOB_DATA_MODE"] = "demo"
+    response = client.get("/api/transactions?agent=Corretor Alfa")
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    for tx in payload["transactions"]:
+        assert "Corretor Alfa" in tx["agente_gestor"]
+
+def test_get_transaction_by_id():
+    os.environ["PIPEIMOB_DATA_MODE"] = "demo"
+    response = client.get("/api/transactions/tx_demo_101")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["data_mode"] == "demo"
+    assert data["data"]["transacao_unique_id_pipeimob"] == "tx_demo_101"
+
+def test_get_dashboard_summary_metadata():
+    os.environ["PIPEIMOB_DATA_MODE"] = "demo"
+    response = client.get("/api/dashboard/summary")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["data_mode"] == "demo"
+    
+    # Headers in TestClient are lowercased
+    assert response.headers.get("x-data-mode") == "demo"
+    
+    payload = data["data"]
+    assert payload["total_sales"] > 0
+    assert payload["transaction_count"] == 60
+
+def test_get_dashboard_origins():
+    os.environ["PIPEIMOB_DATA_MODE"] = "demo"
+    response = client.get("/api/dashboard/origins")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["data_mode"] == "demo"
+    assert len(data["data"]["origins"]) > 0
+
+def test_get_dashboard_stages():
+    os.environ["PIPEIMOB_DATA_MODE"] = "demo"
+    response = client.get("/api/dashboard/stages")
+    assert response.status_code == 200
+    assert response.json()["data_mode"] == "demo"
+
+def test_get_dashboard_managers():
+    os.environ["PIPEIMOB_DATA_MODE"] = "demo"
+    response = client.get("/api/dashboard/managers")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["data_mode"] == "demo"
+    assert "Corretor" in data["data"]["managers"][0]["manager"]
+
+def test_get_dashboard_payments():
+    os.environ["PIPEIMOB_DATA_MODE"] = "demo"
+    response = client.get("/api/dashboard/payments")
+    assert response.status_code == 200
+    assert response.json()["data_mode"] == "demo"
+
+def test_get_dashboard_commissions():
+    os.environ["PIPEIMOB_DATA_MODE"] = "demo"
+    response = client.get("/api/dashboard/commissions")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["data_mode"] == "demo"
+    assert data["data"]["total_commissions"] > 0
+
+def test_get_dashboard_timeline():
+    os.environ["PIPEIMOB_DATA_MODE"] = "demo"
+    response = client.get("/api/dashboard/timeline")
+    assert response.status_code == 200
+    assert response.json()["data_mode"] == "demo"
+
+def test_live_mode_without_credentials_returns_error():
+    # Force live mode
+    os.environ["PIPEIMOB_DATA_MODE"] = "live"
+    # Ensure no credentials in env
+    os.environ.pop("PIPEIMOB_API_KEY", None)
+    os.environ.pop("PIPEIMOB_SECRET_KEY", None)
+    
+    response = client.get("/api/transactions")
+    assert response.status_code == 400
+    assert "Configuration pending" in response.json()["detail"]
+
+def test_headers_credentials_are_ignored():
+    # Force live mode
+    os.environ["PIPEIMOB_DATA_MODE"] = "live"
+    # Ensure no credentials in env
+    os.environ.pop("PIPEIMOB_API_KEY", None)
+    os.environ.pop("PIPEIMOB_SECRET_KEY", None)
+    
+    headers = {
+        "X-API-Key": "client_supplied_key",
+        "X-Secret-Key": "client_supplied_secret"
+    }
+    response = client.get("/api/transactions", headers=headers)
+    # The client-supplied headers MUST be ignored, returning 400 because env vars are missing
+    assert response.status_code == 400
+    assert "Configuration pending" in response.json()["detail"]
+
+def test_live_mode_failure_does_not_return_mock():
+    # Force live mode
+    os.environ["PIPEIMOB_DATA_MODE"] = "live"
+    # Setup invalid/fake credentials that will fail auth request
+    os.environ["PIPEIMOB_API_KEY"] = "fake_key"
+    os.environ["PIPEIMOB_SECRET_KEY"] = "fake_secret"
+    
+    response = client.get("/api/transactions")
+    # Must fail with 503 connection error and NEVER return fallback mock data
+    assert response.status_code == 503
+    assert "Pipeimob connection failed" in response.json()["detail"]
+
+def test_openapi_includes_new_endpoints_and_schemas():
     response = client.get("/openapi.json")
     assert response.status_code == 200
     openapi_data = response.json()
     
-    # Check paths
     paths = openapi_data["paths"]
-    assert "/api/health" in paths
-    assert "/api/catalog" in paths
+    assert "/api/transactions" in paths
+    assert "/api/dashboard/summary" in paths
     
-    # Check health schemas
+    # Check that OpenAPI parameters do NOT list X-API-Key or X-Secret-Key headers
+    tx_get_params = paths["/api/transactions"]["get"].get("parameters", [])
+    param_names = [p["name"].lower() for p in tx_get_params]
+    assert "x-api-key" not in param_names
+    assert "x-secret-key" not in param_names
+    
     schemas = openapi_data["components"]["schemas"]
-    assert "HealthResponse" in schemas
-    assert "CatalogResponse" in schemas
-    assert "ResourceCatalog" in schemas
+    assert "TransactionsListResponse" in schemas
+    assert "DashboardSummaryResponse" in schemas

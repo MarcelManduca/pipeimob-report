@@ -88,6 +88,43 @@ A documentação interativa do Swagger OpenAPI estará disponível em: `http://l
 
 ---
 
+## 📊 Endpoints de Transações e BI (Business Intelligence)
+
+O backend possui suporte a **modo dual**:
+1. **Live Mode:** As transações são buscadas em tempo real da API V2 do Pipeimob de forma paralela. As chaves de acesso (`PIPEIMOB_API_KEY` e `PIPEIMOB_SECRET_KEY`) são carregadas exclusivamente das variáveis de ambiente configuradas de forma segura no servidor (Render) ou no arquivo `.env` local. **Nenhum cabeçalho HTTP (como X-API-Key ou X-Secret-Key) ou parâmetro de requisição é aceito para envio de credenciais por segurança.**
+2. **Mock Mode (Fallback):** Caso não haja credenciais, o servidor retorna um conjunto de **60 negócios simulados** contendo dados demográficos e corretores fictícios estruturados de forma anônima, ideal para o desenvolvimento local do frontend no Lovable.
+
+### Filtros Comuns (Query Parameters)
+Todas as rotas de listagem e BI suportam os seguintes filtros opcionais:
+- `start_date`: Data mínima de início da venda (`YYYY-MM-DD`).
+- `end_date`: Data máxima de encerramento (`YYYY-MM-DD`).
+- `agent`: Filtro case-insensitive pelo nome do corretor (`agente_gestor`).
+- `category`: Categoria do imóvel (`categoria_crm`).
+- `financing`: Boleano (`true`/`false`) para filtrar se houve financiamento bancário.
+
+### Relação de Endpoints
+
+* **Listar Transações:** `GET /api/transactions`
+  * Retorna o JSON completo com a lista de transações filtradas.
+* **Detalhar Transação:** `GET /api/transactions/{id}`
+  * Detalha uma única transação buscando por `transacao_unique_id_pipeimob` ou `codigo_contrato`.
+* **Métricas Gerais (KPIs):** `GET /api/dashboard/summary`
+  * Vendas totais, comissões acumuladas, comissão média em % e total de contratos.
+* **Mídias de Origem:** `GET /api/dashboard/origins`
+  * Contagem e volume financeiro agrupados por canal de captação (`midia_origem_compradores`).
+* **Etapas do Funil:** `GET /api/dashboard/stages`
+  * Agrupamento por etapa atual do negócio (`etapa_atual`).
+* **Líderes de Equipe:** `GET /api/dashboard/managers`
+  * Ranking de corretores por vendas, ticket médio e negócios fechados.
+* **Meios de Pagamento:** `GET /api/dashboard/payments`
+  * Distribuição de bancos de financiamento, percentual de financiamento vs direto e formas de parcelamento.
+* **Análise de Comissões:** `GET /api/dashboard/commissions`
+  * Lista detalhada das taxas de comissão por contrato e média global.
+* **Linha do Tempo (Timelines):** `GET /api/dashboard/timeline`
+  * Progresso cronológico mensal do volume e quantidade de vendas (ex: `Jan/26`, `Fev/26`).
+
+---
+
 ## 🛡️ Política de CORS (Cross-Origin Resource Sharing)
 
 A segurança de origens cruzadas é gerenciada de forma estrita:
@@ -99,15 +136,15 @@ A segurança de origens cruzadas é gerenciada de forma estrita:
 
 ## ⚙️ Testes Automatizados
 
-Para executar os testes de integridade, CORS, catálogo e schemas do OpenAPI, utilize o pytest:
+Para executar os testes de integridade, CORS, catálogo, transações e BI analítico, execute:
 ```bash
 pytest
 ```
 
 ---
 
-## ⚠️ Limitações Atuais e Autenticação Pendente
+## ⚠️ Limitações Atuais e Status de Integração
 
-Nesta primeira etapa, o backend foca em entregar o catálogo e o health check estáveis para o Lovable. 
-* **Autenticação:** A autenticação com o CRM Pipeimob está marcada como **Pendente** no catálogo. Nenhuma chamada real é feita nesta etapa.
-* **Endpoint Pipeimob:** O endpoint definitivo está marcado como `null` devido a divergências de mapeamento técnico pendentes de resolução entre `/api/v2/negocios/transacoes` e `/api/v2/transacoes`.
+* **Autenticação:** A autenticação com o CRM Pipeimob está marcada como **Pendente** por padrão até a definição das chaves no `.env`.
+* **Endpoint Pipeimob:** O endpoint definitivo de transações está marcado como `null` no catálogo devido a divergências técnicas de mapeamento no Pipeimob entre `/api/v2/negocios/transacoes` e `/api/v2/transacoes`.
+
