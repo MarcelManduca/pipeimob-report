@@ -89,9 +89,9 @@ def test_get_catalog_returns_transactions_resource():
     assert resource["name"] == "Transações"
     assert resource["backend_endpoint"] == "/api/transactions"
     assert resource["pipeimob_endpoint"] == "/api/v2/negocios/transacoes"
-    assert resource["status"] == "validated_live"
+    assert resource["status"] == "implemented_pending_live_validation"
     assert resource["implemented"] is True
-    assert resource["validated"] is True
+    assert resource["validated"] is False
     assert resource["primary_key"] == "transacao_unique_id_pipeimob"
 
 def test_get_catalog_contains_expected_fields():
@@ -349,20 +349,20 @@ def test_catalog_status_states():
     # 1. Demo Mode
     os.environ["PIPEIMOB_DATA_MODE"] = "demo"
     response = client.get("/api/catalog")
-    assert response.json()["resources"][0]["status"] == "validated_live"
+    assert response.json()["resources"][0]["status"] == "implemented_pending_live_validation"
     
     # 2. Live Mode (no credentials)
     os.environ["PIPEIMOB_DATA_MODE"] = "live"
     os.environ.pop("PIPEIMOB_API_KEY", None)
     os.environ.pop("PIPEIMOB_SECRET_KEY", None)
     response = client.get("/api/catalog")
-    assert response.json()["resources"][0]["status"] == "validated_live"
+    assert response.json()["resources"][0]["status"] == "implemented_pending_live_validation"
     
     # 3. Unconfigured Mode (production)
     os.environ["APP_ENV"] = "production"
     os.environ.pop("PIPEIMOB_DATA_MODE", None)
     response = client.get("/api/catalog")
-    assert response.json()["resources"][0]["status"] == "validated_live"
+    assert response.json()["resources"][0]["status"] == "implemented_pending_live_validation"
     os.environ["APP_ENV"] = "development"
     
     # 4. Live Mode (with credentials configured)
@@ -370,7 +370,7 @@ def test_catalog_status_states():
     os.environ["PIPEIMOB_API_KEY"] = "fake_key"
     os.environ["PIPEIMOB_SECRET_KEY"] = "fake_secret"
     response = client.get("/api/catalog")
-    assert response.json()["resources"][0]["status"] == "validated_live"
+    assert response.json()["resources"][0]["status"] == "implemented_pending_live_validation"
 
 from unittest.mock import patch, MagicMock
 
@@ -1002,3 +1002,48 @@ def test_disallowed_algorithm_returns_401(mock_get_jwk_client):
         assert "Invalid or expired access token." in res.json()["detail"]
     finally:
         os.environ.pop("SUPABASE_JWKS_URL", None)
+
+def test_antifallback_live_mode_uses_mock_fails():
+    import pytest
+    from fastapi import HTTPException
+    from main import validate_dataset_origin
+    from mock_data import MOCK_TRANSACTIONS
+    with pytest.raises(HTTPException) as exc_info:
+        validate_dataset_origin("live", "pipeimob_api_v2", MOCK_TRANSACTIONS)
+    assert exc_info.value.status_code == 500
+    assert "Mock data detected in live dataset" in exc_info.value.detail
+
+def test_antifallback_source_mismatch_fails():
+    import pytest
+    from fastapi import HTTPException
+    from main import validate_dataset_origin
+    # If mode is live but source is synthetic_mock, should fail
+    with pytest.raises(HTTPException) as exc_info:
+        validate_dataset_origin("live", "synthetic_mock", [])
+    assert exc_info.value.status_code == 500
+    assert "Data source mismatch" in exc_info.value.detail
+
+def test_antifallback_api_exception_does_not_silently_fallback_to_mock():
+    os.environ["PIPEIMOB_DATA_MODE"] = "live"
+    os.environ["PIPEIMOB_API_KEY"] = "fake_key"
+    os.environ["PIPEIMOB_SECRET_KEY"] = "fake_secret"
+    
+    with patch("urllib.request.urlopen", side_effect=Exception("API connection failed")):
+        response = client.get("/api/transactions?data_inicio_criacao=2026-01-01")
+        assert response.status_code == 503
+        assert "is temporarily unavailable" in response.json()["detail"] or "failed" in response.json()["detail"].lower()
+
+def test_antifallback_production_mode_imports_mock():
+    import pytest
+    from fastapi import HTTPException
+    from main import validate_dataset_origin
+    os.environ["APP_ENV"] = "production"
+    os.environ["PIPEIMOB_DATA_MODE"] = "live"
+    
+    with pytest.raises(HTTPException) as exc_info:
+        validate_dataset_origin("demo", "synthetic_mock", [])
+    assert exc_info.value.status_code == 500
+    assert "Critical failure: Live mode in production cannot use mock data" in exc_info.value.detail
+    
+    os.environ["APP_ENV"] = "development"
+

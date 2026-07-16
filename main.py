@@ -20,8 +20,7 @@ class TokenCache:
 
 token_cache = TokenCache()
 
-# Import our synthetic anonymous mock database
-from mock_data import MOCK_TRANSACTIONS
+# Mock data will be imported locally inside load_transactions_dataset to avoid any global access.
 
 # Load environment variables
 load_dotenv()
@@ -352,7 +351,45 @@ def get_current_data_mode_and_connection() -> tuple:
     else:
         return "unconfigured", "pending_configuration"
 
-# Master dataset loader helper (with strict mode verification)
+def validate_dataset_origin(mode: str, source: str, dataset: list):
+    app_env = os.getenv("APP_ENV", "production").lower()
+    data_mode_env = os.getenv("PIPEIMOB_DATA_MODE")
+    
+    # 1. Production + Live check
+    if app_env == "production" and data_mode_env == "live":
+        if mode != "live" or source != "pipeimob_api_v2":
+            raise HTTPException(
+                status_code=500,
+                detail="Critical failure: Live mode in production cannot use mock data or non-live source."
+            )
+            
+    # 2. Strict matching rules
+    if mode == "live":
+        if source != "pipeimob_api_v2":
+            raise HTTPException(
+                status_code=500,
+                detail="Data source mismatch: Live mode requires 'pipeimob_api_v2' source."
+            )
+        # Ensure no mock transaction IDs exist in live dataset
+        for tx in dataset:
+            tx_id = str(tx.get("transacao_unique_id_pipeimob") or "")
+            if tx_id.startswith("tx_demo_"):
+                raise HTTPException(
+                    status_code=500,
+                    detail="Critical security policy violation: Mock data detected in live dataset."
+                )
+    elif mode == "demo":
+        if source != "synthetic_mock":
+            raise HTTPException(
+                status_code=500,
+                detail="Data source mismatch: Demo mode requires 'synthetic_mock' source."
+            )
+    else:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unsupported active data mode: {mode}"
+        )
+
 def load_transactions_dataset(
     data_inicio_criacao: Optional[str] = None,
     data_fim_criacao: Optional[str] = None,
@@ -363,7 +400,8 @@ def load_transactions_dataset(
     codigo_imovel: Optional[str] = None,
     codigo_contrato: Optional[str] = None,
     transacao_unique_id: Optional[str] = None,
-    pagina: Optional[int] = None
+    pagina: Optional[int] = None,
+    request_id: Optional[str] = None
 ) -> tuple:
     data_mode, conn_status = get_current_data_mode_and_connection()
     
@@ -376,8 +414,31 @@ def load_transactions_dataset(
             pipeimob_connection="pending_configuration"
         )
         
+    import uuid
+    periodo = {
+        "data_inicio_criacao": data_inicio_criacao,
+        "data_fim_criacao": data_fim_criacao,
+        "data_inicio_ccv": data_inicio_ccv,
+        "data_fim_ccv": data_fim_ccv,
+        "data_arquivamento_inicio": data_arquivamento_inicio,
+        "data_arquivamento_fim": data_arquivamento_fim
+    }
+        
     if data_mode == "demo":
-        return "demo", "synthetic_mock", MOCK_TRANSACTIONS
+        from mock_data import MOCK_TRANSACTIONS
+        dataset = MOCK_TRANSACTIONS
+        
+        # Secure log print
+        log_msg = {
+            "event": "dataset_loaded",
+            "dataset_origin": "synthetic_mock",
+            "record_count": len(dataset),
+            "pagina_consultada": pagina or 1,
+            "periodo_consultado": {k: v for k, v in periodo.items() if v is not None},
+            "correlation_id": request_id or str(uuid.uuid4())
+        }
+        print(f"SECURE_LOG: {json.dumps(log_msg)}")
+        return "demo", "synthetic_mock", dataset
         
     # Live mode: validate that at least one direct filter is present.
     # The 'pagina' parameter is a pagination parameter and does NOT satisfy this requirement on its own.
@@ -448,6 +509,16 @@ def load_transactions_dataset(
                 comm_imob += float(val)
         tx["comissao_imobiliaria"] = comm_imob
         
+    # Secure log print
+    log_msg = {
+        "event": "dataset_loaded",
+        "dataset_origin": "pipeimob_api_v2",
+        "record_count": len(live_txs),
+        "pagina_consultada": pagina or 1,
+        "periodo_consultado": {k: v for k, v in periodo.items() if v is not None},
+        "correlation_id": request_id or str(uuid.uuid4())
+    }
+    print(f"SECURE_LOG: {json.dumps(log_msg)}")
     return "live", "pipeimob_api_v2", live_txs
 
 # Apply filters locally on loaded dataset
@@ -1290,9 +1361,9 @@ async def get_catalog():
         name="Transações",
         backend_endpoint="/api/transactions",
         pipeimob_endpoint="/api/v2/negocios/transacoes",
-        status="validated_live",
+        status="implemented_pending_live_validation",
         implemented=True,
-        validated=True,
+        validated=False,
         description="Transações comerciais do Pipeimob",
         primary_key="transacao_unique_id_pipeimob",
         available_fields=[
@@ -1534,6 +1605,7 @@ async def verify_backend_api_key(
 )
 async def get_transactions(
     response: Response,
+    request: Request,
     data_inicio_criacao: Optional[str] = Query(None),
     data_fim_criacao: Optional[str] = Query(None),
     data_inicio_ccv: Optional[str] = Query(None),
@@ -1549,11 +1621,13 @@ async def get_transactions(
     financing: Optional[bool] = Query(None),
     etapa_atual: Optional[str] = Query(None)
 ):
+    req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
     mode, src, dataset = load_transactions_dataset(
         data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
-        pagina
+        pagina, request_id=req_id
     )
+    validate_dataset_origin(mode, src, dataset)
     filtered = get_filtered_transactions(
         dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
@@ -1577,10 +1651,13 @@ async def get_transactions(
 )
 async def get_transaction_by_id(
     id: str,
-    response: Response
+    response: Response,
+    request: Request
 ):
+    req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
     # In live mode we must pass at least one direct filter, so we pass both or try to load by transacao_unique_id or codigo_contrato
-    mode, src, dataset = load_transactions_dataset(transacao_unique_id=id)
+    mode, src, dataset = load_transactions_dataset(transacao_unique_id=id, request_id=req_id)
+    validate_dataset_origin(mode, src, dataset)
     
     target_tx = None
     for tx in dataset:
@@ -1590,7 +1667,8 @@ async def get_transaction_by_id(
             
     if not target_tx:
         try:
-            mode, src, dataset = load_transactions_dataset(codigo_contrato=id)
+            mode, src, dataset = load_transactions_dataset(codigo_contrato=id, request_id=req_id)
+            validate_dataset_origin(mode, src, dataset)
             for tx in dataset:
                 if tx.get("transacao_unique_id_pipeimob") == id or tx.get("codigo_contrato") == id:
                     target_tx = tx
@@ -1619,6 +1697,7 @@ async def get_transaction_by_id(
 )
 async def get_dashboard_summary(
     response: Response,
+    request: Request,
     data_inicio_criacao: Optional[str] = Query(None),
     data_fim_criacao: Optional[str] = Query(None),
     data_inicio_ccv: Optional[str] = Query(None),
@@ -1634,11 +1713,13 @@ async def get_dashboard_summary(
     financing: Optional[bool] = Query(None),
     etapa_atual: Optional[str] = Query(None)
 ):
+    req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
     mode, src, dataset = load_transactions_dataset(
         data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
-        pagina
+        pagina, request_id=req_id
     )
+    validate_dataset_origin(mode, src, dataset)
     filtered = get_filtered_transactions(
         dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
@@ -1669,6 +1750,7 @@ async def get_dashboard_summary(
 )
 async def get_dashboard_origins(
     response: Response,
+    request: Request,
     data_inicio_criacao: Optional[str] = Query(None),
     data_fim_criacao: Optional[str] = Query(None),
     data_inicio_ccv: Optional[str] = Query(None),
@@ -1684,11 +1766,13 @@ async def get_dashboard_origins(
     financing: Optional[bool] = Query(None),
     etapa_atual: Optional[str] = Query(None)
 ):
+    req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
     mode, src, dataset = load_transactions_dataset(
         data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
-        pagina
+        pagina, request_id=req_id
     )
+    validate_dataset_origin(mode, src, dataset)
     filtered = get_filtered_transactions(
         dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
@@ -1725,6 +1809,7 @@ async def get_dashboard_origins(
 )
 async def get_dashboard_stages(
     response: Response,
+    request: Request,
     data_inicio_criacao: Optional[str] = Query(None),
     data_fim_criacao: Optional[str] = Query(None),
     data_inicio_ccv: Optional[str] = Query(None),
@@ -1740,11 +1825,13 @@ async def get_dashboard_stages(
     financing: Optional[bool] = Query(None),
     etapa_atual: Optional[str] = Query(None)
 ):
+    req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
     mode, src, dataset = load_transactions_dataset(
         data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
-        pagina
+        pagina, request_id=req_id
     )
+    validate_dataset_origin(mode, src, dataset)
     filtered = get_filtered_transactions(
         dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
@@ -1781,6 +1868,7 @@ async def get_dashboard_stages(
 )
 async def get_dashboard_managers(
     response: Response,
+    request: Request,
     data_inicio_criacao: Optional[str] = Query(None),
     data_fim_criacao: Optional[str] = Query(None),
     data_inicio_ccv: Optional[str] = Query(None),
@@ -1796,11 +1884,13 @@ async def get_dashboard_managers(
     financing: Optional[bool] = Query(None),
     etapa_atual: Optional[str] = Query(None)
 ):
+    req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
     mode, src, dataset = load_transactions_dataset(
         data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
-        pagina
+        pagina, request_id=req_id
     )
+    validate_dataset_origin(mode, src, dataset)
     filtered = get_filtered_transactions(
         dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
@@ -1844,6 +1934,7 @@ async def get_dashboard_managers(
 )
 async def get_dashboard_payments(
     response: Response,
+    request: Request,
     data_inicio_criacao: Optional[str] = Query(None),
     data_fim_criacao: Optional[str] = Query(None),
     data_inicio_ccv: Optional[str] = Query(None),
@@ -1859,11 +1950,13 @@ async def get_dashboard_payments(
     financing: Optional[bool] = Query(None),
     etapa_atual: Optional[str] = Query(None)
 ):
+    req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
     mode, src, dataset = load_transactions_dataset(
         data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
-        pagina
+        pagina, request_id=req_id
     )
+    validate_dataset_origin(mode, src, dataset)
     filtered = get_filtered_transactions(
         dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
@@ -1930,6 +2023,7 @@ async def get_dashboard_payments(
 )
 async def get_dashboard_commissions(
     response: Response,
+    request: Request,
     data_inicio_criacao: Optional[str] = Query(None),
     data_fim_criacao: Optional[str] = Query(None),
     data_inicio_ccv: Optional[str] = Query(None),
@@ -1945,11 +2039,13 @@ async def get_dashboard_commissions(
     financing: Optional[bool] = Query(None),
     etapa_atual: Optional[str] = Query(None)
 ):
+    req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
     mode, src, dataset = load_transactions_dataset(
         data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
-        pagina
+        pagina, request_id=req_id
     )
+    validate_dataset_origin(mode, src, dataset)
     filtered = get_filtered_transactions(
         dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
@@ -2005,6 +2101,7 @@ MONTHS_PT = {
 )
 async def get_dashboard_timeline(
     response: Response,
+    request: Request,
     data_inicio_criacao: Optional[str] = Query(None),
     data_fim_criacao: Optional[str] = Query(None),
     data_inicio_ccv: Optional[str] = Query(None),
@@ -2020,11 +2117,13 @@ async def get_dashboard_timeline(
     financing: Optional[bool] = Query(None),
     etapa_atual: Optional[str] = Query(None)
 ):
+    req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
     mode, src, dataset = load_transactions_dataset(
         data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
-        pagina
+        pagina, request_id=req_id
     )
+    validate_dataset_origin(mode, src, dataset)
     filtered = get_filtered_transactions(
         dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
