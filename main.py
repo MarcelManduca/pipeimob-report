@@ -1474,14 +1474,53 @@ async def verify_backend_api_key(
             )
             
         if jwks_url:
+            # 1. Pre-verify token structure and kid header if JWKS is used
             try:
-                client = get_jwk_client()
-                signing_key = client.get_signing_key_from_jwt(token)
+                header = jwt.get_unverified_header(token)
+                if not isinstance(header, dict) or "kid" not in header:
+                    raise AuthException(
+                        status_code=401,
+                        detail="Invalid or expired access token.",
+                        error_code="invalid_access_token"
+                    )
+            except Exception:
+                raise AuthException(
+                    status_code=401,
+                    detail="Invalid or expired access token.",
+                    error_code="invalid_access_token"
+                )
+                
+            from jwt.exceptions import PyJWKClientConnectionError
+            client = get_jwk_client()
+            try:
+                jwk_set = client.get_jwk_set()
+            except PyJWKClientConnectionError:
+                raise AuthException(
+                    status_code=503,
+                    detail="Supabase project does not expose asymmetric JWT signing keys.",
+                    error_code="supabase_jwks_unavailable"
+                )
             except Exception:
                 raise AuthException(
                     status_code=503,
                     detail="Supabase project does not expose asymmetric JWT signing keys.",
                     error_code="supabase_jwks_unavailable"
+                )
+                
+            if not jwk_set.keys:
+                raise AuthException(
+                    status_code=503,
+                    detail="Supabase project does not expose asymmetric JWT signing keys.",
+                    error_code="supabase_jwks_unavailable"
+                )
+                
+            try:
+                signing_key = client.get_signing_key_from_jwt(token)
+            except Exception:
+                raise AuthException(
+                    status_code=401,
+                    detail="Invalid or expired access token.",
+                    error_code="invalid_access_token"
                 )
             
             aud = os.getenv("SUPABASE_JWT_AUDIENCE", "authenticated")

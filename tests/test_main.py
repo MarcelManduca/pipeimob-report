@@ -24,7 +24,8 @@ def create_mock_jwt(
     aud="authenticated",
     role="authenticated",
     sub="mock_user_123",
-    alg="HS256"
+    alg="HS256",
+    headers={"kid": "mock_kid"}
 ):
     payload = {
         "email": email,
@@ -36,7 +37,7 @@ def create_mock_jwt(
     }
     # Filter out None values to test missing claims
     payload = {k: v for k, v in payload.items() if v is not None}
-    return jwt.encode(payload, "secret", algorithm=alg)
+    return jwt.encode(payload, "secret", algorithm=alg, headers=headers)
 
 mock_token = create_mock_jwt()
 
@@ -1046,4 +1047,139 @@ def test_antifallback_production_mode_imports_mock():
     assert "Critical failure: Live mode in production cannot use mock data" in exc_info.value.detail
     
     os.environ["APP_ENV"] = "development"
+
+@patch("main.get_jwk_client")
+def test_jwt_kid_desconhecido_retorna_401(mock_get_jwk_client):
+    os.environ["SUPABASE_JWKS_URL"] = "https://mock.supabase.co/auth/v1/.well-known/jwks.json"
+    os.environ["PIPEIMOB_DATA_MODE"] = "demo"
+    try:
+        mock_client = MagicMock()
+        mock_key = MagicMock()
+        mock_key.kid = "some_valid_kid"
+        mock_jwk_set = MagicMock()
+        mock_jwk_set.keys = [mock_key]
+        mock_client.get_jwk_set.return_value = mock_jwk_set
+        mock_client.get_signing_key_from_jwt.side_effect = Exception("Signing key not found")
+        mock_get_jwk_client.return_value = mock_client
+        
+        token = create_mock_jwt()
+        test_client = TestClient(app, headers={"Authorization": f"Bearer {token}"})
+        res = test_client.get("/api/dashboard/summary")
+        assert res.status_code == 401
+        assert "Invalid or expired access token." in res.json()["detail"]
+    finally:
+        os.environ.pop("SUPABASE_JWKS_URL", None)
+
+def test_jwt_token_aleatorio_retorna_401():
+    os.environ["SUPABASE_JWKS_URL"] = "https://mock.supabase.co/auth/v1/.well-known/jwks.json"
+    try:
+        test_client = TestClient(app, headers={"Authorization": "Bearer random_string_xyz"})
+        res = test_client.get("/api/dashboard/summary")
+        assert res.status_code == 401
+        assert "Invalid or expired access token." in res.json()["detail"]
+    finally:
+        os.environ.pop("SUPABASE_JWKS_URL", None)
+
+@patch("main.get_jwk_client")
+def test_jwt_assinatura_invalida_retorna_401(mock_get_jwk_client):
+    os.environ["SUPABASE_JWKS_URL"] = "https://mock.supabase.co/auth/v1/.well-known/jwks.json"
+    try:
+        mock_client = MagicMock()
+        mock_key = MagicMock()
+        mock_key.kid = "mock_kid"
+        mock_key.key = "dummy_public_key_which_fails_verification"
+        mock_jwk_set = MagicMock()
+        mock_jwk_set.keys = [mock_key]
+        mock_client.get_jwk_set.return_value = mock_jwk_set
+        mock_client.get_signing_key_from_jwt.return_value = mock_key
+        mock_get_jwk_client.return_value = mock_client
+        
+        token = create_mock_jwt()
+        test_client = TestClient(app, headers={"Authorization": f"Bearer {token}"})
+        res = test_client.get("/api/dashboard/summary")
+        assert res.status_code == 401
+        assert "Invalid or expired access token." in res.json()["detail"]
+    finally:
+        os.environ.pop("SUPABASE_JWKS_URL", None)
+
+@patch("main.get_jwk_client")
+def test_jwks_offline_retorna_503(mock_get_jwk_client):
+    from jwt.exceptions import PyJWKClientConnectionError
+    os.environ["SUPABASE_JWKS_URL"] = "https://mock.supabase.co/auth/v1/.well-known/jwks.json"
+    try:
+        mock_client = MagicMock()
+        mock_client.get_jwk_set.side_effect = PyJWKClientConnectionError("Connection timed out")
+        mock_get_jwk_client.return_value = mock_client
+        
+        token = create_mock_jwt()
+        test_client = TestClient(app, headers={"Authorization": f"Bearer {token}"})
+        res = test_client.get("/api/dashboard/summary")
+        assert res.status_code == 503
+        assert res.json()["error_code"] == "supabase_jwks_unavailable"
+    finally:
+        os.environ.pop("SUPABASE_JWKS_URL", None)
+
+@patch("main.get_jwk_client")
+def test_jwks_vazio_retorna_503(mock_get_jwk_client):
+    os.environ["SUPABASE_JWKS_URL"] = "https://mock.supabase.co/auth/v1/.well-known/jwks.json"
+    try:
+        mock_client = MagicMock()
+        mock_jwk_set = MagicMock()
+        mock_jwk_set.keys = []
+        mock_client.get_jwk_set.return_value = mock_jwk_set
+        mock_get_jwk_client.return_value = mock_client
+        
+        token = create_mock_jwt()
+        test_client = TestClient(app, headers={"Authorization": f"Bearer {token}"})
+        res = test_client.get("/api/dashboard/summary")
+        assert res.status_code == 503
+        assert res.json()["error_code"] == "supabase_jwks_unavailable"
+    finally:
+        os.environ.pop("SUPABASE_JWKS_URL", None)
+
+@patch("main.get_jwk_client")
+@patch("jwt.decode")
+def test_jwt_valido_retorna_200(mock_jwt_decode, mock_get_jwk_client):
+    os.environ["SUPABASE_JWKS_URL"] = "https://mock.supabase.co/auth/v1/.well-known/jwks.json"
+    os.environ["PIPEIMOB_DATA_MODE"] = "demo"
+    try:
+        mock_client = MagicMock()
+        mock_key = MagicMock()
+        mock_key.kid = "mock_kid"
+        mock_key.key = "dummy_public_key"
+        mock_jwk_set = MagicMock()
+        mock_jwk_set.keys = [mock_key]
+        mock_client.get_jwk_set.return_value = mock_jwk_set
+        mock_client.get_signing_key_from_jwt.return_value = mock_key
+        mock_get_jwk_client.return_value = mock_client
+        
+        mock_jwt_decode.return_value = {
+            "email": "corretor@gralhaimoveis.com.br",
+            "sub": "mock_user_123",
+            "aud": "authenticated",
+            "role": "authenticated",
+            "iss": "https://mock.supabase.co/auth/v1",
+            "exp": time.time() + 3600
+        }
+        
+        token = create_mock_jwt()
+        test_client = TestClient(app, headers={"Authorization": f"Bearer {token}"})
+        res = test_client.get("/api/dashboard/summary")
+        assert res.status_code == 200
+    finally:
+        os.environ.pop("SUPABASE_JWKS_URL", None)
+
+def test_jwt_sem_kid_retorna_401():
+    os.environ["SUPABASE_JWKS_URL"] = "https://mock.supabase.co/auth/v1/.well-known/jwks.json"
+    try:
+        # Create token without kid header
+        token = create_mock_jwt(headers={})
+        test_client = TestClient(app, headers={"Authorization": f"Bearer {token}"})
+        res = test_client.get("/api/dashboard/summary")
+        assert res.status_code == 401
+        assert "Invalid or expired access token." in res.json()["detail"]
+    finally:
+        os.environ.pop("SUPABASE_JWKS_URL", None)
+
+
 
