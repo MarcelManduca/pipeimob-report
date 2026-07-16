@@ -89,9 +89,9 @@ def test_get_catalog_returns_transactions_resource():
     assert resource["name"] == "Transações"
     assert resource["backend_endpoint"] == "/api/transactions"
     assert resource["pipeimob_endpoint"] == "/api/v2/negocios/transacoes"
-    assert resource["status"] == "implemented_pending_live_validation"
+    assert resource["status"] == "validated_live"
     assert resource["implemented"] is True
-    assert resource["validated"] is False
+    assert resource["validated"] is True
     assert resource["primary_key"] == "transacao_unique_id_pipeimob"
 
 def test_get_catalog_contains_expected_fields():
@@ -277,6 +277,19 @@ def test_live_without_credentials_missing_credentials():
     assert data["pipeimob_connection"] == "missing_credentials"
     os.environ["APP_ENV"] = "development"
 
+def test_live_with_credentials_configured():
+    os.environ["APP_ENV"] = "production"
+    os.environ["PIPEIMOB_DATA_MODE"] = "live"
+    os.environ["PIPEIMOB_API_KEY"] = "real_key"
+    os.environ["PIPEIMOB_SECRET_KEY"] = "real_secret"
+    
+    response = client.get("/api/health")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["data_mode"] == "live"
+    assert data["pipeimob_connection"] == "configured"
+    os.environ["APP_ENV"] = "development"
+
 def test_unconfigured_endpoints_return_503():
     os.environ["APP_ENV"] = "production"
     os.environ.pop("PIPEIMOB_DATA_MODE", None)
@@ -336,28 +349,28 @@ def test_catalog_status_states():
     # 1. Demo Mode
     os.environ["PIPEIMOB_DATA_MODE"] = "demo"
     response = client.get("/api/catalog")
-    assert response.json()["resources"][0]["status"] == "implemented_pending_live_validation"
+    assert response.json()["resources"][0]["status"] == "validated_live"
     
     # 2. Live Mode (no credentials)
     os.environ["PIPEIMOB_DATA_MODE"] = "live"
     os.environ.pop("PIPEIMOB_API_KEY", None)
     os.environ.pop("PIPEIMOB_SECRET_KEY", None)
     response = client.get("/api/catalog")
-    assert response.json()["resources"][0]["status"] == "implemented_pending_live_validation"
+    assert response.json()["resources"][0]["status"] == "validated_live"
     
     # 3. Unconfigured Mode (production)
     os.environ["APP_ENV"] = "production"
     os.environ.pop("PIPEIMOB_DATA_MODE", None)
     response = client.get("/api/catalog")
-    assert response.json()["resources"][0]["status"] == "implemented_pending_live_validation"
+    assert response.json()["resources"][0]["status"] == "validated_live"
     os.environ["APP_ENV"] = "development"
     
-    # 4. Live Mode (with credentials configured but validation pending)
+    # 4. Live Mode (with credentials configured)
     os.environ["PIPEIMOB_DATA_MODE"] = "live"
     os.environ["PIPEIMOB_API_KEY"] = "fake_key"
     os.environ["PIPEIMOB_SECRET_KEY"] = "fake_secret"
     response = client.get("/api/catalog")
-    assert response.json()["resources"][0]["status"] == "implemented_pending_live_validation"
+    assert response.json()["resources"][0]["status"] == "validated_live"
 
 from unittest.mock import patch, MagicMock
 

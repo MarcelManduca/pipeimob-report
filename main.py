@@ -341,7 +341,7 @@ def get_current_data_mode_and_connection() -> tuple:
         return "demo", "not_tested"
     elif data_mode_env == "live":
         if has_credentials:
-            return "live", "pending"
+            return "live", "configured"
         else:
             return "live", "missing_credentials"
     elif not data_mode_env:
@@ -1290,9 +1290,9 @@ async def get_catalog():
         name="Transações",
         backend_endpoint="/api/transactions",
         pipeimob_endpoint="/api/v2/negocios/transacoes",
-        status="implemented_pending_live_validation",
+        status="validated_live",
         implemented=True,
-        validated=False,
+        validated=True,
         description="Transações comerciais do Pipeimob",
         primary_key="transacao_unique_id_pipeimob",
         available_fields=[
@@ -1343,9 +1343,8 @@ async def get_catalog():
             "pagina"
         ],
         pending_items=[
-            "Validar a credencial real em produção (Live mode)",
-            "Validar o formato real do envelope de resposta e da paginação",
-            "Validar os totais calculados contra o relatório oficial exportado do CRM"
+            "etapa_atual é texto livre",
+            "agrupamentos por etapa exigem normalização local"
         ]
     )
     
