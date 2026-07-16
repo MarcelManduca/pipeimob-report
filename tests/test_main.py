@@ -1525,7 +1525,57 @@ def test_timeline_date_parsing_and_priority():
         assert "email" not in t
 
 
-
-
-
-
+def test_sanitize_transaction_preserves_operational_fields():
+    from main import sanitize_transaction
+    
+    raw_tx = {
+        "transacao_unique_id_pipeimob": "123",
+        "codigo_contrato": "CON-123",
+        "data_assinatura_ccv": "2026-05-15",
+        "data_ccv": "2026-05-15",
+        "data_assinatura": "2026-05-15",
+        "data_contrato": "2026-05-15",
+        "data_criacao": "2026-05-15",
+        "created_at": "2026-05-15T10:00:00Z",
+        "valor_contrato": 1500000.0,
+        "total_comissao": 75000.0,
+        "etapa_atual": "Fechamento",
+        "midia_origem_compradores": "Portal Imobiliário",
+        "agente_gestor": "Eduardo Nascimento",
+        "cpf_cliente": "123.456.789-00",
+        "email_cliente": "cliente@sensitive.com",
+        "celular_cliente": "11988887777",
+        "compradores": [
+            {"nome": "Comprador Secreto", "cpf": "123.456.789-00", "papel": "Comprador"}
+        ],
+        "vendedores": [
+            {"nome": "Vendedor Privado", "cnpj": "12.345.678/0001-99", "papel": "Vendedor"}
+        ],
+        "clientes": [
+            {"nome": "Cliente Privado", "papel": "Comprador"}
+        ]
+    }
+    
+    sanitized = sanitize_transaction(raw_tx)
+    
+    assert sanitized["transacao_unique_id_pipeimob"] == "123"
+    assert sanitized["codigo_contrato"] == "CON-123"
+    assert sanitized["data_assinatura_ccv"] == "2026-05-15"
+    assert sanitized["data_ccv"] == "2026-05-15"
+    assert sanitized["data_assinatura"] == "2026-05-15"
+    assert sanitized["data_contrato"] == "2026-05-15"
+    assert sanitized["data_criacao"] == "2026-05-15"
+    assert sanitized["created_at"] == "2026-05-15T10:00:00Z"
+    assert sanitized["valor_contrato"] == 1500000.0
+    assert sanitized["total_comissao"] == 75000.0
+    assert sanitized["etapa_atual"] == "Fechamento"
+    assert sanitized["midia_origem_compradores"] == "Portal Imobiliário"
+    assert sanitized["agente_gestor"] == "Eduardo Nascimento"
+    
+    assert sanitized["compradores"] == 1
+    assert sanitized["vendedores"] == 1
+    
+    assert "cpf_cliente" not in sanitized
+    assert "email_cliente" not in sanitized
+    assert "celular_cliente" not in sanitized
+    assert "clientes" not in sanitized

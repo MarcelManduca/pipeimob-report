@@ -1087,6 +1087,11 @@ def sanitize_transaction(tx: dict) -> dict:
         "codigo_imovel": tx.get("codigo_imovel"),
         "data_contrato": tx.get("data_contrato"),
         "data_inicio_venda": tx.get("data_inicio_venda"),
+        "data_assinatura_ccv": tx.get("data_assinatura_ccv"),
+        "data_ccv": tx.get("data_ccv"),
+        "data_assinatura": tx.get("data_assinatura"),
+        "data_criacao": tx.get("data_criacao"),
+        "created_at": tx.get("created_at"),
         "endereco_bairro": tx.get("endereco_bairro"),
         "endereco_cidade": tx.get("endereco_cidade"),
         "endereco_uf": tx.get("endereco_uf"),
@@ -1793,6 +1798,7 @@ class DashboardFullResponse(BaseModel):
     timeline: List[TimelineMetric]
     unclassified: UnclassifiedTimeline
     reconciliation: TimelineReconciliation
+    debug_metrics: Optional[dict] = None
 
 # Helper to format and add X-Data-Mode response headers
 def get_metadata_wrapper(data_mode: str, source: str):
@@ -2584,6 +2590,84 @@ async def get_dashboard_full(
     
     response.headers["X-Data-Mode"] = mode
     
+    debug_metrics = {}
+    if dataset:
+        debug_metrics["transaction_count"] = len(dataset)
+        
+        # 1. Top-level keys presence counts
+        top_keys_counts = {}
+        for tx in dataset:
+            for k in tx.keys():
+                top_keys_counts[k] = top_keys_counts.get(k, 0) + 1
+        debug_metrics["top_level_keys_counts"] = top_keys_counts
+        
+        # 2. Priority keys presence, types and validity counts
+        priority_keys = [
+            "data_assinatura_ccv",
+            "data_ccv",
+            "data_assinatura",
+            "data_contrato",
+            "data_criacao",
+            "created_at"
+        ]
+        
+        presence_counts = {}
+        type_counts = {}
+        parsed_successfully = 0
+        missing_count = 0
+        invalid_count = 0
+        
+        # Recurse checking
+        nested_paths_counts = {}
+        def check_nested(node, prefix_path=""):
+            if isinstance(node, dict):
+                for k, v in node.items():
+                    current_path = f"{prefix_path}.{k}" if prefix_path else k
+                    k_lower = k.lower()
+                    if any(term in k_lower for term in ["data", "ccv", "date", "created", "assinatura", "criacao"]):
+                        nested_paths_counts[current_path] = nested_paths_counts.get(current_path, 0) + 1
+                    check_nested(v, current_path)
+            elif isinstance(node, list):
+                for idx, item in enumerate(node):
+                    check_nested(item, f"{prefix_path}[{idx}]")
+                    
+        for tx in dataset:
+            check_nested(tx)
+            
+            for pk in priority_keys:
+                val = tx.get(pk)
+                if val is not None and val != "":
+                    presence_counts[pk] = presence_counts.get(pk, 0) + 1
+                    tname = type(val).__name__
+                    if pk not in type_counts:
+                        type_counts[pk] = {}
+                    type_counts[pk][tname] = type_counts[pk].get(tname, 0) + 1
+            
+            dt_str = extract_transaction_date(tx)
+            if dt_str:
+                ym = parse_date_to_year_month(dt_str)
+                if ym:
+                    parsed_successfully += 1
+                else:
+                    invalid_count += 1
+            else:
+                missing_count += 1
+                
+        debug_metrics["priority_keys_presence"] = presence_counts
+        debug_metrics["priority_keys_types"] = type_counts
+        debug_metrics["nested_paths_counts"] = nested_paths_counts
+        debug_metrics["parsed_successfully"] = parsed_successfully
+        debug_metrics["missing_count"] = missing_count
+        debug_metrics["invalid_count"] = invalid_count
+        
+        # 3. Stage counts validation
+        debug_metrics["stages_validation"] = {
+            "raw_count": len(dataset),
+            "normalized_count": len(dataset),
+            "sanitized_count": len([sanitize_transaction(tx) for tx in dataset]),
+            "aggregator_count": len(filtered)
+        }
+
     return DashboardFullResponse(
         data_mode=mode,
         source=src,
@@ -2598,5 +2682,6 @@ async def get_dashboard_full(
         commissions=CommissionsDataPayload(**aggregates["commissions"]),
         timeline=[TimelineMetric(**t) for t in aggregates["timeline"]],
         unclassified=UnclassifiedTimeline(**aggregates["unclassified"]),
-        reconciliation=TimelineReconciliation(**aggregates["reconciliation"])
+        reconciliation=TimelineReconciliation(**aggregates["reconciliation"]),
+        debug_metrics=debug_metrics
     )
