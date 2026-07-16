@@ -20,6 +20,33 @@ class TokenCache:
 
 token_cache = TokenCache()
 
+# Dashboard Cache in memory (5 min TTL)
+class DashboardCache:
+    def __init__(self):
+        from threading import Lock
+        self.cache = {}
+        self.lock = Lock()
+        
+    def get(self, key):
+        with self.lock:
+            if key in self.cache:
+                val, expires_at = self.cache[key]
+                if time.time() < expires_at:
+                    return val
+                else:
+                    del self.cache[key]
+            return None
+            
+    def set(self, key, val, ttl=300):
+        with self.lock:
+            self.cache[key] = (val, time.time() + ttl)
+
+    def clear(self):
+        with self.lock:
+            self.cache.clear()
+
+dashboard_cache = DashboardCache()
+
 # Mock data will be imported locally inside load_transactions_dataset to avoid any global access.
 
 # Load environment variables
@@ -188,8 +215,8 @@ def get_auth_token(api_key: str, api_secret: str, force_refresh: bool = False) -
             pipeimob_connection="unavailable"
         )
 
-# Live transaction page fetcher (concurrent thread execution)
-def fetch_all_transactions_live(
+# Live transaction sequential page fetcher
+def fetch_all_pipeimob_transactions(
     api_key: str, 
     api_secret: str, 
     data_inicio_criacao: Optional[str] = None,
@@ -200,12 +227,10 @@ def fetch_all_transactions_live(
     data_arquivamento_fim: Optional[str] = None,
     codigo_imovel: Optional[str] = None,
     codigo_contrato: Optional[str] = None,
-    transacao_unique_id: Optional[str] = None,
-    pagina: Optional[int] = None
-) -> list:
+    transacao_unique_id: Optional[str] = None
+) -> tuple:
     token = get_auth_token(api_key, api_secret)
     if not token:
-        # Fallback in case auth somehow passed without returning a token
         raise IntegrationUnavailableError(
             status_code=503,
             detail="Authentication succeeded but failed to retrieve access token.",
@@ -228,7 +253,6 @@ def fetch_all_transactions_live(
     query_str = "&".join(query_parts)
     prefix = f"&{query_str}" if query_str else ""
     
-    # We define a request helper that supports 401 retry exactly once
     def request_with_retry(url: str, retry_allowed: bool = True) -> dict:
         nonlocal token
         req = urllib.request.Request(
@@ -236,7 +260,7 @@ def fetch_all_transactions_live(
             headers={'Authorization': f'Bearer {token}', 'User-Agent': 'Mozilla/5.0'}
         )
         try:
-            with urllib.request.urlopen(req, context=ssl_context, timeout=8) as response:
+            with urllib.request.urlopen(req, context=ssl_context, timeout=12) as response:
                 res_body = json.loads(response.read().decode('utf-8'))
                 if not res_body.get("success"):
                     raise IntegrationUnavailableError(
@@ -249,7 +273,6 @@ def fetch_all_transactions_live(
                 return res_body
         except urllib.error.HTTPError as e:
             if e.code == 401 and retry_allowed:
-                # Force reauthentication once
                 token = get_auth_token(api_key, api_secret, force_refresh=True)
                 return request_with_retry(url, retry_allowed=False)
             raise IntegrationUnavailableError(
@@ -279,54 +302,53 @@ def fetch_all_transactions_live(
                 pipeimob_connection="unavailable"
             )
 
-    start_page = pagina if pagina is not None else 1
-    url_p1 = f"{BASE_URL}/negocios/transacoes?pagina={start_page}{prefix}"
-    res_body = request_with_retry(url_p1)
+    all_transactions = []
+    seen_ids = set()
+    current_page = 1
+    pages_fetched = 0
     
-    # Read transactions safely from response.data.transacoes
-    txs = res_body.get("data", {}).get("transacoes", []) if isinstance(res_body.get("data"), dict) else []
-    all_transactions = list(txs)
-    
-    # Read pagination metadata defensively:
-    # 1. response.meta.pagination
-    # 2. response.data.meta.pagination
-    meta_p = None
-    if "meta" in res_body and isinstance(res_body["meta"], dict) and "pagination" in res_body["meta"]:
-        meta_p = res_body["meta"]["pagination"]
-    elif "data" in res_body and isinstance(res_body["data"], dict) and "meta" in res_body["data"] and isinstance(res_body["data"]["meta"], dict) and "pagination" in res_body["data"]["meta"]:
-        meta_p = res_body["data"]["meta"]["pagination"]
+    while True:
+        if current_page > 100:  # Infinite loop protection
+            break
+            
+        url = f"{BASE_URL}/negocios/transacoes?pagina={current_page}{prefix}"
+        res_body = request_with_retry(url)
+        pages_fetched += 1
         
-    if meta_p is None:
-        raise IntegrationUnavailableError(
-            status_code=503,
-            detail="Pagination metadata (meta.pagination or data.meta.pagination) not found in Pipeimob response.",
-            error_code="invalid_pipeimob_response",
-            data_mode="live",
-            pipeimob_connection="unavailable"
-        )
+        txs = res_body.get("data", {}).get("transacoes", []) if isinstance(res_body.get("data"), dict) else []
         
-    total_pages = meta_p.get("total_pages") or 1
-
-    def fetch_page_worker(p):
-        url = f"{BASE_URL}/negocios/transacoes?pagina={p}{prefix}"
-        try:
-            body = request_with_retry(url, retry_allowed=True)
-            return body.get("data", {}).get("transacoes", []) if isinstance(body.get("data"), dict) else []
-        except Exception:
-            pass
-        return []
-
-    max_pages = 12
-    pages_to_fetch = range(start_page + 1, min(total_pages + 1, start_page + max_pages))
-    
-    if pages_to_fetch:
-        from concurrent.futures import ThreadPoolExecutor
-        with ThreadPoolExecutor(max_workers=len(pages_to_fetch)) as executor:
-            futures = [executor.submit(fetch_page_worker, p) for p in pages_to_fetch]
-            for fut in futures:
-                all_transactions.extend(fut.result())
+        for tx in txs:
+            tx_id = tx.get("transacao_unique_id_pipeimob")
+            if tx_id:
+                if tx_id not in seen_ids:
+                    seen_ids.add(tx_id)
+                    all_transactions.append(tx)
+            else:
+                all_transactions.append(tx)
                 
-    return all_transactions
+        meta_p = None
+        if "meta" in res_body and isinstance(res_body["meta"], dict) and "pagination" in res_body["meta"]:
+            meta_p = res_body["meta"]["pagination"]
+        elif "data" in res_body and isinstance(res_body["data"], dict) and "meta" in res_body["data"] and isinstance(res_body["data"]["meta"], dict) and "pagination" in res_body["data"]["meta"]:
+            meta_p = res_body["data"]["meta"]["pagination"]
+            
+        if meta_p is None:
+            raise IntegrationUnavailableError(
+                status_code=503,
+                detail="Pagination metadata not found in Pipeimob response.",
+                error_code="invalid_pipeimob_response",
+                data_mode="live",
+                pipeimob_connection="unavailable"
+            )
+            
+        last_page = meta_p.get("total_pages") or 1
+        
+        if current_page >= last_page:
+            break
+            
+        current_page += 1
+        
+    return all_transactions, pages_fetched
 
 def get_current_data_mode_and_connection() -> tuple:
     data_mode_env = os.getenv("PIPEIMOB_DATA_MODE")
@@ -438,10 +460,9 @@ def load_transactions_dataset(
             "correlation_id": request_id or str(uuid.uuid4())
         }
         print(f"SECURE_LOG: {json.dumps(log_msg)}")
-        return "demo", "synthetic_mock", dataset
+        return "demo", "synthetic_mock", dataset, 1
         
     # Live mode: validate that at least one direct filter is present.
-    # The 'pagina' parameter is a pagination parameter and does NOT satisfy this requirement on its own.
     has_direct_filter = any([
         data_inicio_criacao,
         data_fim_criacao,
@@ -469,10 +490,39 @@ def load_transactions_dataset(
             pipeimob_connection="missing_credentials"
         )
         
+    # 1. Check transient cache for this live query filters
+    cache_key = (
+        data_inicio_criacao, data_fim_criacao,
+        data_inicio_ccv, data_fim_ccv,
+        data_arquivamento_inicio, data_arquivamento_fim,
+        codigo_imovel, codigo_contrato, transacao_unique_id
+    )
+    
+    cached = dashboard_cache.get(cache_key)
+    if cached is not None:
+        live_txs, pages_fetched = cached
+        txs_to_return = live_txs
+        if pagina is not None:
+            start_idx = (pagina - 1) * 25
+            end_idx = start_idx + 25
+            txs_to_return = live_txs[start_idx:end_idx]
+            
+        # Secure log print
+        log_msg = {
+            "event": "dataset_loaded",
+            "dataset_origin": "pipeimob_api_v2_cache",
+            "record_count": len(txs_to_return),
+            "pagina_consultada": pagina or 1,
+            "periodo_consultado": {k: v for k, v in periodo.items() if v is not None},
+            "correlation_id": request_id or str(uuid.uuid4())
+        }
+        print(f"SECURE_LOG: {json.dumps(log_msg)}")
+        return "live", "pipeimob_api_v2", txs_to_return, pages_fetched
+
     api_key = os.getenv("PIPEIMOB_API_KEY").strip()
     api_secret = os.getenv("PIPEIMOB_SECRET_KEY").strip()
         
-    live_txs = fetch_all_transactions_live(
+    live_txs, pages_fetched = fetch_all_pipeimob_transactions(
         api_key=api_key,
         api_secret=api_secret,
         data_inicio_criacao=data_inicio_criacao,
@@ -483,8 +533,7 @@ def load_transactions_dataset(
         data_arquivamento_fim=data_arquivamento_fim,
         codigo_imovel=codigo_imovel,
         codigo_contrato=codigo_contrato,
-        transacao_unique_id=transacao_unique_id,
-        pagina=pagina
+        transacao_unique_id=transacao_unique_id
     )
     
     if not live_txs:
@@ -509,17 +558,26 @@ def load_transactions_dataset(
                 comm_imob += float(val)
         tx["comissao_imobiliaria"] = comm_imob
         
+    # Set cache
+    dashboard_cache.set(cache_key, (live_txs, pages_fetched))
+    
+    txs_to_return = live_txs
+    if pagina is not None:
+        start_idx = (pagina - 1) * 25
+        end_idx = start_idx + 25
+        txs_to_return = live_txs[start_idx:end_idx]
+        
     # Secure log print
     log_msg = {
         "event": "dataset_loaded",
         "dataset_origin": "pipeimob_api_v2",
-        "record_count": len(live_txs),
+        "record_count": len(txs_to_return),
         "pagina_consultada": pagina or 1,
         "periodo_consultado": {k: v for k, v in periodo.items() if v is not None},
         "correlation_id": request_id or str(uuid.uuid4())
     }
     print(f"SECURE_LOG: {json.dumps(log_msg)}")
-    return "live", "pipeimob_api_v2", live_txs
+    return "live", "pipeimob_api_v2", txs_to_return, pages_fetched
 
 # Apply filters locally on loaded dataset
 def get_filtered_transactions(
@@ -595,6 +653,189 @@ def get_filtered_transactions(
                 
         filtered.append(tx)
     return filtered
+
+def compute_dashboard_aggregates(filtered: list) -> dict:
+    from decimal import Decimal
+    
+    months_pt = {
+        "01": "Jan", "02": "Fev", "03": "Mar", "04": "Abr", "05": "Mai", "06": "Jun",
+        "07": "Jul", "08": "Ago", "09": "Set", "10": "Out", "11": "Nov", "12": "Dez"
+    }
+    
+    # 1. Summary
+    total_sales = Decimal("0.0")
+    total_commissions = Decimal("0.0")
+    for tx in filtered:
+        total_sales += Decimal(str(tx.get("valor_contrato") or "0.0"))
+        total_commissions += Decimal(str(tx.get("total_comissao") or "0.0"))
+    
+    avg_rate = float(round((total_commissions / total_sales) * 100, 2)) if total_sales > 0 else 0.0
+    
+    summary = {
+        "total_sales": float(round(total_sales, 2)),
+        "total_commissions": float(round(total_commissions, 2)),
+        "avg_commission_rate": avg_rate,
+        "transaction_count": len(filtered)
+    }
+    
+    # 2. Origins
+    origin_groups = {}
+    for tx in filtered:
+        origin = tx.get("midia_origem_compradores") or "Não Informado"
+        val = Decimal(str(tx.get("valor_contrato") or "0.0"))
+        if origin not in origin_groups:
+            origin_groups[origin] = {"volume": Decimal("0.0"), "count": 0}
+        origin_groups[origin]["volume"] += val
+        origin_groups[origin]["count"] += 1
+    origins = [
+        {"origin": o, "count": stats["count"], "volume": float(round(stats["volume"], 2))}
+        for o, stats in origin_groups.items()
+    ]
+    origins.sort(key=lambda x: x["volume"], reverse=True)
+    
+    # 3. Stages
+    stage_groups = {}
+    for tx in filtered:
+        stage = tx.get("etapa_atual") or "Sem Etapa"
+        val = Decimal(str(tx.get("valor_contrato") or "0.0"))
+        if stage not in stage_groups:
+            stage_groups[stage] = {"volume": Decimal("0.0"), "count": 0}
+        stage_groups[stage]["volume"] += val
+        stage_groups[stage]["count"] += 1
+    stages = [
+        {"stage": s, "count": stats["count"], "volume": float(round(stats["volume"], 2))}
+        for s, stats in stage_groups.items()
+    ]
+    stages.sort(key=lambda x: x["volume"], reverse=True)
+    
+    # 4. Managers
+    mgr_groups = {}
+    for tx in filtered:
+        mgr = tx.get("agente_gestor") or "Sem Gestor"
+        val = Decimal(str(tx.get("valor_contrato") or "0.0"))
+        if mgr not in mgr_groups:
+            mgr_groups[mgr] = {"volume": Decimal("0.0"), "count": 0}
+        mgr_groups[mgr]["volume"] += val
+        mgr_groups[mgr]["count"] += 1
+    managers = []
+    for mgr, stats in mgr_groups.items():
+        ticket = float(round(stats["volume"] / Decimal(str(stats["count"])), 2)) if stats["count"] > 0 else 0.0
+        managers.append({
+            "manager": mgr,
+            "count": stats["count"],
+            "volume": float(round(stats["volume"], 2)),
+            "ticket_medio": ticket
+        })
+    managers.sort(key=lambda x: x["volume"], reverse=True)
+    
+    # 5. Payments
+    financed_count = 0
+    cash_count = 0
+    bank_groups = {}
+    method_groups = {}
+    for tx in filtered:
+        is_fin = tx.get("financiamento", False)
+        val = Decimal(str(tx.get("valor_contrato") or "0.0"))
+        if is_fin:
+            financed_count += 1
+            bank = tx.get("financiamento_banco") or "Não Informado"
+            if bank not in bank_groups:
+                bank_groups[bank] = {"volume": Decimal("0.0"), "count": 0}
+            bank_groups[bank]["volume"] += val
+            bank_groups[bank]["count"] += 1
+        else:
+            cash_count += 1
+            
+        for fp in tx.get("forma_pagamento", []):
+            m_name = fp.get("nome") or "Outros"
+            m_val = Decimal(str(fp.get("valor") or "0.0"))
+            method_groups[m_name] = method_groups.get(m_name, Decimal("0.0")) + m_val
+            
+    total_deals = financed_count + cash_count
+    ratio = float(round((financed_count / total_deals) * 100, 2)) if total_deals > 0 else 0.0
+    banks = [
+        {"bank": b, "count": stats["count"], "volume": float(round(stats["volume"], 2))}
+        for b, stats in bank_groups.items()
+    ]
+    banks.sort(key=lambda x: x["volume"], reverse=True)
+    methods = [
+        {"method": m, "volume": float(round(v, 2))}
+        for m, v in method_groups.items()
+    ]
+    methods.sort(key=lambda x: x["volume"], reverse=True)
+    payments = {
+        "financed_count": financed_count,
+        "cash_count": cash_count,
+        "financing_ratio": ratio,
+        "banks": banks,
+        "methods": methods
+    }
+    
+    # 6. Commissions
+    commissions = []
+    total_comm = Decimal("0.0")
+    total_sales_comm = Decimal("0.0")
+    for tx in filtered:
+        val = Decimal(str(tx.get("valor_contrato") or "0.0"))
+        comm = Decimal(str(tx.get("total_comissao") or "0.0"))
+        rate = float(round((comm / val) * 100, 2)) if val > 0 else 0.0
+        total_comm += comm
+        total_sales_comm += val
+        commissions.append({
+            "transaction_id": tx.get("transacao_unique_id_pipeimob") or "",
+            "contract_code": tx.get("codigo_contrato") or "",
+            "value": float(round(val, 2)),
+            "commission": float(round(comm, 2)),
+            "rate": rate,
+            "manager": tx.get("agente_gestor") or "Sem Gestor"
+        })
+    avg_rate_comm = float(round((total_comm / total_sales_comm) * 100, 2)) if total_sales_comm > 0 else 0.0
+    commissions_payload = {
+        "total_commissions": float(round(total_comm, 2)),
+        "avg_commission_rate": avg_rate_comm,
+        "commissions": commissions
+    }
+    
+    # 7. Timeline
+    timeline_groups = {}
+    for tx in filtered:
+        tx_date_str = tx.get("data_inicio_venda") or tx.get("data_contrato") or ""
+        if not tx_date_str:
+            continue
+        try:
+            parts = tx_date_str.split("-")
+            if len(parts) >= 2:
+                key = f"{parts[0]}-{parts[1]}"
+                val = Decimal(str(tx.get("valor_contrato") or "0.0"))
+                if key not in timeline_groups:
+                    timeline_groups[key] = {"volume": Decimal("0.0"), "count": 0}
+                timeline_groups[key]["volume"] += val
+                timeline_groups[key]["count"] += 1
+        except Exception:
+            pass
+    sorted_keys = sorted(timeline_groups.keys())
+    timeline = []
+    for key in sorted_keys:
+        parts = key.split("-")
+        year = parts[0][-2:]
+        month = parts[1]
+        label = f"{months_pt.get(month, month)}/{year}"
+        timeline.append({
+            "month": label,
+            "volume": float(round(timeline_groups[key]["volume"], 2)),
+            "count": timeline_groups[key]["count"]
+        })
+        
+    return {
+        "summary": summary,
+        "origins": origins,
+        "stages": stages,
+        "managers": managers,
+        "payments": payments,
+        "commissions": commissions_payload,
+        "timeline": timeline
+    }
+
 
 
 def sanitize_transaction(tx: dict) -> dict:
@@ -1318,6 +1559,23 @@ class DashboardTimelineResponse(BaseModel):
         }
     }
 
+class DashboardPeriod(BaseModel):
+    start: Optional[str] = None
+    end: Optional[str] = None
+
+class DashboardFullResponse(BaseModel):
+    data_mode: str
+    source: str
+    period: DashboardPeriod
+    pages_fetched: int
+    transaction_count: int
+    summary: SummaryDataPayload
+    origins: List[OriginMetric]
+    stages: List[StageMetric]
+    managers: List[ManagerMetric]
+    payments: PaymentsDataPayload
+    commissions: CommissionsDataPayload
+    timeline: List[TimelineMetric]
 
 # Helper to format and add X-Data-Mode response headers
 def get_metadata_wrapper(data_mode: str, source: str):
@@ -1661,7 +1919,7 @@ async def get_transactions(
     etapa_atual: Optional[str] = Query(None)
 ):
     req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
-    mode, src, dataset = load_transactions_dataset(
+    mode, src, dataset, pages_fetched = load_transactions_dataset(
         data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
         pagina, request_id=req_id
@@ -1695,7 +1953,7 @@ async def get_transaction_by_id(
 ):
     req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
     # In live mode we must pass at least one direct filter, so we pass both or try to load by transacao_unique_id or codigo_contrato
-    mode, src, dataset = load_transactions_dataset(transacao_unique_id=id, request_id=req_id)
+    mode, src, dataset, pages_fetched = load_transactions_dataset(transacao_unique_id=id, request_id=req_id)
     validate_dataset_origin(mode, src, dataset)
     
     target_tx = None
@@ -1706,7 +1964,7 @@ async def get_transaction_by_id(
             
     if not target_tx:
         try:
-            mode, src, dataset = load_transactions_dataset(codigo_contrato=id, request_id=req_id)
+            mode, src, dataset, pages_fetched = load_transactions_dataset(codigo_contrato=id, request_id=req_id)
             validate_dataset_origin(mode, src, dataset)
             for tx in dataset:
                 if tx.get("transacao_unique_id_pipeimob") == id or tx.get("codigo_contrato") == id:
@@ -1753,10 +2011,10 @@ async def get_dashboard_summary(
     etapa_atual: Optional[str] = Query(None)
 ):
     req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
-    mode, src, dataset = load_transactions_dataset(
+    mode, src, dataset, pages_fetched = load_transactions_dataset(
         data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
-        pagina, request_id=req_id
+        pagina=None, request_id=req_id
     )
     validate_dataset_origin(mode, src, dataset)
     filtered = get_filtered_transactions(
@@ -1765,18 +2023,11 @@ async def get_dashboard_summary(
         agent, category, financing, etapa_atual
     )
     
-    total_sales = sum(float(tx.get("valor_contrato") or 0.0) for tx in filtered)
-    total_commissions = sum(float(tx.get("total_comissao") or 0.0) for tx in filtered)
-    avg_rate = float(round((total_commissions / total_sales) * 100, 2)) if total_sales > 0 else 0.0
+    aggregates = compute_dashboard_aggregates(filtered)
     
     response.headers["X-Data-Mode"] = mode
     meta = get_metadata_wrapper(mode, src)
-    meta["data"] = SummaryDataPayload(
-        total_sales=float(round(total_sales, 2)),
-        total_commissions=float(round(total_commissions, 2)),
-        avg_commission_rate=avg_rate,
-        transaction_count=len(filtered)
-    )
+    meta["data"] = SummaryDataPayload(**aggregates["summary"])
     return meta
 
 @app.get(
@@ -1806,10 +2057,10 @@ async def get_dashboard_origins(
     etapa_atual: Optional[str] = Query(None)
 ):
     req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
-    mode, src, dataset = load_transactions_dataset(
+    mode, src, dataset, pages_fetched = load_transactions_dataset(
         data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
-        pagina, request_id=req_id
+        pagina=None, request_id=req_id
     )
     validate_dataset_origin(mode, src, dataset)
     filtered = get_filtered_transactions(
@@ -1818,24 +2069,11 @@ async def get_dashboard_origins(
         agent, category, financing, etapa_atual
     )
     
-    groups = {}
-    for tx in filtered:
-        origin = tx.get("midia_origem_compradores") or "Não Informado"
-        val = float(tx.get("valor_contrato") or 0.0)
-        if origin not in groups:
-            groups[origin] = {"volume": 0.0, "count": 0}
-        groups[origin]["volume"] += val
-        groups[origin]["count"] += 1
-        
-    origins_list = [
-        OriginMetric(origin=o, count=stats["count"], volume=float(round(stats["volume"], 2)))
-        for o, stats in groups.items()
-    ]
-    origins_list.sort(key=lambda x: x.volume, reverse=True)
+    aggregates = compute_dashboard_aggregates(filtered)
     
     response.headers["X-Data-Mode"] = mode
     meta = get_metadata_wrapper(mode, src)
-    meta["data"] = OriginsDataPayload(origins=origins_list)
+    meta["data"] = OriginsDataPayload(origins=[OriginMetric(**o) for o in aggregates["origins"]])
     return meta
 
 @app.get(
@@ -1865,10 +2103,10 @@ async def get_dashboard_stages(
     etapa_atual: Optional[str] = Query(None)
 ):
     req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
-    mode, src, dataset = load_transactions_dataset(
+    mode, src, dataset, pages_fetched = load_transactions_dataset(
         data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
-        pagina, request_id=req_id
+        pagina=None, request_id=req_id
     )
     validate_dataset_origin(mode, src, dataset)
     filtered = get_filtered_transactions(
@@ -1877,24 +2115,11 @@ async def get_dashboard_stages(
         agent, category, financing, etapa_atual
     )
     
-    groups = {}
-    for tx in filtered:
-        stage = tx.get("etapa_atual") or "Sem Etapa"
-        val = float(tx.get("valor_contrato") or 0.0)
-        if stage not in groups:
-            groups[stage] = {"volume": 0.0, "count": 0}
-        groups[stage]["volume"] += val
-        groups[stage]["count"] += 1
-        
-    stages_list = [
-        StageMetric(stage=s, count=stats["count"], volume=float(round(stats["volume"], 2)))
-        for s, stats in groups.items()
-    ]
-    stages_list.sort(key=lambda x: x.volume, reverse=True)
+    aggregates = compute_dashboard_aggregates(filtered)
     
     response.headers["X-Data-Mode"] = mode
     meta = get_metadata_wrapper(mode, src)
-    meta["data"] = StagesDataPayload(stages=stages_list)
+    meta["data"] = StagesDataPayload(stages=[StageMetric(**s) for s in aggregates["stages"]])
     return meta
 
 @app.get(
@@ -1924,10 +2149,10 @@ async def get_dashboard_managers(
     etapa_atual: Optional[str] = Query(None)
 ):
     req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
-    mode, src, dataset = load_transactions_dataset(
+    mode, src, dataset, pages_fetched = load_transactions_dataset(
         data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
-        pagina, request_id=req_id
+        pagina=None, request_id=req_id
     )
     validate_dataset_origin(mode, src, dataset)
     filtered = get_filtered_transactions(
@@ -1936,31 +2161,11 @@ async def get_dashboard_managers(
         agent, category, financing, etapa_atual
     )
     
-    groups = {}
-    for tx in filtered:
-        mgr = tx.get("agente_gestor") or "Sem Gestor"
-        val = float(tx.get("valor_contrato") or 0.0)
-        if mgr not in groups:
-            groups[mgr] = {"volume": 0.0, "count": 0}
-        groups[mgr]["volume"] += val
-        groups[mgr]["count"] += 1
-        
-    managers_list = []
-    for mgr, stats in groups.items():
-        ticket = float(round(stats["volume"] / stats["count"], 2)) if stats["count"] > 0 else 0.0
-        managers_list.append(
-            ManagerMetric(
-                manager=mgr,
-                count=stats["count"],
-                volume=float(round(stats["volume"], 2)),
-                ticket_medio=ticket
-            )
-        )
-    managers_list.sort(key=lambda x: x.volume, reverse=True)
+    aggregates = compute_dashboard_aggregates(filtered)
     
     response.headers["X-Data-Mode"] = mode
     meta = get_metadata_wrapper(mode, src)
-    meta["data"] = ManagersDataPayload(managers=managers_list)
+    meta["data"] = ManagersDataPayload(managers=[ManagerMetric(**m) for m in aggregates["managers"]])
     return meta
 
 @app.get(
@@ -1990,10 +2195,10 @@ async def get_dashboard_payments(
     etapa_atual: Optional[str] = Query(None)
 ):
     req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
-    mode, src, dataset = load_transactions_dataset(
+    mode, src, dataset, pages_fetched = load_transactions_dataset(
         data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
-        pagina, request_id=req_id
+        pagina=None, request_id=req_id
     )
     validate_dataset_origin(mode, src, dataset)
     filtered = get_filtered_transactions(
@@ -2002,53 +2207,16 @@ async def get_dashboard_payments(
         agent, category, financing, etapa_atual
     )
     
-    financed_count = 0
-    cash_count = 0
-    bank_groups = {}
-    method_groups = {}
-    
-    for tx in filtered:
-        is_fin = tx.get("financiamento", False)
-        val = float(tx.get("valor_contrato") or 0.0)
-        
-        if is_fin:
-            financed_count += 1
-            bank = tx.get("financiamento_banco") or "Não Informado"
-            if bank not in bank_groups:
-                bank_groups[bank] = {"volume": 0.0, "count": 0}
-            bank_groups[bank]["volume"] += val
-            bank_groups[bank]["count"] += 1
-        else:
-            cash_count += 1
-            
-        for fp in tx.get("forma_pagamento", []):
-            m_name = fp.get("nome") or "Outros"
-            m_val = float(fp.get("valor") or 0.0)
-            method_groups[m_name] = method_groups.get(m_name, 0.0) + m_val
-            
-    total_deals = financed_count + cash_count
-    ratio = float(round((financed_count / total_deals) * 100, 2)) if total_deals > 0 else 0.0
-    
-    banks_list = [
-        BankMetric(bank=b, count=stats["count"], volume=float(round(stats["volume"], 2)))
-        for b, stats in bank_groups.items()
-    ]
-    banks_list.sort(key=lambda x: x.volume, reverse=True)
-    
-    methods_list = [
-        PaymentMethodMetric(method=m, volume=float(round(v, 2)))
-        for m, v in method_groups.items()
-    ]
-    methods_list.sort(key=lambda x: x.volume, reverse=True)
+    aggregates = compute_dashboard_aggregates(filtered)
     
     response.headers["X-Data-Mode"] = mode
     meta = get_metadata_wrapper(mode, src)
     meta["data"] = PaymentsDataPayload(
-        financed_count=financed_count,
-        cash_count=cash_count,
-        financing_ratio=ratio,
-        banks=banks_list,
-        methods=methods_list
+        financed_count=aggregates["payments"]["financed_count"],
+        cash_count=aggregates["payments"]["cash_count"],
+        financing_ratio=aggregates["payments"]["financing_ratio"],
+        banks=[BankMetric(**b) for b in aggregates["payments"]["banks"]],
+        methods=[PaymentMethodMetric(**m) for m in aggregates["payments"]["methods"]]
     )
     return meta
 
@@ -2079,10 +2247,10 @@ async def get_dashboard_commissions(
     etapa_atual: Optional[str] = Query(None)
 ):
     req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
-    mode, src, dataset = load_transactions_dataset(
+    mode, src, dataset, pages_fetched = load_transactions_dataset(
         data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
-        pagina, request_id=req_id
+        pagina=None, request_id=req_id
     )
     validate_dataset_origin(mode, src, dataset)
     filtered = get_filtered_transactions(
@@ -2091,37 +2259,14 @@ async def get_dashboard_commissions(
         agent, category, financing, etapa_atual
     )
     
-    total_comm = 0.0
-    total_sales = 0.0
-    commissions_list = []
-    
-    for tx in filtered:
-        val = float(tx.get("valor_contrato") or 0.0)
-        comm = float(tx.get("total_comissao") or 0.0)
-        rate = float(round((comm / val) * 100, 2)) if val > 0 else 0.0
-        
-        total_comm += comm
-        total_sales += val
-        
-        commissions_list.append(
-            CommissionMetric(
-                transaction_id=tx.get("transacao_unique_id_pipeimob") or "",
-                contract_code=tx.get("codigo_contrato") or "",
-                value=val,
-                commission=comm,
-                rate=rate,
-                manager=tx.get("agente_gestor") or "Sem Gestor"
-            )
-        )
-        
-    avg_rate = float(round((total_comm / total_sales) * 100, 2)) if total_sales > 0 else 0.0
+    aggregates = compute_dashboard_aggregates(filtered)
     
     response.headers["X-Data-Mode"] = mode
     meta = get_metadata_wrapper(mode, src)
     meta["data"] = CommissionsDataPayload(
-        total_commissions=float(round(total_comm, 2)),
-        avg_commission_rate=avg_rate,
-        commissions=commissions_list
+        total_commissions=aggregates["commissions"]["total_commissions"],
+        avg_commission_rate=aggregates["commissions"]["avg_commission_rate"],
+        commissions=[CommissionMetric(**c) for c in aggregates["commissions"]["commissions"]]
     )
     return meta
 
@@ -2157,10 +2302,10 @@ async def get_dashboard_timeline(
     etapa_atual: Optional[str] = Query(None)
 ):
     req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
-    mode, src, dataset = load_transactions_dataset(
+    mode, src, dataset, pages_fetched = load_transactions_dataset(
         data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
-        pagina, request_id=req_id
+        pagina=None, request_id=req_id
     )
     validate_dataset_origin(mode, src, dataset)
     filtered = get_filtered_transactions(
@@ -2169,39 +2314,66 @@ async def get_dashboard_timeline(
         agent, category, financing, etapa_atual
     )
     
-    timeline_groups = {}
-    for tx in filtered:
-        tx_date_str = tx.get("data_inicio_venda") or tx.get("data_contrato") or ""
-        if not tx_date_str:
-            continue
-        try:
-            parts = tx_date_str.split("-")
-            if len(parts) >= 2:
-                key = f"{parts[0]}-{parts[1]}"
-                val = float(tx.get("valor_contrato") or 0.0)
-                if key not in timeline_groups:
-                    timeline_groups[key] = {"volume": 0.0, "count": 0}
-                timeline_groups[key]["volume"] += val
-                timeline_groups[key]["count"] += 1
-        except Exception:
-            pass
-            
-    sorted_keys = sorted(timeline_groups.keys())
-    timeline_list = []
-    for key in sorted_keys:
-        parts = key.split("-")
-        year = parts[0][-2:]
-        month = parts[1]
-        label = f"{MONTHS_PT.get(month, month)}/{year}"
-        timeline_list.append(
-            TimelineMetric(
-                month=label,
-                volume=float(round(timeline_groups[key]["volume"], 2)),
-                count=timeline_groups[key]["count"]
-            )
-        )
-        
+    aggregates = compute_dashboard_aggregates(filtered)
+    
     response.headers["X-Data-Mode"] = mode
     meta = get_metadata_wrapper(mode, src)
-    meta["data"] = TimelineDataPayload(timeline=timeline_list)
+    meta["data"] = TimelineDataPayload(timeline=[TimelineMetric(**t) for t in aggregates["timeline"]])
     return meta
+
+@app.get(
+    "/api/dashboard/full",
+    response_model=DashboardFullResponse,
+    responses={**RESPONSES_503, **RESPONSES_AUTH},
+    summary="Get Consolidate Dashboard aggregates",
+    description="Loads all transactions from Pipeimob and returns consolidated summary, origins, stages, managers, payments, commissions, and timeline aggregates in a single response.",
+    dependencies=[Depends(verify_backend_api_key)]
+)
+async def get_dashboard_full(
+    response: Response,
+    request: Request,
+    data_inicio_criacao: Optional[str] = Query(None),
+    data_fim_criacao: Optional[str] = Query(None),
+    data_inicio_ccv: Optional[str] = Query(None),
+    data_fim_ccv: Optional[str] = Query(None),
+    data_arquivamento_inicio: Optional[str] = Query(None),
+    data_arquivamento_fim: Optional[str] = Query(None),
+    codigo_imovel: Optional[str] = Query(None),
+    codigo_contrato: Optional[str] = Query(None),
+    transacao_unique_id: Optional[str] = Query(None),
+    agent: Optional[str] = Query(None),
+    category: Optional[str] = Query(None),
+    financing: Optional[bool] = Query(None),
+    etapa_atual: Optional[str] = Query(None)
+):
+    req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
+    mode, src, dataset, pages_fetched = load_transactions_dataset(
+        data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
+        pagina=None, request_id=req_id
+    )
+    validate_dataset_origin(mode, src, dataset)
+    filtered = get_filtered_transactions(
+        dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
+        agent, category, financing, etapa_atual
+    )
+    
+    aggregates = compute_dashboard_aggregates(filtered)
+    
+    response.headers["X-Data-Mode"] = mode
+    
+    return DashboardFullResponse(
+        data_mode=mode,
+        source=src,
+        period=DashboardPeriod(start=data_inicio_ccv, end=data_fim_ccv),
+        pages_fetched=pages_fetched,
+        transaction_count=len(filtered),
+        summary=SummaryDataPayload(**aggregates["summary"]),
+        origins=[OriginMetric(**o) for o in aggregates["origins"]],
+        stages=[StageMetric(**s) for s in aggregates["stages"]],
+        managers=[ManagerMetric(**m) for m in aggregates["managers"]],
+        payments=PaymentsDataPayload(**aggregates["payments"]),
+        commissions=CommissionsDataPayload(**aggregates["commissions"]),
+        timeline=[TimelineMetric(**t) for t in aggregates["timeline"]]
+    )

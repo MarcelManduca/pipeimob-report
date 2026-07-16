@@ -42,7 +42,12 @@ def create_mock_jwt(
 mock_token = create_mock_jwt()
 
 from mock_data import MOCK_TRANSACTIONS
-from main import app
+from main import app, dashboard_cache
+import pytest
+
+@pytest.fixture(autouse=True)
+def clear_dashboard_cache():
+    dashboard_cache.clear()
 
 client = TestClient(app, headers={"Authorization": f"Bearer {mock_token}"})
 
@@ -1180,6 +1185,215 @@ def test_jwt_sem_kid_retorna_401():
         assert "Invalid or expired access token." in res.json()["detail"]
     finally:
         os.environ.pop("SUPABASE_JWKS_URL", None)
+
+
+def test_sequential_pagination_10_pages_and_decimal_precision():
+    from unittest.mock import patch, MagicMock
+    import urllib.request
+    import json
+
+    os.environ["PIPEIMOB_DATA_MODE"] = "live"
+    os.environ["PIPEIMOB_API_KEY"] = "fake_key"
+    os.environ["PIPEIMOB_SECRET_KEY"] = "fake_secret"
+
+    # We mock 10 page responses.
+    # Pages 1 to 9 have 25 transactions each (total 225).
+    # Page 10 has 4 transactions.
+    # Total = 229.
+    pages = []
+    
+    # Let's create transactions. To check Decimal precision, let's make their values fractional.
+    # Page 1 has values that sum up with complex fractional parts:
+    # 25 transactions of 1000000.01 each.
+    # Total = 229 transactions.
+    tx_index = 1
+    for p in range(1, 11):
+        num_txs = 25 if p < 10 else 4
+        txs_list = []
+        for i in range(num_txs):
+            txs_list.append({
+                "transacao_unique_id_pipeimob": f"tx_seq_{tx_index}",
+                "valor_contrato": 1000000.01,
+                "total_comissao": 50000.01,
+                "codigo_contrato": f"C_{tx_index}",
+                "agente_gestor": "JUNIOR SAGAS",
+                "midia_origem_compradores": "CORRETOR PORTAIS",
+                "etapa_atual": "Escrituração",
+                "financiamento": False,
+                "data_contrato": "2026-07-02"
+            })
+            tx_index += 1
+        
+        pages.append({
+            "success": True,
+            "data": {
+                "transacoes": txs_list,
+                "meta": {
+                    "pagination": {
+                        "total_pages": 10,
+                        "current_page": p
+                    }
+                }
+            }
+        })
+
+    call_count = 0
+
+    def mock_urlopen(req, *args, **kwargs):
+        nonlocal call_count
+        url = req.full_url if hasattr(req, 'full_url') else str(req)
+        res = MagicMock()
+        res.__enter__.return_value = res
+        if "/auth" in url:
+            res.read.return_value = json.dumps({
+                "success": True,
+                "data": {
+                    "access_token": "mock_auth_token",
+                    "expires_in": 3600
+                }
+            }).encode("utf-8")
+            return res
+            
+        res.read.return_value = json.dumps(pages[call_count]).encode("utf-8")
+        call_count += 1
+        return res
+
+    with patch("urllib.request.urlopen", side_effect=mock_urlopen):
+        # Trigger /api/dashboard/full with CCV range filter to enable live load
+        res = client.get("/api/dashboard/full?data_inicio_ccv=2026-07-01&data_fim_ccv=2026-07-07")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["data_mode"] == "live"
+        assert data["pages_fetched"] == 10
+        assert data["transaction_count"] == 229
+        
+        # Checking Decimal precision sum:
+        # VGV = 229 * 1000000.01 = 229000002.29
+        # commissions = 229 * 50000.01 = 11450002.29
+        assert data["summary"]["total_sales"] == 229000002.29
+        assert data["summary"]["total_commissions"] == 11450002.29
+
+
+def test_sequential_pagination_error_aborts_entirely():
+    from unittest.mock import patch, MagicMock
+    import urllib.request
+    import urllib.error
+    import json
+
+    os.environ["PIPEIMOB_DATA_MODE"] = "live"
+    os.environ["PIPEIMOB_API_KEY"] = "fake_key"
+    os.environ["PIPEIMOB_SECRET_KEY"] = "fake_secret"
+
+    # Page 1 returns valid JSON metadata indicating 2 pages.
+    # Page 2 call throws HTTPError
+    page1 = {
+        "success": True,
+        "data": {
+            "transacoes": [{"transacao_unique_id_pipeimob": "tx_p1_1", "valor_contrato": 100000.0}],
+            "meta": {
+                "pagination": {
+                    "total_pages": 2,
+                    "current_page": 1
+                }
+            }
+        }
+    }
+
+    call_count = 0
+
+    def mock_urlopen(req, *args, **kwargs):
+        nonlocal call_count
+        url = req.full_url if hasattr(req, 'full_url') else str(req)
+        res = MagicMock()
+        res.__enter__.return_value = res
+        if "/auth" in url:
+            res.read.return_value = json.dumps({
+                "success": True,
+                "data": {
+                    "access_token": "mock_auth_token",
+                    "expires_in": 3600
+                }
+            }).encode("utf-8")
+            return res
+            
+        if call_count == 0:
+            call_count += 1
+            res.read.return_value = json.dumps(page1).encode("utf-8")
+            return res
+        else:
+            raise urllib.error.HTTPError("http://example.com", 503, "Unavailable", {}, None)
+
+    with patch("urllib.request.urlopen", side_effect=mock_urlopen):
+        res = client.get("/api/dashboard/full?data_inicio_ccv=2026-07-01")
+        # Ensure it failed completely instead of returning page 1 data partially.
+        assert res.status_code == 503
+
+
+def test_sequential_pagination_deduplication():
+    from unittest.mock import patch, MagicMock
+    import json
+
+    os.environ["PIPEIMOB_DATA_MODE"] = "live"
+    os.environ["PIPEIMOB_API_KEY"] = "fake_key"
+    os.environ["PIPEIMOB_SECRET_KEY"] = "fake_secret"
+
+    # Return same tx_id across pages 1 and 2
+    page1 = {
+        "success": True,
+        "data": {
+            "transacoes": [{"transacao_unique_id_pipeimob": "dup_1", "valor_contrato": 100.0}],
+            "meta": {
+                "pagination": {
+                    "total_pages": 2,
+                    "current_page": 1
+                }
+            }
+        }
+    }
+    page2 = {
+        "success": True,
+        "data": {
+            "transacoes": [{"transacao_unique_id_pipeimob": "dup_1", "valor_contrato": 100.0}],
+            "meta": {
+                "pagination": {
+                    "total_pages": 2,
+                    "current_page": 2
+                }
+            }
+        }
+    }
+
+    call_count = 0
+
+    def mock_urlopen(req, *args, **kwargs):
+        nonlocal call_count
+        url = req.full_url if hasattr(req, 'full_url') else str(req)
+        res = MagicMock()
+        res.__enter__.return_value = res
+        if "/auth" in url:
+            res.read.return_value = json.dumps({
+                "success": True,
+                "data": {
+                    "access_token": "mock_auth_token",
+                    "expires_in": 3600
+                }
+            }).encode("utf-8")
+            return res
+            
+        payload = page1 if call_count == 0 else page2
+        call_count += 1
+        res.read.return_value = json.dumps(payload).encode("utf-8")
+        return res
+
+    with patch("urllib.request.urlopen", side_effect=mock_urlopen):
+        res = client.get("/api/dashboard/full?data_inicio_ccv=2026-07-01")
+        assert res.status_code == 200
+        data = res.json()
+        # Ensure count is 1 (fully deduplicated) and total volume is 100.0 (not 200.0)
+        assert data["transaction_count"] == 1
+        assert data["summary"]["total_sales"] == 100.0
+
+
 
 
 
