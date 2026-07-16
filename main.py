@@ -654,7 +654,59 @@ def get_filtered_transactions(
         filtered.append(tx)
     return filtered
 
-def compute_dashboard_aggregates(filtered: list) -> dict:
+def extract_transaction_date(tx: dict) -> Optional[str]:
+    priority_keys = [
+        "data_assinatura_ccv",
+        "data_ccv",
+        "data_assinatura",
+        "data_contrato",
+        "data_criacao",
+        "created_at"
+    ]
+    for key in priority_keys:
+        val = tx.get(key)
+        if val is not None and val != "":
+            return str(val)
+    for k, v in tx.items():
+        if isinstance(v, dict):
+            for key in priority_keys:
+                val = v.get(key)
+                if val is not None and val != "":
+                    return str(val)
+    return None
+
+def parse_date_to_year_month(date_str: str) -> Optional[tuple]:
+    if not date_str or not isinstance(date_str, str):
+        return None
+    import re
+    date_str = date_str.strip()
+    match_iso = re.match(r"^(\d{4})-(\d{2})-(\d{2})", date_str)
+    if match_iso:
+        try:
+            year = int(match_iso.group(1))
+            month = int(match_iso.group(2))
+            if 1 <= month <= 12:
+                return year, month
+        except ValueError:
+            pass
+    match_br = re.match(r"^(\d{2})/(\d{2})/(\d{4})", date_str)
+    if match_br:
+        try:
+            month = int(match_br.group(2))
+            year = int(match_br.group(3))
+            if 1 <= month <= 12:
+                return year, month
+        except ValueError:
+            pass
+    return None
+
+def compute_dashboard_aggregates(
+    filtered: list,
+    data_inicio_ccv: Optional[str] = None,
+    data_fim_ccv: Optional[str] = None,
+    data_inicio_criacao: Optional[str] = None,
+    data_fim_criacao: Optional[str] = None
+) -> dict:
     from decimal import Decimal
     
     months_pt = {
@@ -797,33 +849,131 @@ def compute_dashboard_aggregates(filtered: list) -> dict:
     }
     
     # 7. Timeline
+    start_str = data_inicio_ccv or data_inicio_criacao
+    end_str = data_fim_ccv or data_fim_criacao
+    
+    start_ym = parse_date_to_year_month(start_str) if start_str else None
+    end_ym = parse_date_to_year_month(end_str) if end_str else None
+    
+    if not start_ym or not end_ym:
+        dataset_yms = []
+        for tx in filtered:
+            dt_str = extract_transaction_date(tx)
+            ym = parse_date_to_year_month(dt_str)
+            if ym:
+                dataset_yms.append(ym)
+        if dataset_yms:
+            if not start_ym:
+                start_ym = min(dataset_yms)
+            if not end_ym:
+                end_ym = max(dataset_yms)
+        else:
+            now = datetime.now()
+            if not start_ym:
+                start_ym = (now.year, now.month)
+            if not end_ym:
+                end_ym = (now.year, now.month)
+                
+    start_year, start_month = start_ym
+    end_year, end_month = end_ym
+    
+    if (start_year, start_month) > (end_year, end_month):
+        start_year, start_month, end_year, end_month = end_year, end_month, start_year, start_month
+        
+    months_range = []
+    curr_year, curr_month = start_year, start_month
+    while (curr_year, curr_month) <= (end_year, end_month):
+        months_range.append((curr_year, curr_month))
+        if curr_month == 12:
+            curr_month = 1
+            curr_year += 1
+        else:
+            curr_month += 1
+            
     timeline_groups = {}
+    for y, m in months_range:
+        key = f"{y}-{m:02d}"
+        timeline_groups[key] = {
+            "count": 0,
+            "sales": Decimal("0.0"),
+            "commissions": Decimal("0.0")
+        }
+        
+    registros_com_data = 0
+    registros_sem_data = 0
+    datas_invalidas = 0
+    found_fields = set()
+    
     for tx in filtered:
-        tx_date_str = tx.get("data_inicio_venda") or tx.get("data_contrato") or ""
-        if not tx_date_str:
-            continue
-        try:
-            parts = tx_date_str.split("-")
-            if len(parts) >= 2:
-                key = f"{parts[0]}-{parts[1]}"
-                val = Decimal(str(tx.get("valor_contrato") or "0.0"))
-                if key not in timeline_groups:
-                    timeline_groups[key] = {"volume": Decimal("0.0"), "count": 0}
-                timeline_groups[key]["volume"] += val
-                timeline_groups[key]["count"] += 1
-        except Exception:
-            pass
-    sorted_keys = sorted(timeline_groups.keys())
+        dt_str = extract_transaction_date(tx)
+        ym = None
+        if dt_str:
+            ym = parse_date_to_year_month(dt_str)
+            if not ym:
+                datas_invalidas += 1
+        else:
+            registros_sem_data += 1
+            
+        if ym:
+            registros_com_data += 1
+            y, m = ym
+            key = f"{y}-{m:02d}"
+        else:
+            y, m = months_range[0]
+            key = f"{y}-{m:02d}"
+            
+        priority_keys = [
+            "data_assinatura_ccv",
+            "data_ccv",
+            "data_assinatura",
+            "data_contrato",
+            "data_criacao",
+            "created_at"
+        ]
+        found_key = "other"
+        for pk in priority_keys:
+            if tx.get(pk) is not None:
+                found_key = pk
+                break
+        found_fields.add(found_key)
+        
+        val_sales = Decimal(str(tx.get("valor_contrato") or "0.0"))
+        val_comm = Decimal(str(tx.get("total_comissao") or "0.0"))
+        
+        if key not in timeline_groups:
+            boundary_key = min(timeline_groups.keys()) if key < min(timeline_groups.keys()) else max(timeline_groups.keys())
+            timeline_groups[boundary_key]["count"] += 1
+            timeline_groups[boundary_key]["sales"] += val_sales
+            timeline_groups[boundary_key]["commissions"] += val_comm
+        else:
+            timeline_groups[key]["count"] += 1
+            timeline_groups[key]["sales"] += val_sales
+            timeline_groups[key]["commissions"] += val_comm
+
+    log_data = {
+        "event": "timeline_computed",
+        "transaction_count": len(filtered),
+        "registros_com_data": registros_com_data,
+        "registros_sem_data": registros_sem_data,
+        "datas_invalidas": datas_invalidas,
+        "campos_data_encontrados": list(found_fields),
+        "quantidade_por_mes": {k: v["count"] for k, v in timeline_groups.items()}
+    }
+    print(f"SECURE_LOG: {json.dumps(log_data)}")
+    
     timeline = []
-    for key in sorted_keys:
+    for key in sorted(timeline_groups.keys()):
         parts = key.split("-")
-        year = parts[0][-2:]
-        month = parts[1]
-        label = f"{months_pt.get(month, month)}/{year}"
+        y = parts[0]
+        m = parts[1]
+        label = f"{months_pt.get(m, m)}/{y[-2:]}"
+        stats = timeline_groups[key]
         timeline.append({
-            "month": label,
-            "volume": float(round(timeline_groups[key]["volume"], 2)),
-            "count": timeline_groups[key]["count"]
+            "month": key,
+            "label": label,
+            "transaction_count": stats["count"],
+            "total_sales": f"{stats['sales']:.2f}",
+            "total_commissions": f"{stats['commissions']:.2f}"
         })
         
     return {
@@ -1509,9 +1659,11 @@ class DashboardCommissionsResponse(BaseModel):
     }
 
 class TimelineMetric(BaseModel):
-    month: str = Field(..., description="Month/Year label", json_schema_extra={"example": "Jan/26"})
-    volume: float = Field(..., description="Sales volume during the month", json_schema_extra={"example": 15000000.0})
-    count: int = Field(..., description="Number of transactions during the month", json_schema_extra={"example": 12})
+    month: str = Field(..., description="Month key (e.g. YYYY-MM)", json_schema_extra={"example": "2026-01"})
+    label: str = Field(..., description="Month/Year label (e.g. Jan/26)", json_schema_extra={"example": "Jan/26"})
+    transaction_count: int = Field(..., description="Number of transactions during the month", json_schema_extra={"example": 12})
+    total_sales: str = Field(..., description="Total sales volume during the month as string", json_schema_extra={"example": "15000000.00"})
+    total_commissions: str = Field(..., description="Total commissions during the month as string", json_schema_extra={"example": "50000.00"})
 
 class TimelineDataPayload(BaseModel):
     timeline: List[TimelineMetric] = Field(...)
@@ -2023,7 +2175,7 @@ async def get_dashboard_summary(
         agent, category, financing, etapa_atual
     )
     
-    aggregates = compute_dashboard_aggregates(filtered)
+    aggregates = compute_dashboard_aggregates(filtered, data_inicio_ccv, data_fim_ccv, data_inicio_criacao, data_fim_criacao)
     
     response.headers["X-Data-Mode"] = mode
     meta = get_metadata_wrapper(mode, src)
@@ -2069,7 +2221,7 @@ async def get_dashboard_origins(
         agent, category, financing, etapa_atual
     )
     
-    aggregates = compute_dashboard_aggregates(filtered)
+    aggregates = compute_dashboard_aggregates(filtered, data_inicio_ccv, data_fim_ccv, data_inicio_criacao, data_fim_criacao)
     
     response.headers["X-Data-Mode"] = mode
     meta = get_metadata_wrapper(mode, src)
@@ -2115,7 +2267,7 @@ async def get_dashboard_stages(
         agent, category, financing, etapa_atual
     )
     
-    aggregates = compute_dashboard_aggregates(filtered)
+    aggregates = compute_dashboard_aggregates(filtered, data_inicio_ccv, data_fim_ccv, data_inicio_criacao, data_fim_criacao)
     
     response.headers["X-Data-Mode"] = mode
     meta = get_metadata_wrapper(mode, src)
@@ -2161,7 +2313,7 @@ async def get_dashboard_managers(
         agent, category, financing, etapa_atual
     )
     
-    aggregates = compute_dashboard_aggregates(filtered)
+    aggregates = compute_dashboard_aggregates(filtered, data_inicio_ccv, data_fim_ccv, data_inicio_criacao, data_fim_criacao)
     
     response.headers["X-Data-Mode"] = mode
     meta = get_metadata_wrapper(mode, src)
@@ -2207,7 +2359,7 @@ async def get_dashboard_payments(
         agent, category, financing, etapa_atual
     )
     
-    aggregates = compute_dashboard_aggregates(filtered)
+    aggregates = compute_dashboard_aggregates(filtered, data_inicio_ccv, data_fim_ccv, data_inicio_criacao, data_fim_criacao)
     
     response.headers["X-Data-Mode"] = mode
     meta = get_metadata_wrapper(mode, src)
@@ -2259,7 +2411,7 @@ async def get_dashboard_commissions(
         agent, category, financing, etapa_atual
     )
     
-    aggregates = compute_dashboard_aggregates(filtered)
+    aggregates = compute_dashboard_aggregates(filtered, data_inicio_ccv, data_fim_ccv, data_inicio_criacao, data_fim_criacao)
     
     response.headers["X-Data-Mode"] = mode
     meta = get_metadata_wrapper(mode, src)
@@ -2314,7 +2466,7 @@ async def get_dashboard_timeline(
         agent, category, financing, etapa_atual
     )
     
-    aggregates = compute_dashboard_aggregates(filtered)
+    aggregates = compute_dashboard_aggregates(filtered, data_inicio_ccv, data_fim_ccv, data_inicio_criacao, data_fim_criacao)
     
     response.headers["X-Data-Mode"] = mode
     meta = get_metadata_wrapper(mode, src)
@@ -2359,7 +2511,7 @@ async def get_dashboard_full(
         agent, category, financing, etapa_atual
     )
     
-    aggregates = compute_dashboard_aggregates(filtered)
+    aggregates = compute_dashboard_aggregates(filtered, data_inicio_ccv, data_fim_ccv, data_inicio_criacao, data_fim_criacao)
     
     response.headers["X-Data-Mode"] = mode
     

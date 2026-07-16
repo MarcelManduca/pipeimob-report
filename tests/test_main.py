@@ -1394,6 +1394,96 @@ def test_sequential_pagination_deduplication():
         assert data["summary"]["total_sales"] == 100.0
 
 
+def test_timeline_date_parsing_and_priority():
+    from main import extract_transaction_date, parse_date_to_year_month, compute_dashboard_aggregates
+    
+    # 1. Test priority
+    tx1 = {
+        "data_assinatura_ccv": "2026-01-01",
+        "data_ccv": "2026-02-02",
+        "data_contrato": "2026-03-03"
+    }
+    assert extract_transaction_date(tx1) == "2026-01-01"
+    
+    tx2 = {
+        "data_contrato": "2026-03-03",
+        "data_criacao": "2026-04-04"
+    }
+    assert extract_transaction_date(tx2) == "2026-03-03"
+    
+    # Nested check
+    tx3 = {
+        "nested": {
+            "data_ccv": "2026-02-02"
+        }
+    }
+    assert extract_transaction_date(tx3) == "2026-02-02"
+    
+    # 2. Test date formats
+    assert parse_date_to_year_month("2026-01-02") == (2026, 1)
+    assert parse_date_to_year_month("2026-02-03T12:00:00") == (2026, 2)
+    assert parse_date_to_year_month("2026-03-04T12:00:00Z") == (2026, 3)
+    assert parse_date_to_year_month("2026-04-05T12:00:00.123Z") == (2026, 4)
+    assert parse_date_to_year_month("06/07/2026") == (2026, 7)
+    
+    # Invalid formats should return None
+    assert parse_date_to_year_month("invalid-date") is None
+    assert parse_date_to_year_month(None) is None
+    
+    # 3. Test timeline prepopulation, Decimal precision, empty month, and exact summary match
+    filtered_txs = [
+        {"data_assinatura_ccv": "2026-01-10", "valor_contrato": 100000.05, "total_comissao": 5000.05},
+        {"data_ccv": "2026-02-15T10:00:00", "valor_contrato": 200000.10, "total_comissao": 10000.10},
+        {"data_assinatura": "2026-04-20T10:00:00Z", "valor_contrato": 150000.15, "total_comissao": 7500.15},
+        {"data_contrato": "30/06/2026", "valor_contrato": 300000.20, "total_comissao": 15000.20},
+        {"data_criacao": "invalid-date", "valor_contrato": 50000.0, "total_comissao": 2500.0},
+        {"valor_contrato": 40000.0, "total_comissao": 2000.0}
+    ]
+    
+    res = compute_dashboard_aggregates(
+        filtered_txs,
+        data_inicio_ccv="2026-01-01",
+        data_fim_ccv="2026-06-30"
+    )
+    
+    summary = res["summary"]
+    timeline = res["timeline"]
+    
+    assert summary["transaction_count"] == 6
+    assert summary["total_sales"] == 840000.50
+    assert summary["total_commissions"] == 42000.50
+    
+    assert len(timeline) == 6
+    months = [t["month"] for t in timeline]
+    assert months == ["2026-01", "2026-02", "2026-03", "2026-04", "2026-05", "2026-06"]
+    
+    # Prepopulated empty months should be 0
+    assert timeline[2]["transaction_count"] == 0
+    assert timeline[2]["total_sales"] == "0.00"
+    assert timeline[2]["total_commissions"] == "0.00"
+    
+    assert timeline[4]["transaction_count"] == 0
+    assert timeline[4]["total_sales"] == "0.00"
+    assert timeline[4]["total_commissions"] == "0.00"
+    
+    timeline_count_sum = sum(t["transaction_count"] for t in timeline)
+    timeline_sales_sum = sum(float(t["total_sales"]) for t in timeline)
+    timeline_comm_sum = sum(float(t["total_commissions"]) for t in timeline)
+    
+    assert timeline_count_sum == summary["transaction_count"]
+    assert round(timeline_sales_sum, 2) == summary["total_sales"]
+    assert round(timeline_comm_sum, 2) == summary["total_commissions"]
+    
+    for t in timeline:
+        assert "comprador" not in t
+        assert "cliente" not in t
+        assert "cpf" not in t
+        assert "cnpj" not in t
+        assert "celular" not in t
+        assert "email" not in t
+
+
+
 
 
 
