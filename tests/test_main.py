@@ -1430,13 +1430,15 @@ def test_timeline_date_parsing_and_priority():
     assert parse_date_to_year_month("invalid-date") is None
     assert parse_date_to_year_month(None) is None
     
-    # 3. Test timeline prepopulation, Decimal precision, empty month, and exact summary match
+    # 3. Test timeline prepopulation, Decimal precision, empty month, and reconciliation
     filtered_txs = [
         {"data_assinatura_ccv": "2026-01-10", "valor_contrato": 100000.05, "total_comissao": 5000.05},
         {"data_ccv": "2026-02-15T10:00:00", "valor_contrato": 200000.10, "total_comissao": 10000.10},
         {"data_assinatura": "2026-04-20T10:00:00Z", "valor_contrato": 150000.15, "total_comissao": 7500.15},
         {"data_contrato": "30/06/2026", "valor_contrato": 300000.20, "total_comissao": 15000.20},
+        # Invalid date transaction (should be unclassified)
         {"data_criacao": "invalid-date", "valor_contrato": 50000.0, "total_comissao": 2500.0},
+        # Missing date transaction (should be unclassified)
         {"valor_contrato": 40000.0, "total_comissao": 2000.0}
     ]
     
@@ -1448,6 +1450,8 @@ def test_timeline_date_parsing_and_priority():
     
     summary = res["summary"]
     timeline = res["timeline"]
+    unclassified = res["unclassified"]
+    reconciliation = res["reconciliation"]
     
     assert summary["transaction_count"] == 6
     assert summary["total_sales"] == 840000.50
@@ -1456,6 +1460,12 @@ def test_timeline_date_parsing_and_priority():
     assert len(timeline) == 6
     months = [t["month"] for t in timeline]
     assert months == ["2026-01", "2026-02", "2026-03", "2026-04", "2026-05", "2026-06"]
+    
+    # Verify that unclassified transactions are NOT assigned to Jan/26 (first month)
+    # January should have exactly 1 transaction (the 100000.05 sales transaction)
+    assert timeline[0]["transaction_count"] == 1
+    assert timeline[0]["total_sales"] == "100000.05"
+    assert timeline[0]["total_commissions"] == "5000.05"
     
     # Prepopulated empty months should be 0
     assert timeline[2]["transaction_count"] == 0
@@ -1466,13 +1476,45 @@ def test_timeline_date_parsing_and_priority():
     assert timeline[4]["total_sales"] == "0.00"
     assert timeline[4]["total_commissions"] == "0.00"
     
+    # Check unclassified values
+    # sales: 50000.0 (invalid) + 40000.0 (missing) = 90000.0
+    # commissions: 2500.0 + 2000.0 = 4500.0
+    assert unclassified["transaction_count"] == 2
+    assert unclassified["total_sales"] == "90000.00"
+    assert unclassified["total_commissions"] == "4500.00"
+    assert unclassified["missing_date_count"] == 1
+    assert unclassified["invalid_date_count"] == 1
+    
+    # Check reconciliation values
+    # rule: timeline totals + unclassified totals = summary totals
     timeline_count_sum = sum(t["transaction_count"] for t in timeline)
     timeline_sales_sum = sum(float(t["total_sales"]) for t in timeline)
     timeline_comm_sum = sum(float(t["total_commissions"]) for t in timeline)
     
-    assert timeline_count_sum == summary["transaction_count"]
-    assert round(timeline_sales_sum, 2) == summary["total_sales"]
-    assert round(timeline_comm_sum, 2) == summary["total_commissions"]
+    assert timeline_count_sum + unclassified["transaction_count"] == summary["transaction_count"]
+    assert round(timeline_sales_sum + float(unclassified["total_sales"]), 2) == summary["total_sales"]
+    assert round(timeline_comm_sum + float(unclassified["total_commissions"]), 2) == summary["total_commissions"]
+    
+    assert reconciliation["is_reconciled"] is True
+    assert reconciliation["summary_transaction_count"] == 6
+    assert reconciliation["timeline_transaction_count"] == 4
+    assert reconciliation["unclassified_transaction_count"] == 2
+    
+    # 4. Test when all dates are valid
+    valid_txs = [
+        {"data_assinatura_ccv": "2026-01-10", "valor_contrato": 100000.0, "total_comissao": 5000.0},
+        {"data_ccv": "2026-02-15", "valor_contrato": 200000.0, "total_comissao": 10000.0}
+    ]
+    res_valid = compute_dashboard_aggregates(valid_txs, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-02-28")
+    assert res_valid["unclassified"]["transaction_count"] == 0
+    assert res_valid["unclassified"]["total_sales"] == "0.00"
+    assert res_valid["unclassified"]["total_commissions"] == "0.00"
+    assert res_valid["unclassified"]["missing_date_count"] == 0
+    assert res_valid["unclassified"]["invalid_date_count"] == 0
+    assert res_valid["reconciliation"]["is_reconciled"] is True
+    assert res_valid["reconciliation"]["summary_transaction_count"] == 2
+    assert res_valid["reconciliation"]["timeline_transaction_count"] == 2
+    assert res_valid["reconciliation"]["unclassified_transaction_count"] == 0
     
     for t in timeline:
         assert "comprador" not in t

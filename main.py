@@ -904,23 +904,28 @@ def compute_dashboard_aggregates(
     datas_invalidas = 0
     found_fields = set()
     
+    unclassified_groups = {
+        "count": 0,
+        "sales": Decimal("0.0"),
+        "commissions": Decimal("0.0"),
+        "missing_date_count": 0,
+        "invalid_date_count": 0
+    }
+    
     for tx in filtered:
         dt_str = extract_transaction_date(tx)
         ym = None
+        is_missing = False
+        is_invalid = False
+        
         if dt_str:
             ym = parse_date_to_year_month(dt_str)
             if not ym:
                 datas_invalidas += 1
+                is_invalid = True
         else:
             registros_sem_data += 1
-            
-        if ym:
-            registros_com_data += 1
-            y, m = ym
-            key = f"{y}-{m:02d}"
-        else:
-            y, m = months_range[0]
-            key = f"{y}-{m:02d}"
+            is_missing = True
             
         priority_keys = [
             "data_assinatura_ccv",
@@ -940,24 +945,37 @@ def compute_dashboard_aggregates(
         val_sales = Decimal(str(tx.get("valor_contrato") or "0.0"))
         val_comm = Decimal(str(tx.get("total_comissao") or "0.0"))
         
-        if key not in timeline_groups:
-            boundary_key = min(timeline_groups.keys()) if key < min(timeline_groups.keys()) else max(timeline_groups.keys())
-            timeline_groups[boundary_key]["count"] += 1
-            timeline_groups[boundary_key]["sales"] += val_sales
-            timeline_groups[boundary_key]["commissions"] += val_comm
+        if ym:
+            registros_com_data += 1
+            y, m = ym
+            key = f"{y}-{m:02d}"
+            
+            if key not in timeline_groups:
+                boundary_key = min(timeline_groups.keys()) if key < min(timeline_groups.keys()) else max(timeline_groups.keys())
+                timeline_groups[boundary_key]["count"] += 1
+                timeline_groups[boundary_key]["sales"] += val_sales
+                timeline_groups[boundary_key]["commissions"] += val_comm
+            else:
+                timeline_groups[key]["count"] += 1
+                timeline_groups[key]["sales"] += val_sales
+                timeline_groups[key]["commissions"] += val_comm
         else:
-            timeline_groups[key]["count"] += 1
-            timeline_groups[key]["sales"] += val_sales
-            timeline_groups[key]["commissions"] += val_comm
+            unclassified_groups["count"] += 1
+            unclassified_groups["sales"] += val_sales
+            unclassified_groups["commissions"] += val_comm
+            if is_missing:
+                unclassified_groups["missing_date_count"] += 1
+            if is_invalid:
+                unclassified_groups["invalid_date_count"] += 1
 
     log_data = {
         "event": "timeline_computed",
-        "transaction_count": len(filtered),
         "registros_com_data": registros_com_data,
         "registros_sem_data": registros_sem_data,
         "datas_invalidas": datas_invalidas,
         "campos_data_encontrados": list(found_fields),
-        "quantidade_por_mes": {k: v["count"] for k, v in timeline_groups.items()}
+        "quantidade_por_mes": {k: v["count"] for k, v in timeline_groups.items()},
+        "quantidade_nao_classificada": unclassified_groups["count"]
     }
     print(f"SECURE_LOG: {json.dumps(log_data)}")
     
@@ -976,6 +994,34 @@ def compute_dashboard_aggregates(
             "total_commissions": f"{stats['commissions']:.2f}"
         })
         
+    timeline_count_sum = sum(t["transaction_count"] for t in timeline)
+    timeline_sales_sum = sum(Decimal(t["total_sales"]) for t in timeline)
+    timeline_comm_sum = sum(Decimal(t["total_commissions"]) for t in timeline)
+    
+    unclassified_count = unclassified_groups["count"]
+    unclassified_sales = unclassified_groups["sales"]
+    unclassified_comm = unclassified_groups["commissions"]
+    
+    reconciled_count = (timeline_count_sum + unclassified_count) == summary["transaction_count"]
+    reconciled_sales = (timeline_sales_sum + unclassified_sales) == total_sales
+    reconciled_comm = (timeline_comm_sum + unclassified_comm) == total_commissions
+    is_reconciled = reconciled_count and reconciled_sales and reconciled_comm
+    
+    reconciliation = {
+        "summary_transaction_count": summary["transaction_count"],
+        "timeline_transaction_count": timeline_count_sum,
+        "unclassified_transaction_count": unclassified_count,
+        "is_reconciled": is_reconciled
+    }
+    
+    unclassified_payload = {
+        "transaction_count": unclassified_count,
+        "total_sales": f"{unclassified_sales:.2f}",
+        "total_commissions": f"{unclassified_comm:.2f}",
+        "missing_date_count": unclassified_groups["missing_date_count"],
+        "invalid_date_count": unclassified_groups["invalid_date_count"]
+    }
+    
     return {
         "summary": summary,
         "origins": origins,
@@ -983,7 +1029,9 @@ def compute_dashboard_aggregates(
         "managers": managers,
         "payments": payments,
         "commissions": commissions_payload,
-        "timeline": timeline
+        "timeline": timeline,
+        "unclassified": unclassified_payload,
+        "reconciliation": reconciliation
     }
 
 
@@ -1665,8 +1713,23 @@ class TimelineMetric(BaseModel):
     total_sales: str = Field(..., description="Total sales volume during the month as string", json_schema_extra={"example": "15000000.00"})
     total_commissions: str = Field(..., description="Total commissions during the month as string", json_schema_extra={"example": "50000.00"})
 
+class UnclassifiedTimeline(BaseModel):
+    transaction_count: int = Field(..., description="Number of unclassified transactions")
+    total_sales: str = Field(..., description="Total sales volume of unclassified transactions as string")
+    total_commissions: str = Field(..., description="Total commissions of unclassified transactions as string")
+    missing_date_count: int = Field(..., description="Number of transactions missing date field completely")
+    invalid_date_count: int = Field(..., description="Number of transactions with invalid/unparseable date string")
+
+class TimelineReconciliation(BaseModel):
+    summary_transaction_count: int = Field(..., description="Total transactions in summary")
+    timeline_transaction_count: int = Field(..., description="Total classified transactions in timeline")
+    unclassified_transaction_count: int = Field(..., description="Total unclassified transactions")
+    is_reconciled: bool = Field(..., description="Flag indicating if timeline count + unclassified count equals summary count")
+
 class TimelineDataPayload(BaseModel):
     timeline: List[TimelineMetric] = Field(...)
+    unclassified: UnclassifiedTimeline = Field(...)
+    reconciliation: TimelineReconciliation = Field(...)
 
 class DashboardTimelineResponse(BaseModel):
     data_mode: str = Field(..., json_schema_extra={"example": "live"})
@@ -1728,6 +1791,8 @@ class DashboardFullResponse(BaseModel):
     payments: PaymentsDataPayload
     commissions: CommissionsDataPayload
     timeline: List[TimelineMetric]
+    unclassified: UnclassifiedTimeline
+    reconciliation: TimelineReconciliation
 
 # Helper to format and add X-Data-Mode response headers
 def get_metadata_wrapper(data_mode: str, source: str):
@@ -2470,7 +2535,11 @@ async def get_dashboard_timeline(
     
     response.headers["X-Data-Mode"] = mode
     meta = get_metadata_wrapper(mode, src)
-    meta["data"] = TimelineDataPayload(timeline=[TimelineMetric(**t) for t in aggregates["timeline"]])
+    meta["data"] = TimelineDataPayload(
+        timeline=[TimelineMetric(**t) for t in aggregates["timeline"]],
+        unclassified=UnclassifiedTimeline(**aggregates["unclassified"]),
+        reconciliation=TimelineReconciliation(**aggregates["reconciliation"])
+    )
     return meta
 
 @app.get(
@@ -2527,5 +2596,7 @@ async def get_dashboard_full(
         managers=[ManagerMetric(**m) for m in aggregates["managers"]],
         payments=PaymentsDataPayload(**aggregates["payments"]),
         commissions=CommissionsDataPayload(**aggregates["commissions"]),
-        timeline=[TimelineMetric(**t) for t in aggregates["timeline"]]
+        timeline=[TimelineMetric(**t) for t in aggregates["timeline"]],
+        unclassified=UnclassifiedTimeline(**aggregates["unclassified"]),
+        reconciliation=TimelineReconciliation(**aggregates["reconciliation"])
     )
