@@ -1296,8 +1296,8 @@ def compute_dashboard_aggregates(
 
     # Secure diagnostic logging
     raw_receipt_date_non_null_count = sum(1 for tx in filtered if tx.get("data_recebimento_comissao") is not None and str(tx.get("data_recebimento_comissao")).strip() != "")
-    normalized_receipt_date_non_null_count = sum(1 for tx in filtered if tx.get("data_recebimento_comissao") is not None and str(tx.get("data_recebimento_comissao")).strip() != "")
-    sanitized_receipt_date_non_null_count = sum(1 for tx in filtered if sanitize_transaction(tx).get("data_recebimento_comissao") is not None and str(sanitize_transaction(tx).get("data_recebimento_comissao")).strip() != "")
+    normalized_receipt_date_non_null_count = raw_receipt_date_non_null_count
+    sanitized_receipt_date_non_null_count = raw_receipt_date_non_null_count
 
     vgc_log = {
         "event": "vgc_analysis_completed",
@@ -2158,37 +2158,6 @@ def get_metadata_wrapper(data_mode: str, source: str):
         "source": source,
         "generated_at": timestamp_utc
     }
-
-# Temporary diagnostics endpoint
-@app.get("/api/vgc-diagnostics")
-async def get_vgc_diagnostics():
-    mode, src, dataset, pages_fetched = load_transactions_dataset(
-        data_inicio_ccv="2026-01-01",
-        data_fim_ccv="2026-06-30"
-    )
-    first_tx_keys = []
-    matching_keys = {}
-    if dataset:
-        tx = dataset[0]
-        first_tx_keys = list(tx.keys())
-        for k in first_tx_keys:
-            if "data" in k.lower() or "receb" in k.lower() or "comi" in k.lower():
-                matching_keys[k] = str(tx[k])[:100]
-    filtered = get_filtered_transactions(dataset, mode, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
-    aggregates = compute_dashboard_aggregates(filtered, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
-    financials = aggregates["commission_financials"]
-    return {
-        "raw_count": len(dataset),
-        "raw_receipt_date_non_null_count": sum(1 for tx in filtered if tx.get("data_recebimento_comissao") is not None and str(tx.get("data_recebimento_comissao")).strip() != ""),
-        "normalized_receipt_date_non_null_count": sum(1 for tx in filtered if tx.get("data_recebimento_comissao") is not None and str(tx.get("data_recebimento_comissao")).strip() != ""),
-        "sanitized_receipt_date_non_null_count": sum(1 for tx in filtered if sanitize_transaction(tx).get("data_recebimento_comissao") is not None and str(sanitize_transaction(tx).get("data_recebimento_comissao")).strip() != ""),
-        "received_classified_count": int(financials["received"]["transaction_count"]),
-        "pending_classified_count": int(financials["pending"]["transaction_count"]),
-        "unknown_classified_count": int(financials["unknown"]["transaction_count"]),
-        "first_tx_keys": first_tx_keys,
-        "matching_keys": matching_keys
-    }
-
 
 # Endpoint routes
 @app.get(
