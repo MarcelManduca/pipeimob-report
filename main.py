@@ -589,10 +589,12 @@ def load_transactions_dataset(
             pipeimob_connection="unavailable"
         )
         
-    # Enrich comissao_imobiliaria defensively for live transactions
+    # Enrich comissao_imobiliaria and map data_recebimento_comissao defensively for live transactions
     for tx in live_txs:
         _, vgc_gralha, _ = calculate_vgc_split(tx)
         tx["comissao_imobiliaria"] = float(vgc_gralha)
+        if "data_recebimento_comissao" not in tx or tx.get("data_recebimento_comissao") is None:
+            tx["data_recebimento_comissao"] = tx.get("data_pagamento_comissao")
         
     # Set cache
     dashboard_cache.set(cache_key, (live_txs, pages_fetched))
@@ -1149,8 +1151,8 @@ def compute_dashboard_aggregates(
         tot_demais += vgc_demais
         
         if calculation_method == "receipt_date_assumption":
-            dt_recv = tx.get("data_recebimento_comissao")
-            if dt_recv is not None and dt_recv != "":
+            dt_recv = tx.get("data_recebimento_comissao") or tx.get("data_pagamento_comissao")
+            if dt_recv is not None and str(dt_recv).strip() != "":
                 if is_valid_date_string(dt_recv):
                     tot_received_total += vgc_total
                     tot_received_gralha += vgc_gralha
