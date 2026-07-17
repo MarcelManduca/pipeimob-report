@@ -88,8 +88,8 @@ def generate_mock_transactions():
             "endereco_bairro": bairro,
             "forma_pagamento": forma_pgto,
             "comissionados": [
-                {"nome": "Imobiliária Demonstrativa", "tipo": "Empresa", "valor": commission_imobiliaria},
-                {"nome": manager, "tipo": "Corretor", "valor": float(round(total_commission * 0.4, 2))}
+                {"nome": "Imobiliária Demonstrativa", "tipo": "Empresa", "valor": commission_imobiliaria, "comissionado_imobiliaria": True, "comissionado_valor": commission_imobiliaria},
+                {"nome": manager, "tipo": "Corretor", "valor": float(round(total_commission * 0.4, 2)), "comissionado_valor": float(round(total_commission * 0.4, 2))}
             ],
             "clientes": [
                 {

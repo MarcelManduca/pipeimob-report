@@ -1755,3 +1755,148 @@ def test_live_pagination_229_records():
         assert summary["transaction_count"] == 229
         assert float(summary["total_sales"]) == 321435117.89
         assert float(summary["total_commissions"]) == 17126098.32
+
+
+def test_vgc_commission_composition_canonical():
+    from main import compute_dashboard_aggregates
+    
+    txs = [
+        {
+            "total_comissao": 10000.0,
+            "comissionados": [
+                {"nome": "Imobiliária Gralha", "tipo": "Gralha Imobiliária", "valor": 3000.0, "comissionado_imobiliaria": True, "comissionado_valor": 3000.0},
+                {"nome": "Gralha Filial", "tipo": "Empresa", "valor": 2000.0, "comissionado_imobiliaria": True, "comissionado_valor": 2000.0},
+                {"nome": "Imobiliária Externa", "tipo": "Imobiliária", "valor": 1000.0, "comissionado_imobiliaria": False, "comissionado_valor": 1000.0},
+                {"nome": "Corretor X", "tipo": "Corretor", "valor": 4000.0, "comissionado_imobiliaria": False, "comissionado_valor": 4000.0}
+            ],
+            "data_assinatura_ccv": "2026-03-15"
+        }
+    ]
+    res = compute_dashboard_aggregates(txs, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
+    financials = res["commission_financials"]
+    assert financials["vgc_total"] == "10000.00"
+    assert financials["composition"]["gralha"] == "5000.00"
+    assert financials["composition"]["demais_participantes"] == "5000.00"
+    assert financials["composition"]["reconciled"] is True
+    
+    txs_empty = [
+        {
+            "total_comissao": 0.0,
+            "comissionados": None,
+            "data_assinatura_ccv": "2026-03-15"
+        }
+    ]
+    res_empty = compute_dashboard_aggregates(txs_empty, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
+    assert res_empty["commission_financials"]["vgc_total"] == "0.00"
+    assert res_empty["commission_financials"]["composition"]["gralha"] == "0.00"
+    assert res_empty["commission_financials"]["composition"]["demais_participantes"] == "0.00"
+    
+    txs_invalid_val = [
+        {
+            "total_comissao": 5000.0,
+            "comissionados": [
+                {"nome": "Gralha", "tipo": "Empresa", "valor": "invalid_value", "comissionado_imobiliaria": True, "comissionado_valor": "invalid_value"}
+            ],
+            "data_assinatura_ccv": "2026-03-15"
+        }
+    ]
+    res_invalid = compute_dashboard_aggregates(txs_invalid_val, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
+    assert res_invalid["commission_financials"]["composition"]["gralha"] == "0.00"
+    assert res_invalid["commission_financials"]["composition"]["demais_participantes"] == "5000.00"
+
+
+def test_vgc_reconciliation_integrity():
+    from main import compute_dashboard_aggregates
+    
+    txs_inconsistent = [
+        {
+            "total_comissao": 10000.0,
+            "comissionados": [
+                {"nome": "Gralha", "tipo": "Empresa", "valor": 12000.0, "comissionado_imobiliaria": True, "comissionado_valor": 12000.0}
+            ],
+            "data_assinatura_ccv": "2026-03-15"
+        }
+    ]
+    res = compute_dashboard_aggregates(txs_inconsistent, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
+    financials = res["commission_financials"]
+    assert financials["composition"]["reconciled"] is False
+    assert float(financials["composition"]["demais_participantes"]) == -2000.0
+
+
+def test_vgc_receipt_date_status_only():
+    from main import compute_dashboard_aggregates
+    
+    txs = [
+        {
+            "total_comissao": 10000.0,
+            "comissionados": [
+                {"nome": "Gralha", "tipo": "Empresa", "valor": 4000.0, "comissionado_imobiliaria": True, "comissionado_valor": 4000.0}
+            ],
+            "data_assinatura_ccv": "2026-03-15",
+            "data_recebimento_comissao": "2026-04-10"
+        },
+        {
+            "total_comissao": 5000.0,
+            "comissionados": [
+                {"nome": "Gralha", "tipo": "Empresa", "valor": 2000.0, "comissionado_imobiliaria": True, "comissionado_valor": 2000.0}
+            ],
+            "data_assinatura_ccv": "2026-03-15",
+            "data_recebimento_comissao": ""
+        },
+        {
+            "total_comissao": 3000.0,
+            "comissionados": [
+                {"nome": "Gralha", "tipo": "Empresa", "valor": 1000.0, "comissionado_imobiliaria": True, "comissionado_valor": 1000.0}
+            ],
+            "data_assinatura_ccv": "2026-03-15",
+            "data_recebimento_comissao": "not-a-valid-date"
+        }
+    ]
+    
+    res = compute_dashboard_aggregates(txs, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
+    financials = res["commission_financials"]
+    assert financials["calculation_method"] == "receipt_date_assumption"
+    assert financials["allocation_method"] == "status_only"
+    
+    assert financials["received"]["total"] == "10000.00"
+    assert financials["received"]["gralha"] == "4000.00"
+    assert financials["received"]["demais_participantes"] == "6000.00"
+    assert financials["received"]["transaction_count"] == 1
+    
+    assert financials["pending"]["total"] == "5000.00"
+    assert financials["pending"]["gralha"] == "2000.00"
+    assert financials["pending"]["demais_participantes"] == "3000.00"
+    assert financials["pending"]["transaction_count"] == 1
+    
+    assert financials["unknown"]["total"] == "3000.00"
+    assert financials["unknown"]["gralha"] == "1000.00"
+    assert financials["unknown"]["demais_participantes"] == "2000.00"
+    assert financials["unknown"]["transaction_count"] == 1
+
+
+def test_vgc_receipt_proportional_allocation():
+    from main import compute_dashboard_aggregates
+    
+    txs = [
+        {
+            "total_comissao": 10000.0,
+            "comissionados": [
+                {"nome": "Gralha", "tipo": "Empresa", "valor": 6000.0, "comissionado_imobiliaria": True, "comissionado_valor": 6000.0}
+            ],
+            "data_assinatura_ccv": "2026-03-15",
+            "valor_recebido": 3000.0
+        }
+    ]
+    
+    res = compute_dashboard_aggregates(txs, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
+    financials = res["commission_financials"]
+    assert financials["calculation_method"] == "received_amount"
+    assert financials["allocation_method"] == "proportional"
+    
+    assert financials["received"]["total"] == "3000.00"
+    assert financials["received"]["gralha"] == "1800.00"
+    assert financials["received"]["demais_participantes"] == "1200.00"
+    
+    assert financials["pending"]["total"] == "7000.00"
+    assert financials["pending"]["gralha"] == "4200.00"
+    assert financials["pending"]["demais_participantes"] == "2800.00"
