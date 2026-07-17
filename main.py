@@ -1293,6 +1293,10 @@ def compute_dashboard_aggregates(
     }
 
     # Secure diagnostic logging
+    raw_receipt_date_non_null_count = sum(1 for tx in filtered if tx.get("data_recebimento_comissao") is not None and str(tx.get("data_recebimento_comissao")).strip() != "")
+    normalized_receipt_date_non_null_count = sum(1 for tx in filtered if tx.get("data_recebimento_comissao") is not None and str(tx.get("data_recebimento_comissao")).strip() != "")
+    sanitized_receipt_date_non_null_count = sum(1 for tx in filtered if sanitize_transaction(tx).get("data_recebimento_comissao") is not None and str(sanitize_transaction(tx).get("data_recebimento_comissao")).strip() != "")
+
     vgc_log = {
         "event": "vgc_analysis_completed",
         "receipt_fields_found": list(receipt_keys_found),
@@ -1304,7 +1308,13 @@ def compute_dashboard_aggregates(
         "vgc_total": f"{tot_vgc_total:.2f}",
         "received_count": tot_received_count,
         "pending_count": tot_pending_count,
-        "unknown_count": tot_unknown_count
+        "unknown_count": tot_unknown_count,
+        "raw_receipt_date_non_null_count": raw_receipt_date_non_null_count,
+        "normalized_receipt_date_non_null_count": normalized_receipt_date_non_null_count,
+        "sanitized_receipt_date_non_null_count": sanitized_receipt_date_non_null_count,
+        "received_classified_count": tot_received_count,
+        "pending_classified_count": tot_pending_count,
+        "unknown_classified_count": tot_unknown_count
     }
     print(f"SECURE_LOG: {json.dumps(vgc_log)}")
 
@@ -1350,7 +1360,11 @@ def sanitize_transaction(tx: dict) -> dict:
             if isinstance(fp, dict):
                 nome = fp.get("nome") or fp.get("natureza") or "Forma de Pagamento"
                 valor = fp.get("valor") or 0.0
-                forma_pagamento_clean.append({"nome": nome, "valor": float(valor)})
+                try:
+                    fp_val = float(valor)
+                except ValueError:
+                    fp_val = 0.0
+                forma_pagamento_clean.append({"nome": nome, "valor": fp_val})
                 
     # 4. comissionados sanitizados (apenas nome, tipo e valor)
     comissionados_raw = tx.get("comissionados") or []
@@ -1364,12 +1378,20 @@ def sanitize_transaction(tx: dict) -> dict:
                 is_imob = c.get("comissionado_imobiliária")
                 if is_imob is None:
                     is_imob = c.get("comissionado_imobiliaria")
+                try:
+                    c_val = float(valor)
+                except ValueError:
+                    c_val = 0.0
+                try:
+                    c_val_comm = float(c.get("comissionado_valor") or valor)
+                except ValueError:
+                    c_val_comm = 0.0
                 comissionados_clean.append({
                     "nome": nome,
                     "tipo": tipo,
-                    "valor": float(valor),
+                    "valor": c_val,
                     "comissionado_imobiliaria": bool(is_imob) if is_imob is not None else False,
-                    "comissionado_valor": float(c.get("comissionado_valor") or valor)
+                    "comissionado_valor": c_val_comm
                 })
 
     # 5. Build sanitized object
@@ -1397,6 +1419,11 @@ def sanitize_transaction(tx: dict) -> dict:
         "valor_contrato": tx.get("valor_contrato"),
         "total_comissao": tx.get("total_comissao"),
         "comissao_imobiliaria": tx.get("comissao_imobiliaria"),
+        "data_recebimento_comissao": tx.get("data_recebimento_comissao"),
+        "valor_recebido": tx.get("valor_recebido"),
+        "valor_comissao_recebida": tx.get("valor_comissao_recebida"),
+        "saldo_comissao": tx.get("saldo_comissao"),
+        "status_recebimento": tx.get("status_recebimento"),
         "midia_origem_compradores": tx.get("midia_origem_compradores"),
         "midia_origem_vendedores": tx.get("midia_origem_vendedores"),
         "etapa_atual": tx.get("etapa_atual"),
