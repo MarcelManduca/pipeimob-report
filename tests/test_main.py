@@ -1833,7 +1833,7 @@ def test_vgc_receipt_date_status_only():
                 {"nome": "Gralha", "tipo": "Empresa", "valor": 4000.0, "comissionado_imobiliaria": True, "comissionado_valor": 4000.0}
             ],
             "data_assinatura_ccv": "2026-03-15",
-            "data_recebimento_comissao": "2026-04-10"
+            "data_recebimento_comissao": "2026-04-10" # Past date relative to now (which is 2026-07-17)
         },
         {
             "total_comissao": 5000.0,
@@ -1841,7 +1841,7 @@ def test_vgc_receipt_date_status_only():
                 {"nome": "Gralha", "tipo": "Empresa", "valor": 2000.0, "comissionado_imobiliaria": True, "comissionado_valor": 2000.0}
             ],
             "data_assinatura_ccv": "2026-03-15",
-            "data_recebimento_comissao": ""
+            "data_recebimento_comissao": "" # Empty date -> pending_no_date
         },
         {
             "total_comissao": 3000.0,
@@ -1849,13 +1849,13 @@ def test_vgc_receipt_date_status_only():
                 {"nome": "Gralha", "tipo": "Empresa", "valor": 1000.0, "comissionado_imobiliaria": True, "comissionado_valor": 1000.0}
             ],
             "data_assinatura_ccv": "2026-03-15",
-            "data_recebimento_comissao": "not-a-valid-date"
+            "data_recebimento_comissao": "not-a-valid-date" # Invalid date -> unknown_invalid_date
         }
     ]
     
     res = compute_dashboard_aggregates(txs, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
     financials = res["commission_financials"]
-    assert financials["calculation_method"] == "receipt_date_assumption"
+    assert financials["calculation_method"] == "registered_receipt_date_v1"
     assert financials["allocation_method"] == "status_only"
     
     assert financials["received"]["total"] == "10000.00"
@@ -1867,11 +1867,14 @@ def test_vgc_receipt_date_status_only():
     assert financials["pending"]["gralha"] == "2000.00"
     assert financials["pending"]["demais_participantes"] == "3000.00"
     assert financials["pending"]["transaction_count"] == 1
+    assert financials["pending"]["without_date_count"] == 1
+    assert financials["pending"]["future_date_count"] == 0
     
     assert financials["unknown"]["total"] == "3000.00"
     assert financials["unknown"]["gralha"] == "1000.00"
     assert financials["unknown"]["demais_participantes"] == "2000.00"
     assert financials["unknown"]["transaction_count"] == 1
+    assert financials["unknown"]["invalid_date_count"] == 1
 
 
 def test_vgc_receipt_proportional_allocation():
@@ -1884,19 +1887,122 @@ def test_vgc_receipt_proportional_allocation():
                 {"nome": "Gralha", "tipo": "Empresa", "valor": 6000.0, "comissionado_imobiliaria": True, "comissionado_valor": 6000.0}
             ],
             "data_assinatura_ccv": "2026-03-15",
-            "valor_recebido": 3000.0
+            "valor_recebido": 3000.0 # Under V1, we only classify by date. No date -> pending_no_date
         }
     ]
     
     res = compute_dashboard_aggregates(txs, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
     financials = res["commission_financials"]
-    assert financials["calculation_method"] == "received_amount"
-    assert financials["allocation_method"] == "proportional"
+    assert financials["calculation_method"] == "registered_receipt_date_v1"
+    assert financials["allocation_method"] == "status_only"
     
-    assert financials["received"]["total"] == "3000.00"
-    assert financials["received"]["gralha"] == "1800.00"
-    assert financials["received"]["demais_participantes"] == "1200.00"
+    assert financials["received"]["total"] == "0.00"
+    assert financials["pending"]["total"] == "10000.00"
+    assert financials["pending"]["without_date_count"] == 1
+
+
+def test_vgc_v1_classification_comprehensive():
+    from main import compute_dashboard_aggregates
+    from zoneinfo import ZoneInfo
+    from datetime import datetime, timedelta
     
-    assert financials["pending"]["total"] == "7000.00"
-    assert financials["pending"]["gralha"] == "4200.00"
-    assert financials["pending"]["demais_participantes"] == "2800.00"
+    sp_tz = ZoneInfo("America/Sao_Paulo")
+    now_sp = datetime.now(sp_tz)
+    today_str = now_sp.strftime("%Y-%m-%d")
+    yesterday_str = (now_sp - timedelta(days=1)).strftime("%Y-%m-%d")
+    tomorrow_str = (now_sp + timedelta(days=1)).strftime("%Y-%m-%d")
+    
+    txs = [
+        # Today's date -> received
+        {
+            "total_comissao": 1000.0,
+            "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 500.0}],
+            "data_recebimento_comissao": today_str
+        },
+        # Yesterday's date -> received
+        {
+            "total_comissao": 2000.0,
+            "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 1000.0}],
+            "data_recebimento_comissao": yesterday_str
+        },
+        # Tomorrow's date -> pending (future)
+        {
+            "total_comissao": 3000.0,
+            "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 1500.0}],
+            "data_recebimento_comissao": tomorrow_str
+        },
+        # Missing date -> pending (no date)
+        {
+            "total_comissao": 4000.0,
+            "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 2000.0}],
+            "data_recebimento_comissao": None
+        },
+        # Empty string date -> pending (no date)
+        {
+            "total_comissao": 5000.0,
+            "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 2500.0}],
+            "data_recebimento_comissao": "   "
+        },
+        # Invalid date format -> unknown
+        {
+            "total_comissao": 6000.0,
+            "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 3000.0}],
+            "data_recebimento_comissao": "invalid-format"
+        },
+        # DD/MM/YYYY format -> received
+        {
+            "total_comissao": 7000.0,
+            "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 3500.0}],
+            "data_recebimento_comissao": "10/05/2026"
+        },
+        # ISO 8601 datetime -> received
+        {
+            "total_comissao": 8000.0,
+            "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 4000.0}],
+            "data_recebimento_comissao": "2026-05-20T15:30:00Z"
+        },
+        # Priority: data_recebimento_comissao (future) over data_pagamento_comissao (past) -> pending (future)
+        {
+            "total_comissao": 9000.0,
+            "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 4500.0}],
+            "data_recebimento_comissao": tomorrow_str,
+            "data_pagamento_comissao": yesterday_str
+        },
+        # Fallback to data_pagamento_comissao if data_recebimento_comissao is missing -> received
+        {
+            "total_comissao": 10000.0,
+            "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 5000.0}],
+            "data_recebimento_comissao": None,
+            "data_pagamento_comissao": yesterday_str
+        }
+    ]
+    
+    res = compute_dashboard_aggregates(txs, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
+    financials = res["commission_financials"]
+    
+    assert financials["as_of_date"] == today_str
+    assert financials["timezone"] == "America/Sao_Paulo"
+    assert financials["semantic_validation"] == "provisional_v1"
+    
+    # 2 received (today, yesterday) + 1 received (DD/MM/YYYY) + 1 received (ISO 8601) + 1 received (fallback to pagamento) = 5
+    assert financials["received"]["transaction_count"] == 5
+    # 1 pending future (tomorrow) + 1 pending future (priority) = 2
+    assert financials["pending"]["future_date_count"] == 2
+    # 1 missing + 1 empty = 2
+    assert financials["pending"]["without_date_count"] == 2
+    assert financials["pending"]["transaction_count"] == 4
+    # 1 invalid = 1
+    assert financials["unknown"]["transaction_count"] == 1
+    assert financials["unknown"]["invalid_date_count"] == 1
+    
+    # Check receipt sources count
+    # 10 total txs:
+    # data_recebimento_comissao: 7
+    # data_pagamento_comissao: 1
+    # missing: 2
+    assert financials["receipt_date_sources"]["data_recebimento_comissao"] == 7
+    assert financials["receipt_date_sources"]["data_pagamento_comissao"] == 1
+    assert financials["receipt_date_sources"]["missing"] == 2
+    
+    # In live data or computed, reconciling should be true if logic matches
+    assert financials["composition"]["reconciled"] is True
