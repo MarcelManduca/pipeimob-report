@@ -425,6 +425,8 @@ def load_transactions_dataset(
     pagina: Optional[int] = None,
     request_id: Optional[str] = None
 ) -> tuple:
+    import time
+    start_time = time.perf_counter()
     data_mode, conn_status = get_current_data_mode_and_connection()
     
     if data_mode == "unconfigured":
@@ -450,14 +452,20 @@ def load_transactions_dataset(
         from mock_data import MOCK_TRANSACTIONS
         dataset = MOCK_TRANSACTIONS
         
-        # Secure log print
+        duration_ms = (time.perf_counter() - start_time) * 1000
         log_msg = {
-            "event": "dataset_loaded",
-            "dataset_origin": "synthetic_mock",
-            "record_count": len(dataset),
-            "pagina_consultada": pagina or 1,
-            "periodo_consultado": {k: v for k, v in periodo.items() if v is not None},
-            "correlation_id": request_id or str(uuid.uuid4())
+            "event": "performance_metric",
+            "request_id": request_id or "unknown",
+            "periodo": {
+                "data_inicio_ccv": data_inicio_ccv,
+                "data_fim_ccv": data_fim_ccv,
+                "data_inicio_criacao": data_inicio_criacao,
+                "data_fim_criacao": data_fim_criacao
+            },
+            "paginas_consultadas": 1,
+            "quantidade_transacoes": len(dataset),
+            "cache_hit": False,
+            "processing_time_ms": round(duration_ms, 2)
         }
         print(f"SECURE_LOG: {json.dumps(log_msg)}")
         return "demo", "synthetic_mock", dataset, 1
@@ -507,14 +515,20 @@ def load_transactions_dataset(
             end_idx = start_idx + 25
             txs_to_return = live_txs[start_idx:end_idx]
             
-        # Secure log print
+        duration_ms = (time.perf_counter() - start_time) * 1000
         log_msg = {
-            "event": "dataset_loaded",
-            "dataset_origin": "pipeimob_api_v2_cache",
-            "record_count": len(txs_to_return),
-            "pagina_consultada": pagina or 1,
-            "periodo_consultado": {k: v for k, v in periodo.items() if v is not None},
-            "correlation_id": request_id or str(uuid.uuid4())
+            "event": "performance_metric",
+            "request_id": request_id or "unknown",
+            "periodo": {
+                "data_inicio_ccv": data_inicio_ccv,
+                "data_fim_ccv": data_fim_ccv,
+                "data_inicio_criacao": data_inicio_criacao,
+                "data_fim_criacao": data_fim_criacao
+            },
+            "paginas_consultadas": pages_fetched,
+            "quantidade_transacoes": len(txs_to_return),
+            "cache_hit": True,
+            "processing_time_ms": round(duration_ms, 2)
         }
         print(f"SECURE_LOG: {json.dumps(log_msg)}")
         return "live", "pipeimob_api_v2", txs_to_return, pages_fetched
@@ -567,18 +581,23 @@ def load_transactions_dataset(
         end_idx = start_idx + 25
         txs_to_return = live_txs[start_idx:end_idx]
         
-    # Secure log print
+    duration_ms = (time.perf_counter() - start_time) * 1000
     log_msg = {
-        "event": "dataset_loaded",
-        "dataset_origin": "pipeimob_api_v2",
-        "record_count": len(txs_to_return),
-        "pagina_consultada": pagina or 1,
-        "periodo_consultado": {k: v for k, v in periodo.items() if v is not None},
-        "correlation_id": request_id or str(uuid.uuid4())
+        "event": "performance_metric",
+        "request_id": request_id or "unknown",
+        "periodo": {
+            "data_inicio_ccv": data_inicio_ccv,
+            "data_fim_ccv": data_fim_ccv,
+            "data_inicio_criacao": data_inicio_criacao,
+            "data_fim_criacao": data_fim_criacao
+        },
+        "paginas_consultadas": pages_fetched,
+        "quantidade_transacoes": len(txs_to_return),
+        "cache_hit": False,
+        "processing_time_ms": round(duration_ms, 2)
     }
     print(f"SECURE_LOG: {json.dumps(log_msg)}")
     return "live", "pipeimob_api_v2", txs_to_return, pages_fetched
-
 # Apply filters locally on loaded dataset
 def get_filtered_transactions(
     transactions: list,
@@ -909,7 +928,8 @@ def compute_dashboard_aggregates(
         "sales": Decimal("0.0"),
         "commissions": Decimal("0.0"),
         "missing_date_count": 0,
-        "invalid_date_count": 0
+        "invalid_date_count": 0,
+        "out_of_range_count": 0
     }
     
     for tx in filtered:
@@ -950,15 +970,15 @@ def compute_dashboard_aggregates(
             y, m = ym
             key = f"{y}-{m:02d}"
             
-            if key not in timeline_groups:
-                boundary_key = min(timeline_groups.keys()) if key < min(timeline_groups.keys()) else max(timeline_groups.keys())
-                timeline_groups[boundary_key]["count"] += 1
-                timeline_groups[boundary_key]["sales"] += val_sales
-                timeline_groups[boundary_key]["commissions"] += val_comm
-            else:
+            if key in timeline_groups:
                 timeline_groups[key]["count"] += 1
                 timeline_groups[key]["sales"] += val_sales
                 timeline_groups[key]["commissions"] += val_comm
+            else:
+                unclassified_groups["count"] += 1
+                unclassified_groups["sales"] += val_sales
+                unclassified_groups["commissions"] += val_comm
+                unclassified_groups["out_of_range_count"] += 1
         else:
             unclassified_groups["count"] += 1
             unclassified_groups["sales"] += val_sales
@@ -1019,7 +1039,8 @@ def compute_dashboard_aggregates(
         "total_sales": f"{unclassified_sales:.2f}",
         "total_commissions": f"{unclassified_comm:.2f}",
         "missing_date_count": unclassified_groups["missing_date_count"],
-        "invalid_date_count": unclassified_groups["invalid_date_count"]
+        "invalid_date_count": unclassified_groups["invalid_date_count"],
+        "out_of_range_count": unclassified_groups["out_of_range_count"]
     }
     
     return {
@@ -1724,6 +1745,7 @@ class UnclassifiedTimeline(BaseModel):
     total_commissions: str = Field(..., description="Total commissions of unclassified transactions as string")
     missing_date_count: int = Field(..., description="Number of transactions missing date field completely")
     invalid_date_count: int = Field(..., description="Number of transactions with invalid/unparseable date string")
+    out_of_range_count: int = Field(0, description="Number of transactions with valid dates but outside requested period")
 
 class TimelineReconciliation(BaseModel):
     summary_transaction_count: int = Field(..., description="Total transactions in summary")
@@ -1796,8 +1818,11 @@ class DashboardFullResponse(BaseModel):
     payments: PaymentsDataPayload
     commissions: CommissionsDataPayload
     timeline: List[TimelineMetric]
-    unclassified: UnclassifiedTimeline
-    reconciliation: TimelineReconciliation
+    unclassified: Optional[UnclassifiedTimeline] = None
+    reconciliation: Optional[TimelineReconciliation] = None
+    schema_version: Optional[str] = "1.0"
+    generated_at: Optional[str] = None
+    filters_applied: Optional[dict] = None
     debug_metrics: Optional[dict] = None
 
 # Helper to format and add X-Data-Mode response headers
@@ -2590,8 +2615,10 @@ async def get_dashboard_full(
     
     response.headers["X-Data-Mode"] = mode
     
-    debug_metrics = {}
-    if dataset:
+    enable_debug = os.getenv("ENABLE_SAFE_DEBUG_METRICS", "false").strip().lower() == "true"
+    debug_metrics = None
+    if enable_debug and dataset:
+        debug_metrics = {}
         debug_metrics["transaction_count"] = len(dataset)
         
         # 1. Top-level keys presence counts
@@ -2668,6 +2695,23 @@ async def get_dashboard_full(
             "aggregator_count": len(filtered)
         }
 
+    generated_at_utc = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    
+    filters_map = {
+        "data_inicio_ccv": data_inicio_ccv,
+        "data_fim_ccv": data_fim_ccv,
+        "data_inicio_criacao": data_inicio_criacao,
+        "data_fim_criacao": data_fim_criacao,
+        "codigo_imovel": codigo_imovel,
+        "codigo_contrato": codigo_contrato,
+        "transacao_unique_id": transacao_unique_id,
+        "agent": agent,
+        "category": category,
+        "financing": financing,
+        "etapa_atual": etapa_atual
+    }
+    filters_applied = {k: v for k, v in filters_map.items() if v is not None}
+
     return DashboardFullResponse(
         data_mode=mode,
         source=src,
@@ -2683,5 +2727,8 @@ async def get_dashboard_full(
         timeline=[TimelineMetric(**t) for t in aggregates["timeline"]],
         unclassified=UnclassifiedTimeline(**aggregates["unclassified"]),
         reconciliation=TimelineReconciliation(**aggregates["reconciliation"]),
+        schema_version="1.0",
+        generated_at=generated_at_utc,
+        filters_applied=filters_applied,
         debug_metrics=debug_metrics
     )

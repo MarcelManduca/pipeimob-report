@@ -1579,3 +1579,179 @@ def test_sanitize_transaction_preserves_operational_fields():
     assert "email_cliente" not in sanitized
     assert "celular_cliente" not in sanitized
     assert "clientes" not in sanitized
+
+
+def test_dashboard_full_contract_schema_and_debug_metrics_behavior():
+    os.environ["PIPEIMOB_DATA_MODE"] = "demo"
+    
+    # 1. Test with ENABLE_SAFE_DEBUG_METRICS=false (default/unset)
+    os.environ["ENABLE_SAFE_DEBUG_METRICS"] = "false"
+    response = client.get("/api/dashboard/full?data_inicio_ccv=2026-01-01&data_fim_ccv=2026-06-30")
+    assert response.status_code == 200
+    data = response.json()
+    
+    assert "data_mode" in data
+    assert "source" in data
+    assert "period" in data
+    assert "pages_fetched" in data
+    assert "transaction_count" in data
+    assert "summary" in data
+    assert "timeline" in data
+    assert "origins" in data
+    assert "stages" in data
+    assert "managers" in data
+    assert "payments" in data
+    assert "commissions" in data
+    
+    assert data.get("schema_version") == "1.0"
+    assert "generated_at" in data
+    assert "filters_applied" in data
+    assert data["filters_applied"].get("data_inicio_ccv") == "2026-01-01"
+    assert data["filters_applied"].get("data_fim_ccv") == "2026-06-30"
+    
+    assert data.get("debug_metrics") is None
+    
+    # 2. Test with ENABLE_SAFE_DEBUG_METRICS=true
+    os.environ["ENABLE_SAFE_DEBUG_METRICS"] = "true"
+    response_debug = client.get("/api/dashboard/full?data_inicio_ccv=2026-01-01&data_fim_ccv=2026-06-30")
+    assert response_debug.status_code == 200
+    data_debug = response_debug.json()
+    assert data_debug.get("debug_metrics") is not None
+    assert "priority_keys_presence" in data_debug["debug_metrics"]
+    
+    resp_str = json.dumps(data_debug)
+    for pii_term in ["cpf", "cnpj", "celular", "email", "documentos", "link_acesso"]:
+        assert pii_term not in resp_str.lower() or "count" in pii_term or "unclassified" in pii_term or "reconciliation" in pii_term or "debug_metrics" in pii_term
+
+
+def test_timeline_equal_summary_when_all_dates_valid():
+    from main import compute_dashboard_aggregates
+    
+    valid_txs = [
+        {"data_assinatura_ccv": "2026-01-10", "valor_contrato": 100000.0, "total_comissao": 5000.0},
+        {"data_ccv": "2026-02-15", "valor_contrato": 200000.0, "total_comissao": 10000.0},
+        {"data_contrato": "2026-03-20", "valor_contrato": 300000.0, "total_comissao": 15000.0}
+    ]
+    
+    res = compute_dashboard_aggregates(valid_txs, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-03-31")
+    
+    summary = res["summary"]
+    timeline = res["timeline"]
+    unclassified = res["unclassified"]
+    
+    assert unclassified["transaction_count"] == 0
+    assert unclassified["out_of_range_count"] == 0
+    assert unclassified["missing_date_count"] == 0
+    assert unclassified["invalid_date_count"] == 0
+    
+    timeline_count_sum = sum(t["transaction_count"] for t in timeline)
+    timeline_sales_sum = sum(float(t["total_sales"]) for t in timeline)
+    timeline_comm_sum = sum(float(t["total_commissions"]) for t in timeline)
+    
+    assert timeline_count_sum == summary["transaction_count"]
+    assert abs(timeline_sales_sum - summary["total_sales"]) < 0.01
+    assert abs(timeline_comm_sum - summary["total_commissions"]) < 0.01
+
+
+def test_no_artificial_boundary_month_assignment():
+    from main import compute_dashboard_aggregates
+    
+    txs = [
+        {"data_assinatura_ccv": "2026-04-10", "valor_contrato": 500000.0, "total_comissao": 25000.0},
+        {"data_assinatura_ccv": "2026-01-15", "valor_contrato": 100000.0, "total_comissao": 5000.0},
+    ]
+    
+    res = compute_dashboard_aggregates(txs, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-03-31")
+    
+    timeline = res["timeline"]
+    unclassified = res["unclassified"]
+    
+    assert timeline[0]["transaction_count"] == 1
+    assert timeline[2]["transaction_count"] == 0
+    
+    assert unclassified["transaction_count"] == 1
+    assert unclassified["out_of_range_count"] == 1
+
+
+from unittest.mock import patch, MagicMock
+
+def test_live_pagination_229_records():
+    from main import fetch_all_pipeimob_transactions
+    
+    responses = []
+    
+    for p in range(1, 10):
+        txs = []
+        for i in range(25):
+            txs.append({
+                "transacao_unique_id_pipeimob": f"tx_pag_{p}_{i}",
+                "valor_contrato": 1400000.0,
+                "total_comissao": 74786.45554585,
+                "data_assinatura_ccv": "2026-03-15"
+            })
+        responses.append({
+            "success": True,
+            "data": {
+                "transacoes": txs
+            },
+            "meta": {
+                "pagination": {
+                    "current_page": p,
+                    "total_pages": 10,
+                    "total_records": 229
+                }
+            }
+        })
+        
+    txs_10 = []
+    for i in range(4):
+        txs_10.append({
+            "transacao_unique_id_pipeimob": f"tx_pag_10_{i}",
+            "valor_contrato": 1608779.4725,
+            "total_comissao": 74786.45554585,
+            "data_assinatura_ccv": "2026-03-15"
+        })
+    responses.append({
+        "success": True,
+        "data": {
+            "transacoes": txs_10
+        },
+        "meta": {
+            "pagination": {
+                "current_page": 10,
+                "total_pages": 10,
+                "total_records": 229
+            }
+        }
+    })
+    
+    with patch("urllib.request.urlopen") as mock_urlopen, \
+         patch("main.get_auth_token", return_value="mock_access_token"):
+         
+        mock_res_objects = []
+        for r in responses:
+            mock_res = MagicMock()
+            mock_res.__enter__.return_value = mock_res
+            mock_res.read.return_value = json.dumps(r).encode("utf-8")
+            mock_res.getcode.return_value = 200
+            mock_res_objects.append(mock_res)
+            
+        mock_urlopen.side_effect = mock_res_objects
+        
+        txs, pages = fetch_all_pipeimob_transactions(
+            api_key="mock_key",
+            api_secret="mock_secret",
+            data_inicio_ccv="2026-01-01",
+            data_fim_ccv="2026-06-30"
+        )
+        
+        assert len(txs) == 229
+        assert pages == 10
+        
+        from main import compute_dashboard_aggregates
+        aggregates = compute_dashboard_aggregates(txs, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
+        
+        summary = aggregates["summary"]
+        assert summary["transaction_count"] == 229
+        assert float(summary["total_sales"]) == 321435117.89
+        assert float(summary["total_commissions"]) == 17126098.32
