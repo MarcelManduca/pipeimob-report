@@ -609,7 +609,7 @@ def load_transactions_dataset(
         
     # 1. Check transient cache for this live query filters
     cache_key = (
-        "sales-cycle-v1",
+        "sales-cycle-v2-extremes",
         data_inicio_criacao, data_fim_criacao,
         data_inicio_ccv, data_fim_ccv,
         data_arquivamento_inicio, data_arquivamento_fim,
@@ -1304,6 +1304,7 @@ def compute_dashboard_aggregates(
     negative_duration_count = 0
     
     valid_durations = []
+    valid_records = []
     
     # Timeline initialization: reuse months_range
     sales_cycle_timeline_groups = {}
@@ -1348,8 +1349,42 @@ def compute_dashboard_aggregates(
         sales_cycle_days = (dt_sig - dt_cap).days
         valid_durations.append(sales_cycle_days)
         
+        # Prepare helper metadata for extremes
+        raw_code = tx.get("codigo_imovel")
+        raw_title = tx.get("titulo_nome_negocio")
+        
+        clean_code = str(raw_code).strip() if raw_code is not None else None
+        if clean_code == "":
+            clean_code = None
+            
+        clean_title = str(raw_title).strip() if raw_title is not None else None
+        if clean_title == "":
+            clean_title = None
+            
+        # Privacy & Security: Sanitization of deal title if it contains sensitive info
+        if clean_title is not None:
+            import re
+            has_sensitive = False
+            if re.search(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", clean_title):
+                has_sensitive = True
+            elif re.search(r"\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b", clean_title):
+                has_sensitive = True
+            elif re.search(r"\b\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}\b", clean_title):
+                has_sensitive = True
+            elif re.search(r"\b(?:\(?\d{2}\)?\s*?)?\d{4,5}-?\d{4}\b", clean_title):
+                has_sensitive = True
+            if has_sensitive:
+                clean_title = None
+                
+        valid_records.append({
+            "days": sales_cycle_days,
+            "dt_sig": dt_sig,
+            "code": clean_code,
+            "uid": tx.get("transacao_unique_id_pipeimob"),
+            "title": clean_title
+        })
+        
         # Add to timeline group if matched
-        # Group always by the month of data_assinatura_ccv (which is the resolved signature date dt_sig_str)
         ym_sig = parse_date_to_year_month(dt_sig_str)
         if ym_sig:
             y_s, m_s = ym_sig
@@ -1365,8 +1400,44 @@ def compute_dashboard_aggregates(
     valid_count = len(valid_durations)
     total_count = len(filtered)
     
+    # Selection of Extremes (Fastest and Longest Sale)
+    fastest_sale = None
+    longest_sale = None
+    
+    if valid_records:
+        def make_tiebreaker_key(record, is_longest=False):
+            days_key = -record["days"] if is_longest else record["days"]
+            dt_sig_key = record["dt_sig"]
+            
+            code_none = record["code"] is None
+            code_val = record["code"] if not code_none else ""
+            code_key = (code_none, code_val)
+            
+            uid_none = record["uid"] is None
+            uid_val = record["uid"] if not uid_none else ""
+            uid_key = (uid_none, uid_val)
+            
+            return (days_key, dt_sig_key, code_key, uid_key)
+            
+        # 1. Fastest sale
+        valid_records.sort(key=lambda r: make_tiebreaker_key(r, is_longest=False))
+        fastest_rec = valid_records[0]
+        fastest_sale = {
+            "days": fastest_rec["days"],
+            "property_code": fastest_rec["code"],
+            "deal_title": fastest_rec["title"]
+        }
+        
+        # 2. Longest sale
+        valid_records.sort(key=lambda r: make_tiebreaker_key(r, is_longest=True))
+        longest_rec = valid_records[0]
+        longest_sale = {
+            "days": longest_rec["days"],
+            "property_code": longest_rec["code"],
+            "deal_title": longest_rec["title"]
+        }
+        
     # Initialize faixas / buckets
-    # faixas: [0_30_days, 31_60_days, 61_90_days, 91_180_days, 181_365_days, over_365_days]
     bucket_counts = {
         "0_30_days": 0,
         "31_60_days": 0,
@@ -1498,7 +1569,9 @@ def compute_dashboard_aggregates(
         "within_90_days_count": within_90_days_count,
         "within_90_days_ratio": w90_ratio,
         "buckets": buckets_list,
-        "timeline": timeline_list
+        "timeline": timeline_list,
+        "fastest_sale": fastest_sale,
+        "longest_sale": longest_sale
     }
     
     # Secure diagnostic logging for sales_cycle
@@ -1610,6 +1683,7 @@ def sanitize_transaction(tx: dict) -> dict:
         "transacao_unique_id_pipeimob": tx.get("transacao_unique_id_pipeimob"),
         "codigo_contrato": tx.get("codigo_contrato"),
         "codigo_imovel": tx.get("codigo_imovel"),
+        "titulo_nome_negocio": tx.get("titulo_nome_negocio"),
         "data_contrato": tx.get("data_contrato"),
         "data_inicio_venda": tx.get("data_inicio_venda"),
         "data_captacao": tx.get("data_captacao"),
@@ -2383,6 +2457,11 @@ class SalesCycleExcluded(BaseModel):
     invalid_date_count: int
     negative_duration_count: int
 
+class SalesCycleExtreme(BaseModel):
+    days: int
+    property_code: Optional[str] = None
+    deal_title: Optional[str] = None
+
 class SalesCyclePayload(BaseModel):
     period_basis: str = "ccv"
     start_field: str = "data_captacao"
@@ -2404,6 +2483,8 @@ class SalesCyclePayload(BaseModel):
     within_90_days_ratio: float
     buckets: List[SalesCycleBucket]
     timeline: List[SalesCycleTimelineItem]
+    fastest_sale: Optional[SalesCycleExtreme] = None
+    longest_sale: Optional[SalesCycleExtreme] = None
 
 class DashboardPeriod(BaseModel):
     start: Optional[str] = None

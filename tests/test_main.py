@@ -1531,6 +1531,8 @@ def test_sanitize_transaction_preserves_operational_fields():
     raw_tx = {
         "transacao_unique_id_pipeimob": "123",
         "codigo_contrato": "CON-123",
+        "codigo_imovel": "IMO-123",
+        "titulo_nome_negocio": "Venda Casa Alpha",
         "data_captacao": "2026-04-10",
         "data_assinatura_ccv": "2026-05-15",
         "data_ccv": "2026-05-15",
@@ -1561,6 +1563,8 @@ def test_sanitize_transaction_preserves_operational_fields():
     
     assert sanitized["transacao_unique_id_pipeimob"] == "123"
     assert sanitized["codigo_contrato"] == "CON-123"
+    assert sanitized["codigo_imovel"] == "IMO-123"
+    assert sanitized["titulo_nome_negocio"] == "Venda Casa Alpha"
     assert sanitized["data_captacao"] == "2026-04-10"
     assert sanitized["data_assinatura_ccv"] == "2026-05-15"
     assert sanitized["data_ccv"] == "2026-05-15"
@@ -2191,7 +2195,8 @@ def test_sales_cycle_comprehensive():
         "transaction_count", "valid_transaction_count", "excluded",
         "average_days", "median_days", "p25_days", "p75_days", "p90_days",
         "minimum_days", "maximum_days", "within_30_days_count", "within_60_days_count",
-        "within_90_days_count", "within_90_days_ratio", "buckets", "timeline"
+        "within_90_days_count", "within_90_days_ratio", "buckets", "timeline",
+        "fastest_sale", "longest_sale"
     }
     assert set(sc.keys()) == keys_allowed
 
@@ -2233,5 +2238,133 @@ def test_dashboard_full_endpoint_sales_cycle(mock_load):
         assert sc["median_days"] == 15.0  # Median of [10, 20] is 15.0
         assert len(sc["buckets"]) == 6
         assert len(sc["timeline"]) == 6
+        assert "fastest_sale" in sc
+        assert "longest_sale" in sc
+        assert sc["fastest_sale"]["days"] == 10
+        assert sc["longest_sale"]["days"] == 20
     finally:
         os.environ.pop("BACKEND_API_KEY", None)
+
+
+def test_sales_cycle_extremes_comprehensive():
+    from main import compute_dashboard_aggregates
+    
+    # Test case 1: general check of fastest and longest sale, days=0, PII sanitization
+    txs = [
+        # Fastest sale: 0 days
+        {
+            "data_captacao": "2026-01-10",
+            "data_assinatura_ccv": "2026-01-10",
+            "codigo_imovel": "IMO-FASTEST",
+            "titulo_nome_negocio": "Negócio Alfa",
+            "transacao_unique_id_pipeimob": "uid-fast"
+        },
+        # Intermediate sale
+        {
+            "data_captacao": "2026-01-10",
+            "data_assinatura_ccv": "2026-01-20",
+            "codigo_imovel": "IMO-INTER",
+            "titulo_nome_negocio": "Negócio Inter",
+            "transacao_unique_id_pipeimob": "uid-inter"
+        },
+        # Longest sale: 100 days, has sensitive info (email and CNPJ) to verify sanitization
+        {
+            "data_captacao": "2026-01-10",
+            "data_assinatura_ccv": "2026-04-20",
+            "codigo_imovel": "IMO-LONGEST",
+            "titulo_nome_negocio": "Contato: imob@gralha.com.br CNPJ 12.345.678/0001-99",
+            "transacao_unique_id_pipeimob": "uid-long"
+        },
+        # Excluded sale (invalid date) - must not be selected as extreme
+        {
+            "data_captacao": "invalid-date",
+            "data_assinatura_ccv": "2026-01-10",
+            "codigo_imovel": "IMO-EXCLUDED",
+            "titulo_nome_negocio": "Negócio Excluded",
+            "transacao_unique_id_pipeimob": "uid-ex"
+        }
+    ]
+    
+    res = compute_dashboard_aggregates(txs, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
+    sc = res["sales_cycle"]
+    
+    assert sc["valid_transaction_count"] == 3
+    assert sc["minimum_days"] == 0
+    assert sc["maximum_days"] == 100
+    
+    # Verify fastest sale properties
+    assert sc["fastest_sale"] is not None
+    assert sc["fastest_sale"]["days"] == 0
+    assert sc["fastest_sale"]["property_code"] == "IMO-FASTEST"
+    assert sc["fastest_sale"]["deal_title"] == "Negócio Alfa"
+    assert sc["fastest_sale"]["days"] == sc["minimum_days"]
+    assert set(sc["fastest_sale"].keys()) == {"days", "property_code", "deal_title"}
+    
+    # Verify longest sale properties & sanitization of email/CNPJ
+    assert sc["longest_sale"] is not None
+    assert sc["longest_sale"]["days"] == 100
+    assert sc["longest_sale"]["property_code"] == "IMO-LONGEST"
+    assert sc["longest_sale"]["deal_title"] is None  # Sanitized to None because of email/CNPJ!
+    assert sc["longest_sale"]["days"] == sc["maximum_days"]
+    assert set(sc["longest_sale"].keys()) == {"days", "property_code", "deal_title"}
+
+    # Test case 2: tie-breaker on duration
+    txs_tie = [
+        # Tie on 5 days duration
+        {
+            "data_captacao": "2026-01-15",
+            "data_assinatura_ccv": "2026-01-20",  # oldest signature date
+            "codigo_imovel": "IMO-TIE-C",
+            "titulo_nome_negocio": "Negócio C",
+            "transacao_unique_id_pipeimob": "uid-c"
+        },
+        {
+            "data_captacao": "2026-02-15",
+            "data_assinatura_ccv": "2026-02-20",  # newer signature date
+            "codigo_imovel": "IMO-TIE-A",
+            "titulo_nome_negocio": "Negócio A",
+            "transacao_unique_id_pipeimob": "uid-a"
+        },
+        {
+            "data_captacao": "2026-01-15",
+            "data_assinatura_ccv": "2026-01-20",  # oldest signature date, but code is null (comes after prefilled codes)
+            "codigo_imovel": None,
+            "titulo_nome_negocio": "Negócio NullCode",
+            "transacao_unique_id_pipeimob": "uid-null-code"
+        },
+        {
+            "data_captacao": "2026-01-15",
+            "data_assinatura_ccv": "2026-01-20",  # oldest signature date, same code "IMO-TIE-C", but UID is null
+            "codigo_imovel": "IMO-TIE-C",
+            "titulo_nome_negocio": "Negócio NullUid",
+            "transacao_unique_id_pipeimob": None
+        }
+    ]
+    
+    res_tie = compute_dashboard_aggregates(txs_tie, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
+    sc_tie = res_tie["sales_cycle"]
+    
+    # Fastest tie-breaker:
+    assert sc_tie["fastest_sale"]["days"] == 5
+    assert sc_tie["fastest_sale"]["property_code"] == "IMO-TIE-C"
+    assert sc_tie["fastest_sale"]["deal_title"] == "Negócio C"
+    
+    # Test case 3: empty strings in code/title
+    txs_empty = [
+        {
+            "data_captacao": "2026-01-10",
+            "data_assinatura_ccv": "2026-01-15",
+            "codigo_imovel": "   ",
+            "titulo_nome_negocio": "   ",
+            "transacao_unique_id_pipeimob": "uid-empty"
+        }
+    ]
+    res_empty = compute_dashboard_aggregates(txs_empty, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
+    sc_empty = res_empty["sales_cycle"]
+    assert sc_empty["fastest_sale"]["property_code"] is None
+    assert sc_empty["fastest_sale"]["deal_title"] is None
+    
+    # Test case 4: no valid transactions
+    res_none = compute_dashboard_aggregates([], data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
+    assert res_none["sales_cycle"]["fastest_sale"] is None
+    assert res_none["sales_cycle"]["longest_sale"] is None
