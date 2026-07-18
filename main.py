@@ -2145,23 +2145,38 @@ async def get_vgc_diagnostics():
         data_inicio_ccv="2026-01-01",
         data_fim_ccv="2026-06-30"
     )
-    ccv_paths = []
-    if dataset:
-        tx = dataset[0]
-        def search_key(d, path=""):
-            if isinstance(d, dict):
-                for k, v in d.items():
-                    if k == "data_assinatura_ccv":
-                        ccv_paths.append(f"{path}.{k}" if path else k)
-                    search_key(v, f"{path}.{k}" if path else k)
-            elif isinstance(d, list):
-                for i, item in enumerate(d):
-                    search_key(item, f"{path}[{i}]")
-        search_key(tx)
+    
+    # 1. Capture date
+    raw_captacao_present = sum(1 for tx in dataset if "data_captacao" in tx)
+    raw_captacao_non_empty = sum(1 for tx in dataset if tx.get("data_captacao") is not None and str(tx.get("data_captacao")).strip() != "")
+    
+    # 2. Signature date (checking fallback logic)
+    raw_sig_present = 0
+    raw_sig_non_empty = 0
+    for tx in dataset:
+        dt_sig = extract_transaction_date(tx)
+        if dt_sig is not None:
+            raw_sig_present += 1
+            if str(dt_sig).strip() != "":
+                raw_sig_non_empty += 1
+                
+    # 3. Sanitized check
+    sanitized_dataset = [sanitize_transaction(tx) for tx in dataset]
+    sanitized_captacao_non_empty = sum(1 for tx in sanitized_dataset if tx.get("data_captacao") is not None and str(tx.get("data_captacao")).strip() != "")
+    sanitized_sig_non_empty = 0
+    for tx in sanitized_dataset:
+        dt_sig = extract_transaction_date(tx)
+        if dt_sig is not None and str(dt_sig).strip() != "":
+            sanitized_sig_non_empty += 1
+            
     return {
         "raw_count": len(dataset),
-        "ccv_paths": ccv_paths,
-        "first_tx_data_contrato": dataset[0].get("data_contrato") if dataset else None
+        "raw_captacao_present": raw_captacao_present,
+        "raw_captacao_non_empty": raw_captacao_non_empty,
+        "raw_sig_present": raw_sig_present,
+        "raw_sig_non_empty": raw_sig_non_empty,
+        "sanitized_captacao_non_empty": sanitized_captacao_non_empty,
+        "sanitized_sig_non_empty": sanitized_sig_non_empty
     }
 
 
