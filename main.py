@@ -2438,24 +2438,6 @@ def get_metadata_wrapper(data_mode: str, source: str):
         "generated_at": timestamp_utc
     }
 
-# Temporary public endpoint for verification
-@app.get("/api/dashboard/full-public")
-async def get_dashboard_full_public(
-    data_inicio_ccv: Optional[str] = Query(None),
-    data_fim_ccv: Optional[str] = Query(None)
-):
-    mode, src, dataset, pages_fetched = load_transactions_dataset(
-        data_inicio_ccv=data_inicio_ccv,
-        data_fim_ccv=data_fim_ccv
-    )
-    validate_dataset_origin(mode, src, dataset)
-    filtered = get_filtered_transactions(
-        dataset, mode, data_inicio_ccv=data_inicio_ccv, data_fim_ccv=data_fim_ccv
-    )
-    aggregates = compute_dashboard_aggregates(filtered, data_inicio_ccv, data_fim_ccv)
-    return aggregates
-
-
 # Endpoint routes
 @app.get(
     "/api/health",
