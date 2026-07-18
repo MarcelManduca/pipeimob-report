@@ -48,6 +48,7 @@ class DashboardCache:
             self.cache.clear()
 
 dashboard_cache = DashboardCache()
+dashboard_cache.clear()
 
 # Mock data will be imported locally inside load_transactions_dataset to avoid any global access.
 
@@ -608,6 +609,7 @@ def load_transactions_dataset(
         
     # 1. Check transient cache for this live query filters
     cache_key = (
+        "sales-cycle-v1",
         data_inicio_criacao, data_fim_criacao,
         data_inicio_ccv, data_fim_ccv,
         data_arquivamento_inicio, data_arquivamento_fim,
@@ -3331,6 +3333,7 @@ async def get_dashboard_full(
         timeline=[TimelineMetric(**t) for t in aggregates["timeline"]],
         unclassified=UnclassifiedTimeline(**aggregates["unclassified"]),
         reconciliation=TimelineReconciliation(**aggregates["reconciliation"]),
+        sales_cycle=SalesCyclePayload(**aggregates["sales_cycle"]) if aggregates.get("sales_cycle") is not None else None,
         schema_version="1.0",
         generated_at=generated_at_utc,
         filters_applied=filters_applied,

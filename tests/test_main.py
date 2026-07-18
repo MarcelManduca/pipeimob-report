@@ -2194,3 +2194,44 @@ def test_sales_cycle_comprehensive():
         "within_90_days_count", "within_90_days_ratio", "buckets", "timeline"
     }
     assert set(sc.keys()) == keys_allowed
+
+
+@patch("main.load_transactions_dataset")
+def test_dashboard_full_endpoint_sales_cycle(mock_load):
+    from unittest.mock import patch
+    from main import app
+    
+    # Set mock dataset
+    mock_load.return_value = (
+        "demo",
+        "synthetic_mock",
+        [
+            {
+                "data_captacao": "2026-01-10",
+                "data_assinatura_ccv": "2026-01-20"  # 10 days
+            },
+            {
+                "data_captacao": "2026-01-10",
+                "data_assinatura_ccv": "2026-01-30"  # 20 days
+            }
+        ],
+        1
+    )
+    
+    # Authenticate using server-to-server fallback bypass
+    os.environ["BACKEND_API_KEY"] = "super-secret-test-key"
+    try:
+        test_client = TestClient(app, headers={"x-backend-api-key": "super-secret-test-key"})
+        res = test_client.get("/api/dashboard/full?data_inicio_ccv=2026-01-01&data_fim_ccv=2026-06-30")
+        assert res.status_code == 200
+        data = res.json()
+        assert "sales_cycle" in data
+        sc = data["sales_cycle"]
+        assert sc is not None
+        assert sc["transaction_count"] == 2
+        assert sc["valid_transaction_count"] == 2
+        assert sc["median_days"] == 15.0  # Median of [10, 20] is 15.0
+        assert len(sc["buckets"]) == 6
+        assert len(sc["timeline"]) == 6
+    finally:
+        os.environ.pop("BACKEND_API_KEY", None)
