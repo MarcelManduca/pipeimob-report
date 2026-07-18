@@ -2521,18 +2521,6 @@ def get_metadata_wrapper(data_mode: str, source: str):
         "generated_at": timestamp_utc
     }
 
-@app.get("/api/dashboard/full-public")
-async def get_dashboard_full_public(
-    data_inicio_ccv: str = "2026-01-01",
-    data_fim_ccv: str = "2026-06-30"
-):
-    db_mode, src, txs, pages = load_transactions_dataset(
-        data_inicio_ccv=data_inicio_ccv,
-        data_fim_ccv=data_fim_ccv
-    )
-    aggs = compute_dashboard_aggregates(txs, data_inicio_ccv=data_inicio_ccv, data_fim_ccv=data_fim_ccv)
-    return aggs["sales_cycle"]
-
 # Endpoint routes
 @app.get(
     "/api/health",
