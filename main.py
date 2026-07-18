@@ -430,6 +430,7 @@ def parse_explicit_date(date_str: str):
         return None
     import re
     from datetime import datetime
+    from zoneinfo import ZoneInfo
     date_str = date_str.strip()
     
     # 1. DD/MM/YYYY
@@ -446,16 +447,48 @@ def parse_explicit_date(date_str: str):
         except ValueError:
             return None
             
-    # 3. ISO 8601
-    match_iso = re.match(r"^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})", date_str)
-    if match_iso:
-        dt_part = f"{match_iso.group(1)}-{match_iso.group(2)}-{match_iso.group(3)}"
+    # 3. ISO 8601 with date and time
+    if "T" in date_str or (" " in date_str and len(date_str) > 10):
+        iso_str = date_str.replace("Z", "+00:00")
         try:
-            return datetime.strptime(dt_part, "%Y-%m-%d").date()
+            # We match timezone suffix like +HH:MM, -HH:MM or +00:00.
+            # If no offset is present, treat as naive and assume local CRM time (America/Sao_Paulo).
+            has_tz = re.search(r"([+-]\d{2}:?\d{2}|Z)$", date_str) or "+00:00" in iso_str
+            dt = datetime.fromisoformat(iso_str)
+            if not has_tz or dt.tzinfo is None:
+                dt = dt.replace(tzinfo=ZoneInfo("America/Sao_Paulo"))
+            else:
+                dt = dt.astimezone(ZoneInfo("America/Sao_Paulo"))
+            return dt.date()
         except ValueError:
             return None
             
     return None
+
+def calculate_percentile(sorted_values: list, percentile: float) -> float:
+    """
+    Calculates a percentile using linear interpolation between closest ranks (inclusive method).
+    Reference formula:
+    idx = percentile * (N - 1)
+    low = floor(idx)
+    high = ceil(idx)
+    percentile_value = V[low] + (idx - low) * (V[high] - V[low])
+    """
+    if not sorted_values:
+        return 0.0
+    n = len(sorted_values)
+    if n == 1:
+        return float(sorted_values[0])
+    
+    idx = percentile * (n - 1)
+    low = int(idx)
+    high = low + 1
+    if high >= n:
+        return float(sorted_values[low])
+    
+    d = idx - low
+    val = sorted_values[low] + d * (sorted_values[high] - sorted_values[low])
+    return round(val, 1)
 
 
 def calculate_vgc_split(tx: dict) -> tuple[Decimal, Decimal, Decimal]:
@@ -1262,6 +1295,225 @@ def compute_dashboard_aggregates(
         )
     }
     
+    # === Sales Cycle (Velocidade de Venda) Analysis ===
+    missing_signature_date_count = 0
+    missing_capture_date_count = 0
+    invalid_date_count = 0
+    negative_duration_count = 0
+    
+    valid_durations = []
+    
+    # Timeline initialization: reuse months_range
+    sales_cycle_timeline_groups = {}
+    for y, m in months_range:
+        k_month = f"{y}-{m:02d}"
+        parts = k_month.split("-")
+        lbl = f"{months_pt.get(parts[1], parts[1])}/{parts[0][-2:]}"
+        sales_cycle_timeline_groups[k_month] = {
+            "month": k_month,
+            "label": lbl,
+            "transaction_count": 0,
+            "durations": [],
+            "within_90_days_count": 0
+        }
+        
+    for tx in filtered:
+        # 1. signature date
+        dt_sig_str = extract_transaction_date(tx)
+        if dt_sig_str is None or str(dt_sig_str).strip() == "":
+            missing_signature_date_count += 1
+            continue
+            
+        # 2. capture date
+        dt_cap_str = tx.get("data_captacao")
+        if dt_cap_str is None or str(dt_cap_str).strip() == "":
+            missing_capture_date_count += 1
+            continue
+            
+        # 3. parse dates
+        dt_sig = parse_explicit_date(dt_sig_str)
+        dt_cap = parse_explicit_date(dt_cap_str)
+        if dt_sig is None or dt_cap is None:
+            invalid_date_count += 1
+            continue
+            
+        # 4. negative duration
+        if dt_cap > dt_sig:
+            negative_duration_count += 1
+            continue
+            
+        # 5. valid record
+        sales_cycle_days = (dt_sig - dt_cap).days
+        valid_durations.append(sales_cycle_days)
+        
+        # Add to timeline group if matched
+        # Group always by the month of data_assinatura_ccv (which is the resolved signature date dt_sig_str)
+        ym_sig = parse_date_to_year_month(dt_sig_str)
+        if ym_sig:
+            y_s, m_s = ym_sig
+            ym_key = f"{y_s}-{m_s:02d}"
+            if ym_key in sales_cycle_timeline_groups:
+                sales_cycle_timeline_groups[ym_key]["durations"].append(sales_cycle_days)
+                if sales_cycle_days <= 90:
+                    sales_cycle_timeline_groups[ym_key]["within_90_days_count"] += 1
+                sales_cycle_timeline_groups[ym_key]["transaction_count"] += 1
+                
+    # Sort durations for percentiles
+    valid_durations.sort()
+    valid_count = len(valid_durations)
+    total_count = len(filtered)
+    
+    # Initialize faixas / buckets
+    # faixas: [0_30_days, 31_60_days, 61_90_days, 91_180_days, 181_365_days, over_365_days]
+    bucket_counts = {
+        "0_30_days": 0,
+        "31_60_days": 0,
+        "61_90_days": 0,
+        "91_180_days": 0,
+        "181_365_days": 0,
+        "over_365_days": 0
+    }
+    
+    within_30_days_count = 0
+    within_60_days_count = 0
+    within_90_days_count = 0
+    
+    for days in valid_durations:
+        if days <= 30:
+            bucket_counts["0_30_days"] += 1
+            within_30_days_count += 1
+            within_60_days_count += 1
+            within_90_days_count += 1
+        elif days <= 60:
+            bucket_counts["31_60_days"] += 1
+            within_60_days_count += 1
+            within_90_days_count += 1
+        elif days <= 90:
+            bucket_counts["61_90_days"] += 1
+            within_90_days_count += 1
+        elif days <= 180:
+            bucket_counts["91_180_days"] += 1
+        elif days <= 365:
+            bucket_counts["181_365_days"] += 1
+        else:
+            bucket_counts["over_365_days"] += 1
+            
+    # Calculate stats
+    if valid_count > 0:
+        avg_days = round(sum(valid_durations) / valid_count, 1)
+        med_days = calculate_percentile(valid_durations, 0.50)
+        p25 = calculate_percentile(valid_durations, 0.25)
+        p75 = calculate_percentile(valid_durations, 0.75)
+        p90 = calculate_percentile(valid_durations, 0.90)
+        min_days = valid_durations[0]
+        max_days = valid_durations[-1]
+        w90_ratio = round(within_90_days_count / valid_count, 4)
+    else:
+        avg_days = 0.0
+        med_days = 0.0
+        p25 = 0.0
+        p75 = 0.0
+        p90 = 0.0
+        min_days = 0
+        max_days = 0
+        w90_ratio = 0.0
+        
+    # Buckets output construction
+    buckets_list = [
+        {"key": "0_30_days", "label": "Até 30 dias", "min_days": 0, "max_days": 30, "count": bucket_counts["0_30_days"], "ratio": round(bucket_counts["0_30_days"] / valid_count, 4) if valid_count > 0 else 0.0},
+        {"key": "31_60_days", "label": "31 a 60 dias", "min_days": 31, "max_days": 60, "count": bucket_counts["31_60_days"], "ratio": round(bucket_counts["31_60_days"] / valid_count, 4) if valid_count > 0 else 0.0},
+        {"key": "61_90_days", "label": "61 a 90 dias", "min_days": 61, "max_days": 90, "count": bucket_counts["61_90_days"], "ratio": round(bucket_counts["61_90_days"] / valid_count, 4) if valid_count > 0 else 0.0},
+        {"key": "91_180_days", "label": "3 a 6 meses", "min_days": 91, "max_days": 180, "count": bucket_counts["91_180_days"], "ratio": round(bucket_counts["91_180_days"] / valid_count, 4) if valid_count > 0 else 0.0},
+        {"key": "181_365_days", "label": "6 a 12 meses", "min_days": 181, "max_days": 365, "count": bucket_counts["181_365_days"], "ratio": round(bucket_counts["181_365_days"] / valid_count, 4) if valid_count > 0 else 0.0},
+        {"key": "over_365_days", "label": "Mais de 12 meses", "min_days": 366, "max_days": None, "count": bucket_counts["over_365_days"], "ratio": round(bucket_counts["over_365_days"] / valid_count, 4) if valid_count > 0 else 0.0}
+    ]
+    
+    # Timeline output construction
+    timeline_list = []
+    for k_ym in sorted(sales_cycle_timeline_groups.keys()):
+        g = sales_cycle_timeline_groups[k_ym]
+        durs = sorted(g["durations"])
+        cnt = g["transaction_count"]
+        
+        t_avg = round(sum(durs) / cnt, 1) if cnt > 0 else 0.0
+        t_med = calculate_percentile(durs, 0.50) if cnt > 0 else 0.0
+        t_p75 = calculate_percentile(durs, 0.75) if cnt > 0 else 0.0
+        t_w90_count = g["within_90_days_count"]
+        t_w90_ratio = round(t_w90_count / cnt, 4) if cnt > 0 else 0.0
+        
+        timeline_list.append({
+            "month": k_ym,
+            "label": g["label"],
+            "transaction_count": cnt,
+            "average_days": t_avg,
+            "median_days": t_med,
+            "p75_days": t_p75,
+            "within_90_days_count": t_w90_count,
+            "within_90_days_ratio": t_w90_ratio
+        })
+        
+    # Reconciliations assertions (Quantity audit)
+    buckets_sum = sum(b["count"] for b in buckets_list)
+    reconciled_valid = (buckets_sum == valid_count)
+    reconciled_total_count = (
+        valid_count +
+        missing_signature_date_count +
+        missing_capture_date_count +
+        invalid_date_count +
+        negative_duration_count
+    ) == total_count
+    reconciled_w90 = (
+        within_90_days_count ==
+        bucket_counts["0_30_days"] +
+        bucket_counts["31_60_days"] +
+        bucket_counts["61_90_days"]
+    )
+    
+    sales_cycle_reconciled = (reconciled_valid and reconciled_total_count and reconciled_w90)
+    
+    sales_cycle = {
+        "period_basis": "ccv",
+        "start_field": "data_captacao",
+        "end_field": "data_assinatura_ccv",
+        "calculation_unit": "days",
+        "transaction_count": total_count,
+        "valid_transaction_count": valid_count,
+        "excluded": {
+            "missing_capture_date_count": missing_capture_date_count,
+            "missing_signature_date_count": missing_signature_date_count,
+            "invalid_date_count": invalid_date_count,
+            "negative_duration_count": negative_duration_count
+        },
+        "average_days": avg_days,
+        "median_days": med_days,
+        "p25_days": p25,
+        "p75_days": p75,
+        "p90_days": p90,
+        "minimum_days": min_days,
+        "maximum_days": max_days,
+        "within_30_days_count": within_30_days_count,
+        "within_60_days_count": within_60_days_count,
+        "within_90_days_count": within_90_days_count,
+        "within_90_days_ratio": w90_ratio,
+        "buckets": buckets_list,
+        "timeline": timeline_list
+    }
+    
+    # Secure diagnostic logging for sales_cycle
+    sales_cycle_log = {
+        "event": "sales_cycle_analysis_completed",
+        "total_transaction_count": total_count,
+        "valid_sales_cycle_count": valid_count,
+        "missing_capture_date_count": missing_capture_date_count,
+        "missing_signature_date_count": missing_signature_date_count,
+        "invalid_date_count": invalid_date_count,
+        "negative_duration_count": negative_duration_count,
+        "within_90_days_count": within_90_days_count,
+        "bucket_counts": bucket_counts,
+        "reconciled": sales_cycle_reconciled
+    }
+    print(f"SECURE_LOG: {json.dumps(sales_cycle_log)}")
+    
     # Secure diagnostic logging
     vgc_log = {
         "event": "vgc_analysis_completed_v1",
@@ -1284,7 +1536,8 @@ def compute_dashboard_aggregates(
         "timeline": timeline,
         "unclassified": unclassified_payload,
         "reconciliation": reconciliation,
-        "commission_financials": commission_financials
+        "commission_financials": commission_financials,
+        "sales_cycle": sales_cycle
     }
 
 
@@ -2104,6 +2357,52 @@ class CommissionFinancials(BaseModel):
     semantic_validation: str = "provisional_v1"
     disclaimer: Optional[str] = None
 
+class SalesCycleBucket(BaseModel):
+    key: str
+    label: str
+    min_days: int
+    max_days: Optional[int] = None
+    count: int
+    ratio: float
+
+class SalesCycleTimelineItem(BaseModel):
+    month: str
+    label: str
+    transaction_count: int
+    average_days: float
+    median_days: float
+    p75_days: float
+    within_90_days_count: int
+    within_90_days_ratio: float
+
+class SalesCycleExcluded(BaseModel):
+    missing_capture_date_count: int
+    missing_signature_date_count: int
+    invalid_date_count: int
+    negative_duration_count: int
+
+class SalesCyclePayload(BaseModel):
+    period_basis: str = "ccv"
+    start_field: str = "data_captacao"
+    end_field: str = "data_assinatura_ccv"
+    calculation_unit: str = "days"
+    transaction_count: int
+    valid_transaction_count: int
+    excluded: SalesCycleExcluded
+    average_days: float
+    median_days: float
+    p25_days: float
+    p75_days: float
+    p90_days: float
+    minimum_days: int
+    maximum_days: int
+    within_30_days_count: int
+    within_60_days_count: int
+    within_90_days_count: int
+    within_90_days_ratio: float
+    buckets: List[SalesCycleBucket]
+    timeline: List[SalesCycleTimelineItem]
+
 class DashboardPeriod(BaseModel):
     start: Optional[str] = None
     end: Optional[str] = None
@@ -2123,6 +2422,7 @@ class DashboardFullResponse(BaseModel):
     timeline: List[TimelineMetric]
     unclassified: Optional[UnclassifiedTimeline] = None
     reconciliation: Optional[TimelineReconciliation] = None
+    sales_cycle: Optional[SalesCyclePayload] = None
     schema_version: Optional[str] = "1.0"
     generated_at: Optional[str] = None
     filters_applied: Optional[dict] = None
@@ -2137,48 +2437,6 @@ def get_metadata_wrapper(data_mode: str, source: str):
         "source": source,
         "generated_at": timestamp_utc
     }
-
-# Temporary diagnostics endpoint
-@app.get("/api/vgc-diagnostics")
-async def get_vgc_diagnostics():
-    mode, src, dataset, pages_fetched = load_transactions_dataset(
-        data_inicio_ccv="2026-01-01",
-        data_fim_ccv="2026-06-30"
-    )
-    
-    # 1. Capture date
-    raw_captacao_present = sum(1 for tx in dataset if "data_captacao" in tx)
-    raw_captacao_non_empty = sum(1 for tx in dataset if tx.get("data_captacao") is not None and str(tx.get("data_captacao")).strip() != "")
-    
-    # 2. Signature date (checking fallback logic)
-    raw_sig_present = 0
-    raw_sig_non_empty = 0
-    for tx in dataset:
-        dt_sig = extract_transaction_date(tx)
-        if dt_sig is not None:
-            raw_sig_present += 1
-            if str(dt_sig).strip() != "":
-                raw_sig_non_empty += 1
-                
-    # 3. Sanitized check
-    sanitized_dataset = [sanitize_transaction(tx) for tx in dataset]
-    sanitized_captacao_non_empty = sum(1 for tx in sanitized_dataset if tx.get("data_captacao") is not None and str(tx.get("data_captacao")).strip() != "")
-    sanitized_sig_non_empty = 0
-    for tx in sanitized_dataset:
-        dt_sig = extract_transaction_date(tx)
-        if dt_sig is not None and str(dt_sig).strip() != "":
-            sanitized_sig_non_empty += 1
-            
-    return {
-        "raw_count": len(dataset),
-        "raw_captacao_present": raw_captacao_present,
-        "raw_captacao_non_empty": raw_captacao_non_empty,
-        "raw_sig_present": raw_sig_present,
-        "raw_sig_non_empty": raw_sig_non_empty,
-        "sanitized_captacao_non_empty": sanitized_captacao_non_empty,
-        "sanitized_sig_non_empty": sanitized_sig_non_empty
-    }
-
 
 # Endpoint routes
 @app.get(

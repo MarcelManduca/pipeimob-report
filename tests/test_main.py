@@ -2008,3 +2008,189 @@ def test_vgc_v1_classification_comprehensive():
     
     # In live data or computed, reconciling should be true if logic matches
     assert financials["composition"]["reconciled"] is True
+
+
+def test_sales_cycle_comprehensive():
+    from main import compute_dashboard_aggregates
+    
+    txs = [
+        # captação e assinatura no mesmo dia (0 dias) -> bucket 0_30_days
+        {
+            "data_captacao": "2026-01-10",
+            "data_assinatura_ccv": "2026-01-10"
+        },
+        # diferença de 1 dia (1 dia) -> bucket 0_30_days
+        {
+            "data_captacao": "2026-01-10",
+            "data_assinatura_ccv": "2026-01-11"
+        },
+        # exatamente 30 dias (30 dias) -> bucket 0_30_days
+        {
+            "data_captacao": "2026-01-10",
+            "data_assinatura_ccv": "2026-02-09"
+        },
+        # exatamente 31 dias (31 dias) -> bucket 31_60_days
+        {
+            "data_captacao": "2026-01-10",
+            "data_assinatura_ccv": "2026-02-10"
+        },
+        # exatamente 60 dias (60 dias) -> bucket 31_60_days
+        {
+            "data_captacao": "2026-01-10",
+            "data_assinatura_ccv": "2026-03-11"
+        },
+        # exatamente 61 dias (61 dias) -> bucket 61_90_days
+        {
+            "data_captacao": "2026-01-10",
+            "data_assinatura_ccv": "2026-03-12"
+        },
+        # exatamente 90 dias (90 dias) -> bucket 61_90_days
+        {
+            "data_captacao": "2026-01-10",
+            "data_assinatura_ccv": "2026-04-10"
+        },
+        # exatamente 91 dias (91 dias) -> bucket 91_180_days
+        {
+            "data_captacao": "2026-01-10",
+            "data_assinatura_ccv": "2026-04-11"
+        },
+        # exatamente 180 dias (180 dias) -> bucket 91_180_days
+        {
+            "data_captacao": "2026-01-10",
+            "data_assinatura_ccv": "2026-07-09"
+        },
+        # exatamente 181 dias (181 dias) -> bucket 181_365_days
+        {
+            "data_captacao": "2026-01-10",
+            "data_assinatura_ccv": "2026-07-10"
+        },
+        # exatamente 365 dias (365 dias) -> bucket 181_365_days
+        {
+            "data_captacao": "2026-01-10",
+            "data_assinatura_ccv": "2027-01-10"
+        },
+        # exatamente 366 dias (366 dias) -> bucket over_365_days
+        {
+            "data_captacao": "2026-01-10",
+            "data_assinatura_ccv": "2027-01-11"
+        },
+        # captação ausente -> excluded (missing_capture_date_count)
+        {
+            "data_captacao": None,
+            "data_assinatura_ccv": "2026-01-10"
+        },
+        # assinatura ausente -> excluded (missing_signature_date_count)
+        {
+            "data_captacao": "2026-01-10",
+            "data_assinatura_ccv": ""
+        },
+        # data inválida -> excluded (invalid_date_count)
+        {
+            "data_captacao": "not-a-date",
+            "data_assinatura_ccv": "2026-01-10"
+        },
+        # captação posterior à assinatura -> excluded (negative_duration_count)
+        {
+            "data_captacao": "2026-01-15",
+            "data_assinatura_ccv": "2026-01-10"
+        },
+        # formato DD/MM/YYYY
+        {
+            "data_captacao": "10/01/2026",
+            "data_assinatura_ccv": "15/01/2026"  # 5 dias -> bucket 0_30_days
+        },
+        # formato ISO 8601
+        {
+            "data_captacao": "2026-01-10T12:00:00Z",
+            "data_assinatura_ccv": "2026-01-20T15:30:00Z"  # 10 dias -> bucket 0_30_days
+        }
+    ]
+    
+    res = compute_dashboard_aggregates(txs, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
+    sc = res["sales_cycle"]
+    
+    assert sc["period_basis"] == "ccv"
+    assert sc["start_field"] == "data_captacao"
+    assert sc["end_field"] == "data_assinatura_ccv"
+    assert sc["calculation_unit"] == "days"
+    
+    # Excluded counts assertions
+    assert sc["excluded"]["missing_capture_date_count"] == 1
+    assert sc["excluded"]["missing_signature_date_count"] == 1
+    assert sc["excluded"]["invalid_date_count"] == 1
+    assert sc["excluded"]["negative_duration_count"] == 1
+    
+    # 18 total transactions, 4 excluded -> 14 valid
+    assert sc["transaction_count"] == 18
+    assert sc["valid_transaction_count"] == 14
+    
+    # Durations are:
+    # 0, 1, 30, 31, 60, 61, 90, 91, 180, 181, 365, 366, 5, 10
+    # Sorted: [0, 1, 5, 10, 30, 31, 60, 61, 90, 91, 180, 181, 365, 366]
+    # Sum: 0+1+5+10+30+31+60+61+90+91+180+181+365+366 = 1471
+    # Average: 1471 / 14 = 105.071... -> 105.1
+    assert sc["average_days"] == 105.1
+    
+    # Mediana (even count N=14): idx = 0.5 * 13 = 6.5 -> low=6 (60), high=7 (61) -> 60.5
+    assert sc["median_days"] == 60.5
+    
+    # p25: idx = 0.25 * 13 = 3.25 -> low=3 (10), high=4 (30) -> 10 + 0.25 * 20 = 15.0
+    assert sc["p25_days"] == 15.0
+    
+    # p75: idx = 0.75 * 13 = 9.75 -> low=9 (91), high=10 (180) -> 91 + 0.75 * 89 = 157.75 -> 157.8
+    assert sc["p75_days"] == 157.8
+    
+    # p90: idx = 0.90 * 13 = 11.7 -> low=11 (181), high=12 (365) -> 181 + 0.7 * 184 = 309.8
+    assert sc["p90_days"] == 309.8
+    
+    assert sc["minimum_days"] == 0
+    assert sc["maximum_days"] == 366
+    
+    # Buckets count:
+    # 0_30_days: [0, 1, 5, 10, 30] -> 5
+    # 31_60_days: [31, 60] -> 2
+    # 61_90_days: [61, 90] -> 2
+    # 91_180_days: [91, 180] -> 2
+    # 181_365_days: [181, 365] -> 2
+    # over_365_days: [366] -> 1
+    # Check bucket totals
+    assert sc["buckets"][0]["count"] == 5
+    assert sc["buckets"][1]["count"] == 2
+    assert sc["buckets"][2]["count"] == 2
+    assert sc["buckets"][3]["count"] == 2
+    assert sc["buckets"][4]["count"] == 2
+    assert sc["buckets"][5]["count"] == 1
+    
+    # valid sum bucket count check
+    assert sum(b["count"] for b in sc["buckets"]) == 14
+    
+    # within counts
+    # within 30: 5
+    # within 60: 7
+    # within 90: 9
+    assert sc["within_30_days_count"] == 5
+    assert sc["within_60_days_count"] == 7
+    assert sc["within_90_days_count"] == 9
+    assert sc["within_90_days_ratio"] == round(9 / 14, 4)
+    
+    # within 90 counts matches first three buckets sum check
+    assert sc["within_90_days_count"] == (sc["buckets"][0]["count"] + sc["buckets"][1]["count"] + sc["buckets"][2]["count"])
+    
+    # Quantity reconciliations check
+    assert (
+        sc["valid_transaction_count"] +
+        sc["excluded"]["missing_signature_date_count"] +
+        sc["excluded"]["missing_capture_date_count"] +
+        sc["excluded"]["invalid_date_count"] +
+        sc["excluded"]["negative_duration_count"]
+    ) == sc["transaction_count"]
+    
+    # Check no PII leakage in payload
+    keys_allowed = {
+        "period_basis", "start_field", "end_field", "calculation_unit",
+        "transaction_count", "valid_transaction_count", "excluded",
+        "average_days", "median_days", "p25_days", "p75_days", "p90_days",
+        "minimum_days", "maximum_days", "within_30_days_count", "within_60_days_count",
+        "within_90_days_count", "within_90_days_ratio", "buckets", "timeline"
+    }
+    assert set(sc.keys()) == keys_allowed
