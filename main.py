@@ -1357,6 +1357,7 @@ def sanitize_transaction(tx: dict) -> dict:
         "codigo_imovel": tx.get("codigo_imovel"),
         "data_contrato": tx.get("data_contrato"),
         "data_inicio_venda": tx.get("data_inicio_venda"),
+        "data_captacao": tx.get("data_captacao"),
         "data_assinatura_ccv": tx.get("data_assinatura_ccv"),
         "data_ccv": tx.get("data_ccv"),
         "data_assinatura": tx.get("data_assinatura"),
@@ -2136,6 +2137,33 @@ def get_metadata_wrapper(data_mode: str, source: str):
         "source": source,
         "generated_at": timestamp_utc
     }
+
+# Temporary diagnostics endpoint
+@app.get("/api/vgc-diagnostics")
+async def get_vgc_diagnostics():
+    mode, src, dataset, pages_fetched = load_transactions_dataset(
+        data_inicio_ccv="2026-01-01",
+        data_fim_ccv="2026-06-30"
+    )
+    raw_captacao_present = sum(1 for tx in dataset if "data_captacao" in tx)
+    raw_captacao_non_empty = sum(1 for tx in dataset if tx.get("data_captacao") is not None and str(tx.get("data_captacao")).strip() != "")
+    raw_ccv_present = sum(1 for tx in dataset if "data_assinatura_ccv" in tx)
+    raw_ccv_non_empty = sum(1 for tx in dataset if tx.get("data_assinatura_ccv") is not None and str(tx.get("data_assinatura_ccv")).strip() != "")
+    
+    sanitized_dataset = [sanitize_transaction(tx) for tx in dataset]
+    sanitized_captacao_non_empty = sum(1 for tx in sanitized_dataset if tx.get("data_captacao") is not None and str(tx.get("data_captacao")).strip() != "")
+    sanitized_ccv_non_empty = sum(1 for tx in sanitized_dataset if tx.get("data_assinatura_ccv") is not None and str(tx.get("data_assinatura_ccv")).strip() != "")
+    
+    return {
+        "raw_count": len(dataset),
+        "raw_captacao_present_count": raw_captacao_present,
+        "raw_captacao_non_empty_count": raw_captacao_non_empty,
+        "raw_ccv_present_count": raw_ccv_present,
+        "raw_ccv_non_empty_count": raw_ccv_non_empty,
+        "sanitized_captacao_non_empty_count": sanitized_captacao_non_empty,
+        "sanitized_ccv_non_empty_count": sanitized_ccv_non_empty
+    }
+
 
 # Endpoint routes
 @app.get(

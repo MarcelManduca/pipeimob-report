@@ -1531,6 +1531,7 @@ def test_sanitize_transaction_preserves_operational_fields():
     raw_tx = {
         "transacao_unique_id_pipeimob": "123",
         "codigo_contrato": "CON-123",
+        "data_captacao": "2026-04-10",
         "data_assinatura_ccv": "2026-05-15",
         "data_ccv": "2026-05-15",
         "data_assinatura": "2026-05-15",
@@ -1560,6 +1561,7 @@ def test_sanitize_transaction_preserves_operational_fields():
     
     assert sanitized["transacao_unique_id_pipeimob"] == "123"
     assert sanitized["codigo_contrato"] == "CON-123"
+    assert sanitized["data_captacao"] == "2026-04-10"
     assert sanitized["data_assinatura_ccv"] == "2026-05-15"
     assert sanitized["data_ccv"] == "2026-05-15"
     assert sanitized["data_assinatura"] == "2026-05-15"
