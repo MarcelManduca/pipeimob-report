@@ -2145,23 +2145,23 @@ async def get_vgc_diagnostics():
         data_inicio_ccv="2026-01-01",
         data_fim_ccv="2026-06-30"
     )
-    raw_captacao_present = sum(1 for tx in dataset if "data_captacao" in tx)
-    raw_captacao_non_empty = sum(1 for tx in dataset if tx.get("data_captacao") is not None and str(tx.get("data_captacao")).strip() != "")
-    raw_ccv_present = sum(1 for tx in dataset if "data_assinatura_ccv" in tx)
-    raw_ccv_non_empty = sum(1 for tx in dataset if tx.get("data_assinatura_ccv") is not None and str(tx.get("data_assinatura_ccv")).strip() != "")
-    
-    sanitized_dataset = [sanitize_transaction(tx) for tx in dataset]
-    sanitized_captacao_non_empty = sum(1 for tx in sanitized_dataset if tx.get("data_captacao") is not None and str(tx.get("data_captacao")).strip() != "")
-    sanitized_ccv_non_empty = sum(1 for tx in sanitized_dataset if tx.get("data_assinatura_ccv") is not None and str(tx.get("data_assinatura_ccv")).strip() != "")
-    
+    ccv_paths = []
+    if dataset:
+        tx = dataset[0]
+        def search_key(d, path=""):
+            if isinstance(d, dict):
+                for k, v in d.items():
+                    if k == "data_assinatura_ccv":
+                        ccv_paths.append(f"{path}.{k}" if path else k)
+                    search_key(v, f"{path}.{k}" if path else k)
+            elif isinstance(d, list):
+                for i, item in enumerate(d):
+                    search_key(item, f"{path}[{i}]")
+        search_key(tx)
     return {
         "raw_count": len(dataset),
-        "raw_captacao_present_count": raw_captacao_present,
-        "raw_captacao_non_empty_count": raw_captacao_non_empty,
-        "raw_ccv_present_count": raw_ccv_present,
-        "raw_ccv_non_empty_count": raw_ccv_non_empty,
-        "sanitized_captacao_non_empty_count": sanitized_captacao_non_empty,
-        "sanitized_ccv_non_empty_count": sanitized_ccv_non_empty
+        "ccv_paths": ccv_paths,
+        "first_tx_data_contrato": dataset[0].get("data_contrato") if dataset else None
     }
 
 
