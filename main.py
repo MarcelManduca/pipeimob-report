@@ -1,4 +1,5 @@
 import os
+import asyncio
 import urllib.request
 import json
 import ssl
@@ -22,26 +23,36 @@ class TokenCache:
 
 token_cache = TokenCache()
 
-# Dashboard Cache in memory (5 min TTL)
+# Dashboard Cache in memory (5 min TTL, configurable stale revalidation)
+DASHBOARD_STALE_TTL_SECONDS = int(os.getenv("DASHBOARD_STALE_TTL_SECONDS", "3600"))
+
 class DashboardCache:
     def __init__(self):
         from threading import Lock
         self.cache = {}
         self.lock = Lock()
         
-    def get(self, key):
+    def get_status(self, key):
         with self.lock:
             if key in self.cache:
-                val, expires_at = self.cache[key]
-                if time.time() < expires_at:
-                    return val
+                val, fresh_until, stale_until = self.cache[key]
+                now = time.time()
+                if now <= fresh_until:
+                    return val, "fresh"
+                elif now <= stale_until:
+                    return val, "stale"
                 else:
                     del self.cache[key]
-            return None
+            return None, "miss"
+            
+    def get(self, key):
+        val, status = self.get_status(key)
+        return val
             
     def set(self, key, val, ttl=300):
         with self.lock:
-            self.cache[key] = (val, time.time() + ttl)
+            now = time.time()
+            self.cache[key] = (val, now + ttl, now + ttl + DASHBOARD_STALE_TTL_SECONDS)
 
     def clear(self):
         with self.lock:
@@ -51,6 +62,68 @@ dashboard_cache = DashboardCache()
 dashboard_cache.clear()
 
 DASHBOARD_CACHE_VERSION = "sales-cycle-v3-quality"
+
+class AsyncSingleFlightRegistry:
+    def __init__(self):
+        self.lock = asyncio.Lock()
+        self.in_flight = {} # key -> Future
+        
+    async def execute(self, key, fetch_coro):
+        future = None
+        is_leader = False
+        
+        async with self.lock:
+            if key in self.in_flight:
+                future = self.in_flight[key]
+            else:
+                future = asyncio.get_event_loop().create_future()
+                self.in_flight[key] = future
+                is_leader = True
+                
+        if is_leader:
+            try:
+                # Shield the fetch coroutine from client cancellation
+                result = await asyncio.shield(fetch_coro())
+                future.set_result((result, None))
+                return result
+            except Exception as e:
+                future.set_result((None, e))
+                raise e
+            finally:
+                async with self.lock:
+                    if key in self.in_flight:
+                        del self.in_flight[key]
+        else:
+            # Followers await the shielded Future
+            result, err = await asyncio.shield(future)
+            if err is not None:
+                raise err
+            return result
+
+    async def is_running(self, key):
+        async with self.lock:
+            return key in self.in_flight
+
+single_flight_registry = AsyncSingleFlightRegistry()
+
+def generate_dashboard_cache_key(
+    data_inicio_criacao: Optional[str] = None,
+    data_fim_criacao: Optional[str] = None,
+    data_inicio_ccv: Optional[str] = None,
+    data_fim_ccv: Optional[str] = None,
+    data_arquivamento_inicio: Optional[str] = None,
+    data_arquivamento_fim: Optional[str] = None,
+    codigo_imovel: Optional[str] = None,
+    codigo_contrato: Optional[str] = None,
+    transacao_unique_id: Optional[str] = None
+) -> tuple:
+    return (
+        DASHBOARD_CACHE_VERSION,
+        data_inicio_criacao, data_fim_criacao,
+        data_inicio_ccv, data_fim_ccv,
+        data_arquivamento_inicio, data_arquivamento_fim,
+        codigo_imovel, codigo_contrato, transacao_unique_id
+    )
 
 def parse_official_team_groups() -> tuple[str, bool, dict, list[str]]:
     # Returns (configuration_status, official_teams_configured, group_mapping, official_teams)
@@ -268,8 +341,8 @@ def get_auth_token(api_key: str, api_secret: str, force_refresh: bool = False) -
         is_timeout = "timeout" in str(e.reason).lower() if hasattr(e, 'reason') else False
         raise IntegrationUnavailableError(
             status_code=503,
-            detail="Pipeimob CRM API request timed out." if is_timeout else "Pipeimob CRM API request is unreachable.",
-            error_code="pipeimob_timeout" if is_timeout else "pipeimob_unavailable",
+            detail="Pipeimob CRM Authentication request timed out." if is_timeout else "Pipeimob CRM Authentication is unreachable.",
+            error_code="pipeimob_auth_timeout" if is_timeout else "pipeimob_auth_unavailable",
             data_mode="live",
             pipeimob_connection="unavailable"
         )
@@ -355,8 +428,8 @@ def fetch_all_pipeimob_transactions(
             is_timeout = "timeout" in str(e.reason).lower() if hasattr(e, 'reason') else False
             raise IntegrationUnavailableError(
                 status_code=503,
-                detail="Pipeimob CRM API request timed out." if is_timeout else "Pipeimob CRM API request is unreachable.",
-                error_code="pipeimob_timeout" if is_timeout else "pipeimob_unavailable",
+                detail="Pipeimob CRM Pagination request timed out." if is_timeout else "Pipeimob CRM Pagination is unreachable.",
+                error_code="pipeimob_pagination_timeout" if is_timeout else "pipeimob_pagination_unavailable",
                 data_mode="live",
                 pipeimob_connection="unavailable"
             )
@@ -586,8 +659,7 @@ def calculate_vgc_split(tx: dict) -> tuple[Decimal, Decimal, Decimal]:
     vgc_demais_participantes = vgc_total - vgc_gralha
     return vgc_total, vgc_gralha, vgc_demais_participantes
 
-
-def load_transactions_dataset(
+async def load_transactions_dataset(
     data_inicio_criacao: Optional[str] = None,
     data_fim_criacao: Optional[str] = None,
     data_inicio_ccv: Optional[str] = None,
@@ -598,7 +670,8 @@ def load_transactions_dataset(
     codigo_contrato: Optional[str] = None,
     transacao_unique_id: Optional[str] = None,
     pagina: Optional[int] = None,
-    request_id: Optional[str] = None
+    request_id: Optional[str] = None,
+    refresh: bool = False
 ) -> tuple:
     import time
     start_time = time.perf_counter()
@@ -612,16 +685,6 @@ def load_transactions_dataset(
             data_mode="unconfigured",
             pipeimob_connection="pending_configuration"
         )
-        
-    import uuid
-    periodo = {
-        "data_inicio_criacao": data_inicio_criacao,
-        "data_fim_criacao": data_fim_criacao,
-        "data_inicio_ccv": data_inicio_ccv,
-        "data_fim_ccv": data_fim_ccv,
-        "data_arquivamento_inicio": data_arquivamento_inicio,
-        "data_arquivamento_fim": data_arquivamento_fim
-    }
         
     if data_mode == "demo":
         from mock_data import MOCK_TRANSACTIONS
@@ -640,10 +703,11 @@ def load_transactions_dataset(
             "paginas_consultadas": 1,
             "quantidade_transacoes": len(dataset),
             "cache_hit": False,
-            "processing_time_ms": round(duration_ms, 2)
+            "processing_time_ms": round(duration_ms, 2),
+            "cache_status": "miss"
         }
         print(f"SECURE_LOG: {json.dumps(log_msg)}")
-        return "demo", "synthetic_mock", dataset, 1
+        return "demo", "synthetic_mock", dataset, 1, "miss"
         
     # Live mode: validate that at least one direct filter is present.
     has_direct_filter = any([
@@ -673,78 +737,75 @@ def load_transactions_dataset(
             pipeimob_connection="missing_credentials"
         )
         
-    # 1. Check transient cache for this live query filters
-    cache_key = (
-        DASHBOARD_CACHE_VERSION,
+    cache_key = generate_dashboard_cache_key(
         data_inicio_criacao, data_fim_criacao,
         data_inicio_ccv, data_fim_ccv,
         data_arquivamento_inicio, data_arquivamento_fim,
         codigo_imovel, codigo_contrato, transacao_unique_id
     )
-    
-    cached = dashboard_cache.get(cache_key)
-    if cached is not None:
-        live_txs, pages_fetched = cached
-        txs_to_return = live_txs
-        if pagina is not None:
-            start_idx = (pagina - 1) * 25
-            end_idx = start_idx + 25
-            txs_to_return = live_txs[start_idx:end_idx]
-            
-        duration_ms = (time.perf_counter() - start_time) * 1000
-        log_msg = {
-            "event": "performance_metric",
-            "request_id": request_id or "unknown",
-            "periodo": {
-                "data_inicio_ccv": data_inicio_ccv,
-                "data_fim_ccv": data_fim_ccv,
-                "data_inicio_criacao": data_inicio_criacao,
-                "data_fim_criacao": data_fim_criacao
-            },
-            "paginas_consultadas": pages_fetched,
-            "quantidade_transacoes": len(txs_to_return),
-            "cache_hit": True,
-            "processing_time_ms": round(duration_ms, 2)
-        }
-        print(f"SECURE_LOG: {json.dumps(log_msg)}")
-        return "live", "pipeimob_api_v2", txs_to_return, pages_fetched
 
-    api_key = os.getenv("PIPEIMOB_API_KEY").strip()
-    api_secret = os.getenv("PIPEIMOB_SECRET_KEY").strip()
+    def sync_fetch():
+        api_key = os.getenv("PIPEIMOB_API_KEY").strip()
+        api_secret = os.getenv("PIPEIMOB_SECRET_KEY").strip()
         
-    live_txs, pages_fetched = fetch_all_pipeimob_transactions(
-        api_key=api_key,
-        api_secret=api_secret,
-        data_inicio_criacao=data_inicio_criacao,
-        data_fim_criacao=data_fim_criacao,
-        data_inicio_ccv=data_inicio_ccv,
-        data_fim_ccv=data_fim_ccv,
-        data_arquivamento_inicio=data_arquivamento_inicio,
-        data_arquivamento_fim=data_arquivamento_fim,
-        codigo_imovel=codigo_imovel,
-        codigo_contrato=codigo_contrato,
-        transacao_unique_id=transacao_unique_id
-    )
-    
-    if not live_txs:
-        raise IntegrationUnavailableError(
-            status_code=503,
-            detail="Pipeimob CRM API returned empty transactions dataset.",
-            error_code="invalid_pipeimob_response",
-            data_mode="live",
-            pipeimob_connection="unavailable"
+        txs, pages = fetch_all_pipeimob_transactions(
+            api_key=api_key,
+            api_secret=api_secret,
+            data_inicio_criacao=data_inicio_criacao,
+            data_fim_criacao=data_fim_criacao,
+            data_inicio_ccv=data_inicio_ccv,
+            data_fim_ccv=data_fim_ccv,
+            data_arquivamento_inicio=data_arquivamento_inicio,
+            data_arquivamento_fim=data_arquivamento_fim,
+            codigo_imovel=codigo_imovel,
+            codigo_contrato=codigo_contrato,
+            transacao_unique_id=transacao_unique_id
         )
         
-    # Enrich comissao_imobiliaria and map data_recebimento_comissao defensively for live transactions
-    for tx in live_txs:
-        _, vgc_gralha, _ = calculate_vgc_split(tx)
-        tx["comissao_imobiliaria"] = float(vgc_gralha)
-        if "data_recebimento_comissao" not in tx or tx.get("data_recebimento_comissao") is None:
-            tx["data_recebimento_comissao"] = tx.get("data_pagamento_comissao")
-        
-    # Set cache
-    dashboard_cache.set(cache_key, (live_txs, pages_fetched))
-    
+        if not txs:
+            raise IntegrationUnavailableError(
+                status_code=503,
+                detail="Pipeimob CRM API returned empty transactions dataset.",
+                error_code="invalid_pipeimob_response",
+                data_mode="live",
+                pipeimob_connection="unavailable"
+            )
+            
+        for tx in txs:
+            _, vgc_gralha, _ = calculate_vgc_split(tx)
+            tx["comissao_imobiliaria"] = float(vgc_gralha)
+            if "data_recebimento_comissao" not in tx or tx.get("data_recebimento_comissao") is None:
+                tx["data_recebimento_comissao"] = tx.get("data_pagamento_comissao")
+                
+        dashboard_cache.set(cache_key, (txs, pages))
+        return txs, pages
+
+    # SWR and Single-Flight check
+    if refresh:
+        coro = lambda: asyncio.get_event_loop().run_in_executor(None, sync_fetch)
+        live_txs, pages_fetched = await single_flight_registry.execute(cache_key, coro)
+        cache_status = "miss"
+    else:
+        cached_val, status = dashboard_cache.get_status(cache_key)
+        if status == "fresh":
+            live_txs, pages_fetched = cached_val
+            cache_status = "fresh"
+        elif status == "stale":
+            live_txs, pages_fetched = cached_val
+            cache_status = "stale"
+            if not await single_flight_registry.is_running(cache_key):
+                async def run_bg_refresh():
+                    try:
+                        c = lambda: asyncio.get_event_loop().run_in_executor(None, sync_fetch)
+                        await single_flight_registry.execute(cache_key, c)
+                    except Exception:
+                        pass
+                asyncio.create_task(run_bg_refresh())
+        else:
+            coro = lambda: asyncio.get_event_loop().run_in_executor(None, sync_fetch)
+            live_txs, pages_fetched = await single_flight_registry.execute(cache_key, coro)
+            cache_status = "miss"
+
     txs_to_return = live_txs
     if pagina is not None:
         start_idx = (pagina - 1) * 25
@@ -763,11 +824,12 @@ def load_transactions_dataset(
         },
         "paginas_consultadas": pages_fetched,
         "quantidade_transacoes": len(txs_to_return),
-        "cache_hit": False,
+        "cache_hit": (cache_status in ["fresh", "stale"]),
+        "cache_status": cache_status,
         "processing_time_ms": round(duration_ms, 2)
     }
     print(f"SECURE_LOG: {json.dumps(log_msg)}")
-    return "live", "pipeimob_api_v2", txs_to_return, pages_fetched
+    return "live", "pipeimob_api_v2", txs_to_return, pages_fetched, cache_status
 # Apply filters locally on loaded dataset
 def get_filtered_transactions(
     transactions: list,
@@ -3287,7 +3349,7 @@ async def get_transactions(
     etapa_atual: Optional[str] = Query(None)
 ):
     req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
-    mode, src, dataset, pages_fetched = load_transactions_dataset(
+    mode, src, dataset, pages_fetched, cache_status = await load_transactions_dataset(
         data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
         pagina, request_id=req_id
@@ -3321,7 +3383,7 @@ async def get_transaction_by_id(
 ):
     req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
     # In live mode we must pass at least one direct filter, so we pass both or try to load by transacao_unique_id or codigo_contrato
-    mode, src, dataset, pages_fetched = load_transactions_dataset(transacao_unique_id=id, request_id=req_id)
+    mode, src, dataset, pages_fetched, cache_status = await load_transactions_dataset(transacao_unique_id=id, request_id=req_id)
     validate_dataset_origin(mode, src, dataset)
     
     target_tx = None
@@ -3332,7 +3394,7 @@ async def get_transaction_by_id(
             
     if not target_tx:
         try:
-            mode, src, dataset, pages_fetched = load_transactions_dataset(codigo_contrato=id, request_id=req_id)
+            mode, src, dataset, pages_fetched, cache_status = await load_transactions_dataset(codigo_contrato=id, request_id=req_id)
             validate_dataset_origin(mode, src, dataset)
             for tx in dataset:
                 if tx.get("transacao_unique_id_pipeimob") == id or tx.get("codigo_contrato") == id:
@@ -3379,7 +3441,7 @@ async def get_dashboard_summary(
     etapa_atual: Optional[str] = Query(None)
 ):
     req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
-    mode, src, dataset, pages_fetched = load_transactions_dataset(
+    mode, src, dataset, pages_fetched, cache_status = await load_transactions_dataset(
         data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
         pagina=None, request_id=req_id
@@ -3425,7 +3487,7 @@ async def get_dashboard_origins(
     etapa_atual: Optional[str] = Query(None)
 ):
     req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
-    mode, src, dataset, pages_fetched = load_transactions_dataset(
+    mode, src, dataset, pages_fetched, cache_status = await load_transactions_dataset(
         data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
         pagina=None, request_id=req_id
@@ -3471,7 +3533,7 @@ async def get_dashboard_stages(
     etapa_atual: Optional[str] = Query(None)
 ):
     req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
-    mode, src, dataset, pages_fetched = load_transactions_dataset(
+    mode, src, dataset, pages_fetched, cache_status = await load_transactions_dataset(
         data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
         pagina=None, request_id=req_id
@@ -3517,7 +3579,7 @@ async def get_dashboard_managers(
     etapa_atual: Optional[str] = Query(None)
 ):
     req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
-    mode, src, dataset, pages_fetched = load_transactions_dataset(
+    mode, src, dataset, pages_fetched, cache_status = await load_transactions_dataset(
         data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
         pagina=None, request_id=req_id
@@ -3563,7 +3625,7 @@ async def get_dashboard_payments(
     etapa_atual: Optional[str] = Query(None)
 ):
     req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
-    mode, src, dataset, pages_fetched = load_transactions_dataset(
+    mode, src, dataset, pages_fetched, cache_status = await load_transactions_dataset(
         data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
         pagina=None, request_id=req_id
@@ -3615,7 +3677,7 @@ async def get_dashboard_commissions(
     etapa_atual: Optional[str] = Query(None)
 ):
     req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
-    mode, src, dataset, pages_fetched = load_transactions_dataset(
+    mode, src, dataset, pages_fetched, cache_status = await load_transactions_dataset(
         data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
         pagina=None, request_id=req_id
@@ -3670,7 +3732,7 @@ async def get_dashboard_timeline(
     etapa_atual: Optional[str] = Query(None)
 ):
     req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
-    mode, src, dataset, pages_fetched = load_transactions_dataset(
+    mode, src, dataset, pages_fetched, cache_status = await load_transactions_dataset(
         data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
         pagina=None, request_id=req_id
@@ -3692,6 +3754,70 @@ async def get_dashboard_timeline(
         reconciliation=TimelineReconciliation(**aggregates["reconciliation"])
     )
     return meta
+
+def warm_up_dashboard_cache():
+    raw = os.getenv("DASHBOARD_WARMUP_PERIODS_JSON")
+    if not raw or not raw.strip():
+        return
+        
+    try:
+        import json
+        periods = json.loads(raw)
+        if not isinstance(periods, list):
+            return
+    except Exception as e:
+        print(f"WARMUP_ERROR: Failed to parse DASHBOARD_WARMUP_PERIODS_JSON: {e}")
+        return
+        
+    import threading
+    threading.Thread(target=_sequential_warmup, args=(periods,), daemon=True).start()
+
+def _sequential_warmup(periods):
+    import time
+    time.sleep(2)
+    
+    data_mode, conn_status = get_current_data_mode_and_connection()
+    if data_mode == "live" and conn_status == "missing_credentials":
+        return
+        
+    for idx, period in enumerate(periods):
+        if not isinstance(period, dict):
+            continue
+        start_date = period.get("start_date")
+        end_date = period.get("end_date")
+        if not start_date or not end_date:
+            continue
+            
+        import re
+        date_pattern = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+        if not date_pattern.match(start_date) or not date_pattern.match(end_date):
+            print(f"WARMUP_ERROR: Invalid date format: start_date={start_date}, end_date={end_date}")
+            continue
+            
+        cache_key = generate_dashboard_cache_key(
+            data_inicio_ccv=start_date,
+            data_fim_ccv=end_date
+        )
+        cached_val, cache_status = dashboard_cache.get_status(cache_key)
+        if cache_status in ["fresh", "stale"]:
+            continue
+            
+        try:
+            loop = asyncio.new_event_loop()
+            loop.run_until_complete(load_transactions_dataset(
+                data_inicio_ccv=start_date,
+                data_fim_ccv=end_date,
+                request_id=f"startup-warmup-{idx}"
+            ))
+            loop.close()
+        except Exception as e:
+            print(f"WARMUP_ERROR: Failed to warm up cache for {start_date} to {end_date}: {e}")
+            
+        time.sleep(1)
+
+@app.on_event("startup")
+async def startup_event():
+    warm_up_dashboard_cache()
 
 @app.get(
     "/api/dashboard/full",
@@ -3716,14 +3842,28 @@ async def get_dashboard_full(
     agent: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
     financing: Optional[bool] = Query(None),
-    etapa_atual: Optional[str] = Query(None)
+    etapa_atual: Optional[str] = Query(None),
+    refresh: Optional[bool] = Query(None)
 ):
     req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
-    mode, src, dataset, pages_fetched = load_transactions_dataset(
-        data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
-        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
-        pagina=None, request_id=req_id
-    )
+    
+    try:
+        mode, src, dataset, pages_fetched, cache_status = await load_transactions_dataset(
+            data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
+            data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
+            pagina=None, request_id=req_id, refresh=bool(refresh)
+        )
+    except Exception as e:
+        if isinstance(e, IntegrationUnavailableError) or isinstance(e, HTTPException):
+            raise e
+        raise IntegrationUnavailableError(
+            status_code=503,
+            detail=f"Failed to load transactions: {e}",
+            error_code="invalid_pipeimob_response",
+            data_mode="live",
+            pipeimob_connection="unavailable"
+        )
+        
     validate_dataset_origin(mode, src, dataset)
     filtered = get_filtered_transactions(
         dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
@@ -3731,9 +3871,19 @@ async def get_dashboard_full(
         agent, category, financing, etapa_atual
     )
     
-    aggregates = compute_dashboard_aggregates(filtered, data_inicio_ccv, data_fim_ccv, data_inicio_criacao, data_fim_criacao)
+    try:
+        aggregates = compute_dashboard_aggregates(filtered, data_inicio_ccv, data_fim_ccv, data_inicio_criacao, data_fim_criacao)
+    except Exception as e:
+        raise IntegrationUnavailableError(
+            status_code=503,
+            detail=f"Failed to compute dashboard aggregates: {e}",
+            error_code="aggregation_failed",
+            data_mode=mode,
+            pipeimob_connection="internal_error"
+        )
     
     response.headers["X-Data-Mode"] = mode
+    response.headers["X-Cache"] = cache_status
     
     enable_debug = os.getenv("ENABLE_SAFE_DEBUG_METRICS", "false").strip().lower() == "true"
     debug_metrics = None

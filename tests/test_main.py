@@ -1,9 +1,10 @@
 import os
 import sys
 import json
+import asyncio
 from datetime import datetime, timezone
 from fastapi.testclient import TestClient
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 
 # Add project root to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -2206,7 +2207,7 @@ def test_sales_cycle_comprehensive():
     assert set(sc.keys()) == keys_allowed
 
 
-@patch("main.load_transactions_dataset")
+@patch("main.load_transactions_dataset", new_callable=AsyncMock)
 def test_dashboard_full_endpoint_sales_cycle(mock_load):
     from unittest.mock import patch
     from main import app
@@ -2225,7 +2226,8 @@ def test_dashboard_full_endpoint_sales_cycle(mock_load):
                 "data_assinatura_ccv": "2026-01-30"  # 20 days
             }
         ],
-        1
+        1,
+        "miss"
     )
     
     # Authenticate using mock JWT token
@@ -2838,5 +2840,138 @@ def test_data_quality_agents_count_and_composites(monkeypatch):
     assert dq["summary"]["distinct_agents_count"] == 21
     assert dq["teams"]["reconciliation"]["agents_reconciled"] is True
     assert dq["teams"]["reconciliation"]["transactions_reconciled"] is True
+
+def test_dashboard_caching_and_single_flight_scenarios(monkeypatch):
+    from main import (
+        dashboard_cache, 
+        load_transactions_dataset, 
+        single_flight_registry,
+        generate_dashboard_cache_key
+    )
+    from mock_data import MOCK_TRANSACTIONS
+    
+    dashboard_cache.clear()
+    monkeypatch.setenv("PIPEIMOB_DATA_MODE", "live")
+    monkeypatch.setenv("PIPEIMOB_API_KEY", "test")
+    monkeypatch.setenv("PIPEIMOB_SECRET_KEY", "test")
+    
+    patcher = patch("main.fetch_all_pipeimob_transactions", return_value=(MOCK_TRANSACTIONS, 1))
+    patcher.start()
+    try:
+        loop = asyncio.get_event_loop()
+        
+        # 1. miss
+        res1 = loop.run_until_complete(load_transactions_dataset(
+            data_inicio_ccv="2026-01-01",
+            data_fim_ccv="2026-06-30",
+            request_id="test-miss"
+        ))
+        mode1, src1, txs1, pages1, status1 = res1
+        assert status1 == "miss"
+        
+        # 2. fresh
+        res2 = loop.run_until_complete(load_transactions_dataset(
+            data_inicio_ccv="2026-01-01",
+            data_fim_ccv="2026-06-30",
+            request_id="test-fresh"
+        ))
+        mode2, src2, txs2, pages2, status2 = res2
+        assert status2 == "fresh"
+        
+        # 3. stale state
+        key = generate_dashboard_cache_key(
+            data_inicio_ccv="2026-01-01",
+            data_fim_ccv="2026-06-30"
+        )
+        with dashboard_cache.lock:
+            val = dashboard_cache.cache[key][0]
+            dashboard_cache.cache[key] = (val, time.time() - 10, time.time() + 3000)
+            
+        res3 = loop.run_until_complete(load_transactions_dataset(
+            data_inicio_ccv="2026-01-01",
+            data_fim_ccv="2026-06-30",
+            request_id="test-stale"
+        ))
+        mode3, src3, txs3, pages3, status3 = res3
+        assert status3 == "stale"
+        
+        # 4. refresh=True
+        dashboard_cache.clear()
+        loop.run_until_complete(load_transactions_dataset(
+            data_inicio_ccv="2026-01-01",
+            data_fim_ccv="2026-06-30",
+            request_id="test-miss"
+        ))
+        
+        res4 = loop.run_until_complete(load_transactions_dataset(
+            data_inicio_ccv="2026-01-01",
+            data_fim_ccv="2026-06-30",
+            request_id="test-refresh",
+            refresh=True
+        ))
+        mode4, src4, txs4, pages4, status4 = res4
+        assert status4 == "miss"
+    finally:
+        patcher.stop()
+
+def test_single_flight_concurrent_deduplication(monkeypatch):
+    from main import (
+        single_flight_registry,
+        load_transactions_dataset
+    )
+    from mock_data import MOCK_TRANSACTIONS
+    
+    monkeypatch.setenv("PIPEIMOB_DATA_MODE", "live")
+    monkeypatch.setenv("PIPEIMOB_API_KEY", "test")
+    monkeypatch.setenv("PIPEIMOB_SECRET_KEY", "test")
+    
+    patcher = patch("main.fetch_all_pipeimob_transactions", return_value=(MOCK_TRANSACTIONS, 1))
+    patcher.start()
+    try:
+        loop = asyncio.get_event_loop()
+        
+        async def task_wrapper():
+            return await load_transactions_dataset(
+                data_inicio_ccv="2026-07-01",
+                data_fim_ccv="2026-12-31",
+                request_id="concurrent-test"
+            )
+            
+        tasks = [task_wrapper(), task_wrapper(), task_wrapper()]
+        results = loop.run_until_complete(asyncio.gather(*tasks))
+        
+        for res in results:
+            mode, src, txs, pages, status = res
+            assert mode == "live"
+            assert len(txs) > 0
+    finally:
+        patcher.stop()
+        
+def test_warmup_periods_config(monkeypatch):
+    from main import warm_up_dashboard_cache, dashboard_cache, generate_dashboard_cache_key
+    from mock_data import MOCK_TRANSACTIONS
+    
+    monkeypatch.setenv("PIPEIMOB_DATA_MODE", "live")
+    monkeypatch.setenv("PIPEIMOB_API_KEY", "test")
+    monkeypatch.setenv("PIPEIMOB_SECRET_KEY", "test")
+    monkeypatch.setenv("DASHBOARD_WARMUP_PERIODS_JSON", '[{"start_date": "2026-01-01", "end_date": "2026-06-30"}]')
+    
+    patcher = patch("main.fetch_all_pipeimob_transactions", return_value=(MOCK_TRANSACTIONS, 1))
+    patcher.start()
+    try:
+        dashboard_cache.clear()
+        warm_up_dashboard_cache()
+        
+        key = generate_dashboard_cache_key(data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
+        for _ in range(30):
+            time.sleep(0.1)
+            cached = dashboard_cache.get(key)
+            if cached is not None:
+                break
+                
+        assert dashboard_cache.get(key) is not None
+    finally:
+        patcher.stop()
+
 
 
