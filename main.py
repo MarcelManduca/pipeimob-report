@@ -2520,40 +2520,6 @@ def get_metadata_wrapper(data_mode: str, source: str):
         "source": source,
         "generated_at": timestamp_utc
     }
-
-@app.get("/api/diagnose-groups")
-async def get_diagnose_groups():
-    api_key = os.getenv("PIPEIMOB_API_KEY").strip()
-    api_secret = os.getenv("PIPEIMOB_SECRET_KEY").strip()
-    token = get_auth_token(api_key, api_secret)
-    
-    endpoints = [
-        "grupos",
-        "equipes",
-        "negocios/grupos",
-        "usuarios/grupos",
-        "configuracoes/grupos",
-        "configuracoes/equipes"
-    ]
-    
-    results = {}
-    for ep in endpoints:
-        url = f"{BASE_URL}/{ep}"
-        req = urllib.request.Request(
-            url,
-            headers={'Authorization': f'Bearer {token}', 'User-Agent': 'Mozilla/5.0'}
-        )
-        try:
-            with urllib.request.urlopen(req, context=ssl_context, timeout=8) as res:
-                body = json.loads(res.read().decode('utf-8'))
-                results[ep] = {"status": 200, "success": body.get("success"), "sample": str(body)[:300]}
-        except urllib.error.HTTPError as e:
-            results[ep] = {"status": e.code, "error": str(e)}
-        except Exception as e:
-            results[ep] = {"status": "error", "error": str(e)}
-            
-    return results
-
 # Endpoint routes
 @app.get(
     "/api/health",
