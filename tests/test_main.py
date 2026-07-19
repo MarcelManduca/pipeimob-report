@@ -11,7 +11,6 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 # Force development environment for local localhost CORS tests
 os.environ["APP_ENV"] = "development"
 os.environ["ALLOWED_ORIGINS"] = "https://lovable-test-origin.app"
-os.environ["BACKEND_API_KEY"] = "test_backend_key"
 os.environ["SUPABASE_ISSUER"] = "https://mock.supabase.co/auth/v1"
 os.environ["SUPABASE_JWT_AUDIENCE"] = "authenticated"
 
@@ -858,12 +857,12 @@ def test_user_authorization_allowlists():
     assert res_special.status_code == 200
 
 
-def test_server_to_server_bypass_key():
+def test_invalid_header_rejection():
     os.environ["PIPEIMOB_DATA_MODE"] = "demo"
     unauth_client = TestClient(app)
     
-    # Passing X-Backend-API-Key server-to-server bypass -> HTTP 401 Unauthorized now
-    res = unauth_client.get("/api/dashboard/summary", headers={"X-Backend-API-Key": "test_backend_key"})
+    # Passing unmapped headers -> HTTP 401 Unauthorized now
+    res = unauth_client.get("/api/dashboard/summary", headers={"X-Header-Test": "some_value"})
     assert res.status_code == 401
 
 
@@ -900,7 +899,7 @@ def test_privacy_compliance_on_public_responses():
             val_lower = node.lower()
             # Assert that no value contains sensitive-looking substrings like typical emails or keys in plain text
             for sensitive in ["@gralha", "secret_key", "api_key", "bearer"]:
-                # Ignore the default server-to-server mock email in the response if it pops up under manager or other fields,
+                # Ignore mock emails if any,
                 # but assert actual spreadsheet PII does not exist.
                 assert sensitive not in val_lower, f"Sensitive substring '{sensitive}' found in string value: {node}"
 
@@ -2248,7 +2247,7 @@ def test_dashboard_full_endpoint_sales_cycle(mock_load):
         assert sc["fastest_sale"]["days"] == 10
         assert sc["longest_sale"]["days"] == 20
     finally:
-        os.environ.pop("BACKEND_API_KEY", None)
+        pass
 
 
 def test_sales_cycle_extremes_comprehensive():

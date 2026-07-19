@@ -100,8 +100,6 @@ Os endpoints de dados e dashboard da API (`/api/transactions`, `/api/transaction
   - `ALLOWED_USER_EMAILS`: E-mails específicos autorizados (separados por vírgula).
   - `ALLOWED_EMAIL_DOMAINS`: Domínios autorizados. Padrão: `gralhaimoveis.com.br`
 
-* **Bypass de Integração (Opcional):** Chave server-to-server configurada em `BACKEND_API_KEY` que pode ser enviada no cabeçalho `X-Backend-API-Key` (nunca expor no frontend).
-
 ---
 
 ### 🔒 Camada de Sanitização de Dados Pessoais (LGPD)
