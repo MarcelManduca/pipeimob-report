@@ -128,8 +128,7 @@ Todas as rotas de listagem e BI suportam os seguintes filtros opcionais:
   - `agent`: Filtro case-insensitive pelo nome do corretor (`agente_gestor`).
   - `category`: Filtro pela categoria do imóvel (`categoria_crm`).
   - `financing`: Boleano (`true`/`false`) para filtrar se houve financiamento bancário.
-
-### Relação de Endpoints (Exigem cabeçalho `X-Backend-API-Key`)
+### Relação de Endpoints (Exigem autenticação via JWT)
 
 * **Listar Transações:** `GET /api/transactions`
   * Retorna a lista de transações filtradas de forma sanitizada.
