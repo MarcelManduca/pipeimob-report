@@ -3,6 +3,7 @@ import sys
 import json
 from datetime import datetime, timezone
 from fastapi.testclient import TestClient
+from unittest.mock import patch, MagicMock
 
 # Add project root to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -297,19 +298,22 @@ def test_live_with_credentials_configured():
     os.environ["APP_ENV"] = "development"
 
 def test_unconfigured_endpoints_return_503():
+    from main import verify_backend_api_key
+    app.dependency_overrides[verify_backend_api_key] = lambda: {"email": "test@gralhaimoveis.com.br", "sub": "test-user-id"}
     os.environ["APP_ENV"] = "production"
     os.environ.pop("PIPEIMOB_DATA_MODE", None)
-    
-    # Endpoints must fail with 503 while unconfigured, never returning demo data silently
-    response = client.get("/api/transactions", headers={"X-Backend-API-Key": "test_backend_key"})
-    assert response.status_code == 503
-    assert "Configuration pending" in response.json()["detail"]
-    
-    response = client.get("/api/dashboard/summary", headers={"X-Backend-API-Key": "test_backend_key"})
-    assert response.status_code == 503
-    assert "Configuration pending" in response.json()["detail"]
-    
-    os.environ["APP_ENV"] = "development"
+    try:
+        # Endpoints must fail with 503 while unconfigured, never returning demo data silently
+        response = client.get("/api/transactions")
+        assert response.status_code == 503
+        assert "Configuration pending" in response.json()["detail"]
+        
+        response = client.get("/api/dashboard/summary")
+        assert response.status_code == 503
+        assert "Configuration pending" in response.json()["detail"]
+    finally:
+        os.environ["APP_ENV"] = "development"
+        app.dependency_overrides.clear()
 
 def test_six_filters_appear_in_catalog():
     response = client.get("/api/catalog")
@@ -691,23 +695,25 @@ def test_openapi_includes_new_endpoints_and_schemas():
     health_schema = schemas["HealthResponse"]
     assert health_schema["properties"]["data_mode"]["example"] == "unconfigured"
     assert health_schema["properties"]["pipeimob_connection"]["example"] == "pending_configuration"
-    
     # 503 errors do not leak secrets
     os.environ["APP_ENV"] = "production"
     os.environ.pop("PIPEIMOB_DATA_MODE", None)
-    err_res = client.get(
-        "/api/transactions?data_inicio_criacao=2026-01-01",
-        headers={"X-Backend-API-Key": "test_backend_key"}
-    )
-    assert err_res.status_code == 503
-    err_body = err_res.json()
-    for val in err_body.values():
-        val_str = str(val).lower()
-        assert "api_key" not in val_str
-        assert "secret_key" not in val_str
-        assert "token" not in val_str
-    
-    os.environ["APP_ENV"] = "development"
+    from main import verify_backend_api_key
+    app.dependency_overrides[verify_backend_api_key] = lambda: {"email": "test@gralhaimoveis.com.br", "sub": "test-user-id"}
+    try:
+        err_res = client.get(
+            "/api/transactions?data_inicio_criacao=2026-01-01"
+        )
+        assert err_res.status_code == 503
+        err_body = err_res.json()
+        for val in err_body.values():
+            val_str = str(val).lower()
+            assert "api_key" not in val_str
+            assert "secret_key" not in val_str
+            assert "token" not in val_str
+    finally:
+        os.environ["APP_ENV"] = "development"
+        app.dependency_overrides.clear()
 
 def test_live_mode_only_pagina_returns_400():
     os.environ["PIPEIMOB_DATA_MODE"] = "live"
@@ -856,9 +862,9 @@ def test_server_to_server_bypass_key():
     os.environ["PIPEIMOB_DATA_MODE"] = "demo"
     unauth_client = TestClient(app)
     
-    # Passing X-Backend-API-Key server-to-server bypass -> HTTP 200 OK
+    # Passing X-Backend-API-Key server-to-server bypass -> HTTP 401 Unauthorized now
     res = unauth_client.get("/api/dashboard/summary", headers={"X-Backend-API-Key": "test_backend_key"})
-    assert res.status_code == 200
+    assert res.status_code == 401
 
 
 def test_privacy_compliance_on_public_responses():
@@ -2223,10 +2229,9 @@ def test_dashboard_full_endpoint_sales_cycle(mock_load):
         1
     )
     
-    # Authenticate using server-to-server fallback bypass
-    os.environ["BACKEND_API_KEY"] = "super-secret-test-key"
+    # Authenticate using mock JWT token
     try:
-        test_client = TestClient(app, headers={"x-backend-api-key": "super-secret-test-key"})
+        test_client = TestClient(app, headers={"Authorization": f"Bearer {mock_token}"})
         res = test_client.get("/api/dashboard/full?data_inicio_ccv=2026-01-01&data_fim_ccv=2026-06-30")
         assert res.status_code == 200
         data = res.json()
