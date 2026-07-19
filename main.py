@@ -2626,11 +2626,15 @@ def get_jwk_client():
             from jwt import PyJWKClient
             _jwk_client = PyJWKClient(jwks_url)
     return _jwk_client
+
 async def verify_backend_api_key(
     authorization: Optional[str] = Header(None),
     x_backend_api_key: Optional[str] = Header(None)
 ):
-    return {"email": "server-to-server@gralhaimoveis.com.br", "sub": "server-to-server"}
+    # Server-to-server fallback bypass
+    expected_server_key = os.getenv("BACKEND_API_KEY")
+    if expected_server_key and x_backend_api_key == expected_server_key:
+        return {"email": "server-to-server@gralhaimoveis.com.br", "sub": "server-to-server"}
 
     import jwt
 
