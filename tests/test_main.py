@@ -2752,3 +2752,50 @@ def test_data_quality_endpoint_auth_and_schema(monkeypatch):
         assert "@" not in raw_json_str
     finally:
         app.dependency_overrides.clear()
+
+def test_directed_mandatory_data_quality_missing_config(monkeypatch):
+    from main import compute_dashboard_aggregates
+    
+    monkeypatch.delenv("PIPEIMOB_OFFICIAL_TEAM_GROUPS_JSON", raising=False)
+    
+    txs = [
+        # A. Agente A: grupos empty array -> affected, missing_team_assignment
+        {
+            "transacao_unique_id_pipeimob": "tx_a",
+            "agente_gestor": "Agente A",
+            "agente_gestor_grupo_filial": "Filial A",
+            "agente_gestor_grupos_a_que_pertence": []
+        },
+        # B. Agente B: grupos has ID_NAO_MAPEADO -> review_only, configuration_mapping_required, no missing_team_assignment
+        {
+            "transacao_unique_id_pipeimob": "tx_b",
+            "agente_gestor": "Agente B",
+            "agente_gestor_grupo_filial": "Filial B",
+            "agente_gestor_grupos_a_que_pertence": ["ID_NAO_MAPEADO"]
+        },
+        # C. Agente C: grupos is absent, legacy fields empty -> affected, missing_team_assignment
+        {
+            "transacao_unique_id_pipeimob": "tx_c",
+            "agente_gestor": "Agente C",
+            "agente_gestor_grupo_filial": "Filial C",
+            "agente_gestor_grupos_a_que_pertence": None,
+            "agente_gestor_grupos_a_que_pertence1": " ",
+            "agente_gestor_grupos_a_que_pertence2": None,
+            "agente_gestor_grupos_a_que_pertence3": ""
+        }
+    ]
+    
+    res = compute_dashboard_aggregates(txs)
+    dq = res["data_quality"]
+    
+    assert dq["summary"]["compliant_transactions_count"] == 0
+    assert dq["summary"]["affected_transactions_count"] == 2
+    assert dq["summary"]["review_only_transactions_count"] == 1
+    assert dq["teams"]["reconciliation"]["transactions_reconciled"] is True
+    
+    issues = {iss["id"]: iss for iss in dq["teams"]["issues"]}
+    assert "missing_team_assignment" in issues
+    assert "configuration_mapping_required" in issues
+    assert issues["missing_team_assignment"]["affected_transactions_count"] == 2
+    assert issues["configuration_mapping_required"]["affected_transactions_count"] == 1
+
