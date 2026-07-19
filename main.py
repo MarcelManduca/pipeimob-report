@@ -2530,12 +2530,61 @@ async def get_diagnose_groups():
     if not txs:
         return {"error": "no transactions found"}
         
-    filial_vals = sorted(list(set(tx.get("agente_gestor_grupo_filial") for tx in txs if tx.get("agente_gestor_grupo_filial"))))
-    lider_vals = sorted(list(set(tx.get("lider_equipe") for tx in txs if tx.get("lider_equipe"))))
+    total_tx = len(txs)
+    empty_lists = 0
+    one_element_lists = 0
+    multi_element_lists = 0
+    
+    unique_group_ids = set()
+    unique_agents = set()
+    
+    all_keys = set()
+    for tx in txs:
+        all_keys.update(tx.keys())
+        g = tx.get("agente_gestor_grupos_a_que_pertence")
+        if not g:
+            empty_lists += 1
+        elif isinstance(g, list):
+            if len(g) == 0:
+                empty_lists += 1
+            elif len(g) == 1:
+                one_element_lists += 1
+                unique_group_ids.add(g[0])
+            else:
+                multi_element_lists += 1
+                for item in g:
+                    unique_group_ids.add(item)
+        else:
+            empty_lists += 1
+            
+        agent = tx.get("agente_gestor")
+        if agent:
+            unique_agents.add(agent)
+            
+    id_keys = [k for k in sorted(all_keys) if "id" in k.lower() or "user" in k.lower() or "usuario" in k.lower() or "gestor" in k.lower()]
+    first_tx_ids = {k: txs[0].get(k) for k in id_keys if k in txs[0]}
+    
+    has_gestor_id = "agente_gestor_id" in all_keys or "agente_gestor_unique_id" in all_keys
+    has_usuario_id = "usuario_id" in all_keys
+    has_corretor_id = "corretor_id" in all_keys
     
     return {
-        "unique_grupo_filial": filial_vals,
-        "unique_lider_equipe": lider_vals
+        "total_transactions": total_tx,
+        "group_lists": {
+            "empty": empty_lists,
+            "one_element": one_element_lists,
+            "multi_element": multi_element_lists
+        },
+        "unique_group_ids_count": len(unique_group_ids),
+        "unique_group_ids": sorted(list(unique_group_ids)),
+        "distinct_agents_count": len(unique_agents),
+        "all_keys_with_id_or_user_or_gestor": id_keys,
+        "first_tx_ids_sample": first_tx_ids,
+        "has_stable_keys": {
+            "agente_gestor_id": has_gestor_id,
+            "usuario_id": has_usuario_id,
+            "corretor_id": has_corretor_id
+        }
     }
 
 # Endpoint routes
