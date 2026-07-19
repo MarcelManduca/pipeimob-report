@@ -2799,3 +2799,44 @@ def test_directed_mandatory_data_quality_missing_config(monkeypatch):
     assert issues["missing_team_assignment"]["affected_transactions_count"] == 2
     assert issues["configuration_mapping_required"]["affected_transactions_count"] == 1
 
+def test_data_quality_agents_count_and_composites(monkeypatch):
+    from main import compute_dashboard_aggregates
+    
+    monkeypatch.delenv("PIPEIMOB_OFFICIAL_TEAM_GROUPS_JSON", raising=False)
+    
+    txs = []
+    for i in range(1, 21):
+        name = f"Agente {i}"
+        groups = [] if i <= 5 else [f"group_{i}"]
+        branch = None if 6 <= i <= 10 else f"Filial {i % 3}"
+        txs.append({
+            "transacao_unique_id_pipeimob": f"tx_agent_{i}",
+            "agente_gestor": name,
+            "agente_gestor_grupo_filial": branch,
+            "agente_gestor_grupos_a_que_pertence": groups
+        })
+        
+    # Same agent same branch -> single key
+    txs.append({
+        "transacao_unique_id_pipeimob": "tx_same_1",
+        "agente_gestor": "Agente 1",
+        "agente_gestor_grupo_filial": "Filial 1",
+        "agente_gestor_grupos_a_que_pertence": []
+    })
+    
+    # Same agent different branch -> two distinct composite keys
+    txs.append({
+        "transacao_unique_id_pipeimob": "tx_same_2",
+        "agente_gestor": "Agente 1",
+        "agente_gestor_grupo_filial": "Filial Diferente",
+        "agente_gestor_grupos_a_que_pertence": []
+    })
+    
+    res = compute_dashboard_aggregates(txs)
+    dq = res["data_quality"]
+    
+    assert dq["summary"]["distinct_agents_count"] == 21
+    assert dq["teams"]["reconciliation"]["agents_reconciled"] is True
+    assert dq["teams"]["reconciliation"]["transactions_reconciled"] is True
+
+
