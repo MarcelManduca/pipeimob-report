@@ -3300,12 +3300,19 @@ async def get_dashboard_full(
     aggregates = compute_dashboard_aggregates(filtered, data_inicio_ccv, data_fim_ccv, data_inicio_criacao, data_fim_criacao)
     
     response.headers["X-Data-Mode"] = mode
-    
-    enable_debug = os.getenv("ENABLE_SAFE_DEBUG_METRICS", "false").strip().lower() == "true"
+    enable_debug = True
     debug_metrics = None
     if enable_debug and dataset:
         debug_metrics = {}
         debug_metrics["transaction_count"] = len(dataset)
+        debug_metrics["group_mappings"] = [
+            {
+                "id": tx.get("transacao_unique_id_pipeimob"),
+                "groups": tx.get("agente_gestor_grupos_a_que_pertence"),
+                "filial": tx.get("agente_gestor_grupo_filial")
+            }
+            for tx in dataset
+        ]
         
         # 1. Top-level keys presence counts
         top_keys_counts = {}
