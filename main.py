@@ -2523,69 +2523,36 @@ def get_metadata_wrapper(data_mode: str, source: str):
 
 @app.get("/api/diagnose-groups")
 async def get_diagnose_groups():
-    db_mode, src, txs, pages = load_transactions_dataset(
-        data_inicio_ccv="2026-01-01",
-        data_fim_ccv="2026-06-30"
-    )
-    if not txs:
-        return {"error": "no transactions found"}
-        
-    total_tx = len(txs)
-    empty_lists = 0
-    one_element_lists = 0
-    multi_element_lists = 0
+    api_key = os.getenv("PIPEIMOB_API_KEY").strip()
+    api_secret = os.getenv("PIPEIMOB_SECRET_KEY").strip()
+    token = get_auth_token(api_key, api_secret)
     
-    unique_group_ids = set()
-    unique_agents = set()
+    endpoints = [
+        "grupos",
+        "equipes",
+        "negocios/grupos",
+        "usuarios/grupos",
+        "configuracoes/grupos",
+        "configuracoes/equipes"
+    ]
     
-    all_keys = set()
-    for tx in txs:
-        all_keys.update(tx.keys())
-        g = tx.get("agente_gestor_grupos_a_que_pertence")
-        if not g:
-            empty_lists += 1
-        elif isinstance(g, list):
-            if len(g) == 0:
-                empty_lists += 1
-            elif len(g) == 1:
-                one_element_lists += 1
-                unique_group_ids.add(g[0])
-            else:
-                multi_element_lists += 1
-                for item in g:
-                    unique_group_ids.add(item)
-        else:
-            empty_lists += 1
+    results = {}
+    for ep in endpoints:
+        url = f"{BASE_URL}/{ep}"
+        req = urllib.request.Request(
+            url,
+            headers={'Authorization': f'Bearer {token}', 'User-Agent': 'Mozilla/5.0'}
+        )
+        try:
+            with urllib.request.urlopen(req, context=ssl_context, timeout=8) as res:
+                body = json.loads(res.read().decode('utf-8'))
+                results[ep] = {"status": 200, "success": body.get("success"), "sample": str(body)[:300]}
+        except urllib.error.HTTPError as e:
+            results[ep] = {"status": e.code, "error": str(e)}
+        except Exception as e:
+            results[ep] = {"status": "error", "error": str(e)}
             
-        agent = tx.get("agente_gestor")
-        if agent:
-            unique_agents.add(agent)
-            
-    id_keys = [k for k in sorted(all_keys) if "id" in k.lower() or "user" in k.lower() or "usuario" in k.lower() or "gestor" in k.lower()]
-    first_tx_ids = {k: txs[0].get(k) for k in id_keys if k in txs[0]}
-    
-    has_gestor_id = "agente_gestor_id" in all_keys or "agente_gestor_unique_id" in all_keys
-    has_usuario_id = "usuario_id" in all_keys
-    has_corretor_id = "corretor_id" in all_keys
-    
-    return {
-        "total_transactions": total_tx,
-        "group_lists": {
-            "empty": empty_lists,
-            "one_element": one_element_lists,
-            "multi_element": multi_element_lists
-        },
-        "unique_group_ids_count": len(unique_group_ids),
-        "unique_group_ids": sorted(list(unique_group_ids)),
-        "distinct_agents_count": len(unique_agents),
-        "all_keys_with_id_or_user_or_gestor": id_keys,
-        "first_tx_ids_sample": first_tx_ids,
-        "has_stable_keys": {
-            "agente_gestor_id": has_gestor_id,
-            "usuario_id": has_usuario_id,
-            "corretor_id": has_corretor_id
-        }
-    }
+    return results
 
 # Endpoint routes
 @app.get(
