@@ -2372,3 +2372,383 @@ def test_sales_cycle_extremes_comprehensive():
     res_none = compute_dashboard_aggregates([], data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
     assert res_none["sales_cycle"]["fastest_sale"] is None
     assert res_none["sales_cycle"]["longest_sale"] is None
+
+def test_parse_official_team_groups_scenarios(monkeypatch):
+    from main import parse_official_team_groups
+    # 1. missing
+    monkeypatch.delenv("PIPEIMOB_OFFICIAL_TEAM_GROUPS_JSON", raising=False)
+    status, configured, mapping, teams = parse_official_team_groups()
+    assert status == "missing"
+    assert not configured
+    
+    # 2. invalid JSON
+    monkeypatch.setenv("PIPEIMOB_OFFICIAL_TEAM_GROUPS_JSON", "not-a-json")
+    status, configured, mapping, teams = parse_official_team_groups()
+    assert status == "invalid"
+    
+    # 3. root not a list
+    monkeypatch.setenv("PIPEIMOB_OFFICIAL_TEAM_GROUPS_JSON", '{"id": "1"}')
+    status, configured, mapping, teams = parse_official_team_groups()
+    assert status == "invalid"
+    
+    # 4. incomplete - empty list
+    monkeypatch.setenv("PIPEIMOB_OFFICIAL_TEAM_GROUPS_JSON", "[]")
+    status, configured, mapping, teams = parse_official_team_groups()
+    assert status == "incomplete"
+    
+    # 5. incomplete - missing name
+    monkeypatch.setenv("PIPEIMOB_OFFICIAL_TEAM_GROUPS_JSON", '[{"id": "1", "type": "team"}]')
+    status, configured, mapping, teams = parse_official_team_groups()
+    assert status == "incomplete"
+    
+    # 6. incomplete - invalid type
+    monkeypatch.setenv("PIPEIMOB_OFFICIAL_TEAM_GROUPS_JSON", '[{"id": "1", "name": "Equipe A", "type": "invalid_type"}]')
+    status, configured, mapping, teams = parse_official_team_groups()
+    assert status == "incomplete"
+    
+    # 7. incomplete - duplicate IDs
+    monkeypatch.setenv("PIPEIMOB_OFFICIAL_TEAM_GROUPS_JSON", '[{"id": "1", "name": "Equipe A", "type": "team"}, {"id": "1", "name": "Equipe B", "type": "team"}]')
+    status, configured, mapping, teams = parse_official_team_groups()
+    assert status == "incomplete"
+    
+    # 8. incomplete - duplicate team names
+    monkeypatch.setenv("PIPEIMOB_OFFICIAL_TEAM_GROUPS_JSON", '[{"id": "1", "name": "Equipe A", "type": "team"}, {"id": "2", "name": "equipe a", "type": "team"}]')
+    status, configured, mapping, teams = parse_official_team_groups()
+    assert status == "incomplete"
+    
+    # 9. incomplete - no team type
+    monkeypatch.setenv("PIPEIMOB_OFFICIAL_TEAM_GROUPS_JSON", '[{"id": "1", "name": "Filial A", "type": "branch"}]')
+    status, configured, mapping, teams = parse_official_team_groups()
+    assert status == "incomplete"
+    
+    # 10. configured
+    monkeypatch.setenv("PIPEIMOB_OFFICIAL_TEAM_GROUPS_JSON", '[{"id": "1", "name": "Equipe A", "type": "team"}, {"id": "2", "name": "Filial A", "type": "branch"}]')
+    status, configured, mapping, teams = parse_official_team_groups()
+    assert status == "configured"
+    assert configured
+    assert teams == ["Equipe A"]
+    assert mapping["1"] == {"name": "Equipe A", "type": "team"}
+
+def test_data_quality_aggregation_scenarios(monkeypatch):
+    from main import compute_dashboard_aggregates
+    
+    config_json = json.dumps([
+        {"id": "group_team_1", "name": "Equipe Alpha", "type": "team"},
+        {"id": "group_team_2", "name": "Equipe Beta", "type": "team"},
+        {"id": "group_branch_1", "name": "Filial Norte", "type": "branch"},
+        {"id": "group_other_1", "name": "Outro Grupo", "type": "other"}
+    ])
+    monkeypatch.setenv("PIPEIMOB_OFFICIAL_TEAM_GROUPS_JSON", config_json)
+    
+    # 1. Configured - groups empty -> missing_team_assignment (high)
+    txs = [{
+        "transacao_unique_id_pipeimob": "tx1",
+        "agente_gestor": "Corretor A",
+        "agente_gestor_grupo_filial": "Filial A",
+        "agente_gestor_grupos_a_que_pertence": []
+    }]
+    res = compute_dashboard_aggregates(txs)
+    dq = res["data_quality"]
+    assert dq["summary"]["affected_agents_count"] == 1
+    assert dq["summary"]["compliant_agents_count"] == 0
+    assert dq["summary"]["affected_transactions_count"] == 1
+    assert dq["summary"]["compliant_transactions_count"] == 0
+    assert dq["summary"]["transaction_compliance_ratio"] == 0.0
+    
+    # 2. Configured - branch group only -> missing_team_assignment (high)
+    txs = [{
+        "transacao_unique_id_pipeimob": "tx2",
+        "agente_gestor": "Corretor A",
+        "agente_gestor_grupo_filial": "Filial A",
+        "agente_gestor_grupos_a_que_pertence": ["group_branch_1"]
+    }]
+    res = compute_dashboard_aggregates(txs)
+    dq = res["data_quality"]
+    assert dq["summary"]["affected_agents_count"] == 1
+    
+    # 3. Configured - other group only -> missing_team_assignment (high)
+    txs = [{
+        "transacao_unique_id_pipeimob": "tx3",
+        "agente_gestor": "Corretor A",
+        "agente_gestor_grupo_filial": "Filial A",
+        "agente_gestor_grupos_a_que_pertence": ["group_other_1"]
+    }]
+    res = compute_dashboard_aggregates(txs)
+    dq = res["data_quality"]
+    assert dq["summary"]["affected_agents_count"] == 1
+    
+    # 4. Configured - branch + unknown -> affected
+    txs = [{
+        "transacao_unique_id_pipeimob": "tx4",
+        "agente_gestor": "Corretor A",
+        "agente_gestor_grupo_filial": "Filial A",
+        "agente_gestor_grupos_a_que_pertence": ["group_branch_1", "group_unknown_1"]
+    }]
+    res = compute_dashboard_aggregates(txs)
+    dq = res["data_quality"]
+    assert dq["summary"]["affected_agents_count"] == 1
+    assert dq["summary"]["review_only_agents_count"] == 0
+    
+    # 5. Configured - unknown ID only -> review_only
+    txs = [{
+        "transacao_unique_id_pipeimob": "tx5",
+        "agente_gestor": "Corretor A",
+        "agente_gestor_grupo_filial": "Filial A",
+        "agente_gestor_grupos_a_que_pertence": ["group_unknown_1"]
+    }]
+    res = compute_dashboard_aggregates(txs)
+    dq = res["data_quality"]
+    assert dq["summary"]["affected_agents_count"] == 0
+    assert dq["summary"]["review_only_agents_count"] == 1
+
+    # 5b. Configured - team + unknown -> compliant (since there is a valid team)
+    txs = [{
+        "transacao_unique_id_pipeimob": "tx5b",
+        "agente_gestor": "Corretor A",
+        "agente_gestor_grupo_filial": "Filial A",
+        "agente_gestor_grupos_a_que_pertence": ["group_team_1", "group_unknown_1"]
+    }]
+    res = compute_dashboard_aggregates(txs)
+    dq = res["data_quality"]
+    assert dq["summary"]["affected_agents_count"] == 0
+    assert dq["summary"]["review_only_agents_count"] == 0
+    assert dq["summary"]["compliant_agents_count"] == 1
+    
+    # 6. Configured - valid team -> compliant
+    txs = [{
+        "transacao_unique_id_pipeimob": "tx6",
+        "agente_gestor": "Corretor A",
+        "agente_gestor_grupo_filial": "Filial A",
+        "agente_gestor_grupos_a_que_pertence": ["group_team_1"]
+    }]
+    res = compute_dashboard_aggregates(txs)
+    dq = res["data_quality"]
+    assert dq["summary"]["compliant_agents_count"] == 1
+    
+    # 7. Unassigned manager transaction
+    txs = [{
+        "transacao_unique_id_pipeimob": "tx7",
+        "agente_gestor": None,
+        "agente_gestor_grupo_filial": "Filial A",
+        "agente_gestor_grupos_a_que_pertence": ["group_team_1"]
+    }]
+    res = compute_dashboard_aggregates(txs)
+    dq = res["data_quality"]
+    assert dq["summary"]["affected_agents_count"] == 0
+    assert dq["summary"]["distinct_agents_count"] == 0
+    assert dq["summary"]["affected_transactions_count"] == 1
+    assert dq["summary"]["unassigned_manager_transactions_count"] == 1
+    
+    # 8. Same agent with team and empty -> affected
+    txs = [
+        {
+            "transacao_unique_id_pipeimob": "tx8a",
+            "agente_gestor": "Corretor A",
+            "agente_gestor_grupo_filial": "Filial A",
+            "agente_gestor_grupos_a_que_pertence": ["group_team_1"]
+        },
+        {
+            "transacao_unique_id_pipeimob": "tx8b",
+            "agente_gestor": "Corretor A",
+            "agente_gestor_grupo_filial": "Filial A",
+            "agente_gestor_grupos_a_que_pertence": []
+        }
+    ]
+    res = compute_dashboard_aggregates(txs)
+    dq = res["data_quality"]
+    assert dq["summary"]["affected_agents_count"] == 1
+    assert dq["summary"]["compliant_agents_count"] == 0
+    
+    # 9. Same agent in different branches (composite key grouping)
+    txs = [
+        {
+            "transacao_unique_id_pipeimob": "tx9a",
+            "agente_gestor": "Corretor A",
+            "agente_gestor_grupo_filial": "Filial Alpha",
+            "agente_gestor_grupos_a_que_pertence": ["group_team_1"]
+        },
+        {
+            "transacao_unique_id_pipeimob": "tx9b",
+            "agente_gestor": "Corretor A",
+            "agente_gestor_grupo_filial": "Filial Beta",
+            "agente_gestor_grupos_a_que_pertence": ["group_team_1"]
+        }
+    ]
+    res = compute_dashboard_aggregates(txs)
+    dq = res["data_quality"]
+    assert dq["summary"]["distinct_agents_count"] == 2
+    assert dq["summary"]["compliant_agents_count"] == 2
+    
+    # 10. Agent with error and review -> affected
+    txs = [
+        {
+            "transacao_unique_id_pipeimob": "tx10a",
+            "agente_gestor": "Corretor A",
+            "agente_gestor_grupo_filial": "Filial A",
+            "agente_gestor_grupos_a_que_pertence": []
+        },
+        {
+            "transacao_unique_id_pipeimob": "tx10b",
+            "agente_gestor": "Corretor A",
+            "agente_gestor_grupo_filial": "Filial A",
+            "agente_gestor_grupos_a_que_pertence": ["group_team_1", "group_unknown_1"]
+        }
+    ]
+    res = compute_dashboard_aggregates(txs)
+    dq = res["data_quality"]
+    assert dq["summary"]["affected_agents_count"] == 1
+    assert dq["summary"]["review_only_agents_count"] == 0
+    
+    # 11. Inconsistent team assignment
+    txs = [
+        {
+            "transacao_unique_id_pipeimob": "tx11a",
+            "agente_gestor": "Corretor Theta",
+            "agente_gestor_grupo_filial": "Filial A",
+            "agente_gestor_grupos_a_que_pertence": ["group_team_1"]
+        },
+        {
+            "transacao_unique_id_pipeimob": "tx11b",
+            "agente_gestor": "Corretor Theta",
+            "agente_gestor_grupo_filial": "Filial A",
+            "agente_gestor_grupos_a_que_pertence": ["group_team_2"]
+        }
+    ]
+    res = compute_dashboard_aggregates(txs)
+    dq = res["data_quality"]
+    assert dq["summary"]["affected_agents_count"] == 0
+    assert dq["summary"]["review_only_agents_count"] == 1
+    
+    # 12. Overall statuses
+    txs = [{
+        "transacao_unique_id_pipeimob": "tx12a",
+        "agente_gestor": "Corretor A",
+        "agente_gestor_grupo_filial": "Filial A",
+        "agente_gestor_grupos_a_que_pertence": ["group_team_1"]
+    }]
+    res = compute_dashboard_aggregates(txs)
+    assert res["data_quality"]["summary"]["status"] == "ok"
+    
+    txs = [
+        {
+            "transacao_unique_id_pipeimob": "tx12b_1",
+            "agente_gestor": "Corretor A",
+            "agente_gestor_grupo_filial": "Filial A",
+            "agente_gestor_grupos_a_que_pertence": []
+        },
+        {
+            "transacao_unique_id_pipeimob": "tx12b_2",
+            "agente_gestor": "Corretor B",
+            "agente_gestor_grupo_filial": "Filial A",
+            "agente_gestor_grupos_a_que_pertence": ["group_team_1"]
+        }
+    ]
+    res = compute_dashboard_aggregates(txs)
+    assert res["data_quality"]["summary"]["status"] == "critical"
+    
+    txs = [
+        {
+            "transacao_unique_id_pipeimob": "tx12c_1",
+            "agente_gestor": "Corretor A",
+            "agente_gestor_grupo_filial": "Filial A",
+            "agente_gestor_grupos_a_que_pertence": []
+        },
+        {
+            "transacao_unique_id_pipeimob": "tx12c_2",
+            "agente_gestor": "Corretor B",
+            "agente_gestor_grupo_filial": "Filial A",
+            "agente_gestor_grupos_a_que_pertence": ["group_team_1"]
+        },
+        {
+            "transacao_unique_id_pipeimob": "tx12c_3",
+            "agente_gestor": "Corretor C",
+            "agente_gestor_grupo_filial": "Filial A",
+            "agente_gestor_grupos_a_que_pertence": ["group_team_1"]
+        },
+        {
+            "transacao_unique_id_pipeimob": "tx12c_4",
+            "agente_gestor": "Corretor D",
+            "agente_gestor_grupo_filial": "Filial A",
+            "agente_gestor_grupos_a_que_pertence": ["group_team_1"]
+        }
+    ]
+    res = compute_dashboard_aggregates(txs)
+    assert res["data_quality"]["summary"]["status"] == "attention"
+    
+    # 13. distinct_agents_count = 0 with unassigned manager transactions
+    txs = [{
+        "transacao_unique_id_pipeimob": "tx13",
+        "agente_gestor": None,
+        "agente_gestor_grupo_filial": "Filial A",
+        "agente_gestor_grupos_a_que_pertence": ["group_team_1"]
+    }]
+    res = compute_dashboard_aggregates(txs)
+    assert res["data_quality"]["summary"]["status"] == "attention"
+    
+    # 14. zero transactions
+    res = compute_dashboard_aggregates([])
+    assert res["data_quality"]["summary"]["status"] == "ok"
+    assert res["data_quality"]["summary"]["distinct_agents_count"] == 0
+    assert res["data_quality"]["summary"]["agent_compliance_ratio"] == 0.0
+    assert res["data_quality"]["summary"]["transaction_compliance_ratio"] == 0.0
+
+    # 15. Missing/Invalid/Incomplete configuration scenarios
+    monkeypatch.delenv("PIPEIMOB_OFFICIAL_TEAM_GROUPS_JSON", raising=False)
+    txs = [{
+        "transacao_unique_id_pipeimob": "tx15a",
+        "agente_gestor": "Corretor A",
+        "agente_gestor_grupo_filial": "Filial A",
+        "agente_gestor_grupos_a_que_pertence": []
+    }]
+    res = compute_dashboard_aggregates(txs)
+    assert res["data_quality"]["summary"]["affected_agents_count"] == 1
+    assert res["data_quality"]["summary"]["review_only_agents_count"] == 0
+    
+    txs = [{
+        "transacao_unique_id_pipeimob": "tx15b",
+        "agente_gestor": "Corretor A",
+        "agente_gestor_grupo_filial": "Filial A",
+        "agente_gestor_grupos_a_que_pertence": ["some_id"]
+    }]
+    res = compute_dashboard_aggregates(txs)
+    assert res["data_quality"]["summary"]["affected_agents_count"] == 0
+    assert res["data_quality"]["summary"]["review_only_agents_count"] == 1
+
+def test_data_quality_endpoint_auth_and_schema(monkeypatch):
+    config_json = json.dumps([
+        {"id": "group_team_1", "name": "Equipe Alpha", "type": "team"}
+    ])
+    monkeypatch.setenv("PIPEIMOB_OFFICIAL_TEAM_GROUPS_JSON", config_json)
+    
+    client = TestClient(app)
+    
+    # 1. 401 without JWT
+    res = client.get("/api/dashboard/full")
+    assert res.status_code == 401
+    
+    # 2. 401 with X-Backend-API-Key (legacy bypass)
+    res = client.get("/api/dashboard/full", headers={"X-Backend-API-Key": "some-key"})
+    assert res.status_code == 401
+    
+    # 3. 200 with valid JWT
+    from main import verify_backend_api_key
+    app.dependency_overrides[verify_backend_api_key] = lambda: {"sub": "user-123", "role": "authenticated"}
+    
+    try:
+        res = client.get("/api/dashboard/full?data_inicio=2026-01-01&data_fim=2026-06-30")
+        assert res.status_code == 200
+        
+        data = res.json()
+        assert "data_quality" in data
+        dq = data["data_quality"]
+        assert dq["period_basis"] == "ccv"
+        assert "summary" in dq
+        assert "teams" in dq
+        
+        raw_json_str = json.dumps(data)
+        assert "group_team_1" not in raw_json_str
+        assert "email" not in raw_json_str
+        assert "telefone" not in raw_json_str
+        assert "@" not in raw_json_str
+    finally:
+        app.dependency_overrides.clear()

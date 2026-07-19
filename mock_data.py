@@ -110,6 +110,36 @@ def generate_mock_transactions():
                 }
             ]
         }
+        # Data Quality group assignment
+        if i % 10 == 0:
+            tx["agente_gestor_grupos_a_que_pertence"] = []
+        elif i % 10 == 1:
+            tx["agente_gestor_grupos_a_que_pertence"] = ["group_branch_1"]
+        elif i % 10 == 2:
+            tx["agente_gestor_grupos_a_que_pertence"] = ["group_unmapped_1"]
+        elif i % 10 == 3:
+            tx["agente_gestor_grupos_a_que_pertence"] = ["group_team_1"]
+        elif i % 10 == 4:
+            tx["agente_gestor_grupos_a_que_pertence"] = ["group_team_2"]
+        elif i % 10 == 5:
+            tx["agente_gestor_grupos_a_que_pertence"] = ["group_team_1", "group_branch_1"]
+        elif i % 10 == 6:
+            tx["agente_gestor_grupos_a_que_pertence"] = None
+            tx["agente_gestor_grupos_a_que_pertence1"] = "Equipe Meta"
+            tx["agente_gestor_grupos_a_que_pertence2"] = ""
+            tx["agente_gestor_grupos_a_que_pertence3"] = ""
+        elif i % 10 == 7:
+            if i == 7:
+                tx["agente_gestor_grupos_a_que_pertence"] = ["group_team_1"]
+            else:
+                tx["agente_gestor_grupos_a_que_pertence"] = ["group_team_2"]
+        elif i % 10 == 8:
+            tx["agente_gestor_grupos_a_que_pertence"] = ["group_team_1"]
+        else:
+            tx["agente_gestor_grupos_a_que_pertence"] = ["group_team_2"]
+            
+        tx["agente_gestor_grupo_filial"] = "Filial Florianópolis" if i % 2 == 0 else "Filial Campeche"
+
         transactions.append(tx)
         
     return transactions

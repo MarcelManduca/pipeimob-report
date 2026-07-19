@@ -50,6 +50,72 @@ class DashboardCache:
 dashboard_cache = DashboardCache()
 dashboard_cache.clear()
 
+DASHBOARD_CACHE_VERSION = "sales-cycle-v3-quality"
+
+def parse_official_team_groups() -> tuple[str, bool, dict, list[str]]:
+    # Returns (configuration_status, official_teams_configured, group_mapping, official_teams)
+    raw = os.getenv("PIPEIMOB_OFFICIAL_TEAM_GROUPS_JSON")
+    if raw is None or raw.strip() == "":
+        return "missing", False, {}, []
+    
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return "invalid", False, {}, []
+        
+    if not isinstance(data, list):
+        return "invalid", False, {}, []
+        
+    if len(data) == 0:
+        return "incomplete", False, {}, []
+        
+    group_mapping = {}
+    team_names = set()
+    ids_seen = set()
+    has_at_least_one_team = False
+    
+    for entry in data:
+        if not isinstance(entry, dict):
+            return "incomplete", False, {}, []
+        gid = entry.get("id")
+        name = entry.get("name")
+        gtype = entry.get("type")
+        
+        if gid is None or name is None or gtype is None:
+            return "incomplete", False, {}, []
+            
+        gid = str(gid).strip()
+        name = str(name).strip()
+        gtype = str(gtype).strip()
+        
+        if gid == "" or name == "" or gtype == "":
+            return "incomplete", False, {}, []
+            
+        if gtype not in ["team", "branch", "other"]:
+            return "incomplete", False, {}, []
+            
+        if gid in ids_seen:
+            return "incomplete", False, {}, []
+        ids_seen.add(gid)
+        
+        if gtype == "team":
+            has_at_least_one_team = True
+            normalized_name = " ".join(name.split()).lower()
+            if normalized_name in team_names:
+                return "incomplete", False, {}, []
+            team_names.add(normalized_name)
+            
+        group_mapping[gid] = {
+            "name": name,
+            "type": gtype
+        }
+        
+    if not has_at_least_one_team:
+        return "incomplete", False, {}, []
+        
+    official_teams = [g["name"] for g in group_mapping.values() if g["type"] == "team"]
+    return "configured", True, group_mapping, sorted(official_teams)
+
 # Mock data will be imported locally inside load_transactions_dataset to avoid any global access.
 
 # Load environment variables
@@ -609,7 +675,7 @@ def load_transactions_dataset(
         
     # 1. Check transient cache for this live query filters
     cache_key = (
-        "sales-cycle-v2-extremes",
+        DASHBOARD_CACHE_VERSION,
         data_inicio_criacao, data_fim_criacao,
         data_inicio_ccv, data_fim_ccv,
         data_arquivamento_inicio, data_arquivamento_fim,
@@ -1601,6 +1667,330 @@ def compute_dashboard_aggregates(
     }
     print(f"SECURE_LOG: {json.dumps(vgc_log)}")
 
+    # === Data Quality (Qualidade dos Dados) Analysis ===
+    import collections
+    config_status, config_configured, group_mapping, config_official_teams = parse_official_team_groups()
+    
+    distinct_agents = {} # key -> {"name": display_name, "branch": display_branch, "tx_count": 0, "teams": set(), "groups_seen": set()}
+    unassigned_manager_transactions_count = 0
+    
+    tx_evals = []
+    
+    for tx in filtered:
+        tx_id = tx.get("transacao_unique_id_pipeimob")
+        manager_name = tx.get("agente_gestor")
+        
+        # Check source field rules
+        groups = tx.get("agente_gestor_grupos_a_que_pertence")
+        
+        if groups is None:
+            legacy_vals = []
+            for lf in ["agente_gestor_grupos_a_que_pertence1", "agente_gestor_grupos_a_que_pertence2", "agente_gestor_grupos_a_que_pertence3"]:
+                val = tx.get(lf)
+                if val is not None and str(val).strip() != "":
+                    legacy_vals.append(str(val).strip())
+            groups = []
+            for name in legacy_vals:
+                matched_id = None
+                for gid, info in group_mapping.items():
+                    if info["name"].lower() == name.lower():
+                        matched_id = gid
+                        break
+                if matched_id:
+                    groups.append(matched_id)
+                else:
+                    groups.append(name)
+        
+        if not manager_name or manager_name.strip() == "":
+            unassigned_manager_transactions_count += 1
+            tx_evals.append({
+                "tx_id": tx_id,
+                "agent_key": None,
+                "confirmed": {"missing_manager_assignment"},
+                "review": set(),
+                "groups": groups,
+                "branch": None
+            })
+            continue
+            
+        manager_name = manager_name.strip()
+        branch_val = tx.get("agente_gestor_grupo_filial")
+        normalized_name = " ".join(manager_name.split()).lower()
+        normalized_branch = " ".join(branch_val.strip().split()).lower() if branch_val else ""
+        agent_key = normalized_name + "__" + normalized_branch
+        
+        if agent_key not in distinct_agents:
+            distinct_agents[agent_key] = {
+                "name": manager_name,
+                "branch": branch_val,
+                "tx_count": 0,
+                "teams": set(),
+                "groups_seen": set()
+            }
+            
+        distinct_agents[agent_key]["tx_count"] += 1
+        
+        tx_evals.append({
+            "tx_id": tx_id,
+            "agent_key": agent_key,
+            "confirmed": set(),
+            "review": set(),
+            "groups": groups,
+            "branch": branch_val
+        })
+        
+    for eval_item in tx_evals:
+        if "missing_manager_assignment" in eval_item["confirmed"]:
+            continue
+            
+        groups = eval_item["groups"]
+        agent_key = eval_item["agent_key"]
+        
+        if config_status == "configured":
+            if not groups:
+                eval_item["confirmed"].add("missing_team_assignment")
+            else:
+                mapped = [group_mapping[gid] for gid in groups if gid in group_mapping]
+                unmapped = [gid for gid in groups if gid not in group_mapping]
+                
+                has_team = any(g["type"] == "team" for g in mapped)
+                has_branch_or_other = any(g["type"] in ["branch", "other"] for g in mapped)
+                
+                if not has_team:
+                    if has_branch_or_other or not unmapped:
+                        eval_item["confirmed"].add("missing_team_assignment")
+                        
+                if unmapped and not has_team:
+                    eval_item["review"].add("configuration_mapping_required")
+                    
+                for g in mapped:
+                    if g["type"] == "team":
+                        distinct_agents[agent_key]["teams"].add(g["name"])
+                    distinct_agents[agent_key]["groups_seen"].add(g["name"])
+                for gid in unmapped:
+                    distinct_agents[agent_key]["groups_seen"].add(gid)
+        else:
+            if not groups:
+                eval_item["confirmed"].add("missing_team_assignment")
+            else:
+                eval_item["review"].add("configuration_mapping_required")
+                for gid in groups:
+                    distinct_agents[agent_key]["groups_seen"].add(gid)
+                    
+    for agent_key, info in distinct_agents.items():
+        if len(info["teams"]) > 1:
+            for eval_item in tx_evals:
+                if eval_item["agent_key"] == agent_key:
+                    eval_item["review"].add("inconsistent_team_assignment")
+                    
+    affected_transactions_count = 0
+    review_only_transactions_count = 0
+    compliant_transactions_count = 0
+    
+    agent_status_map = {}
+    agent_confirmed_issues = collections.defaultdict(set)
+    agent_review_issues = collections.defaultdict(set)
+    agent_affected_tx_count = collections.defaultdict(int)
+    
+    for eval_item in tx_evals:
+        agent_key = eval_item["agent_key"]
+        
+        if eval_item["confirmed"]:
+            affected_transactions_count += 1
+        elif eval_item["review"]:
+            review_only_transactions_count += 1
+        else:
+            compliant_transactions_count += 1
+            
+        if agent_key:
+            agent_confirmed_issues[agent_key].update(eval_item["confirmed"])
+            agent_review_issues[agent_key].update(eval_item["review"])
+            if eval_item["confirmed"] or eval_item["review"]:
+                agent_affected_tx_count[agent_key] += 1
+                
+    affected_agents_count = 0
+    review_only_agents_count = 0
+    compliant_agents_count = 0
+    
+    for agent_key in distinct_agents.keys():
+        confirmed = agent_confirmed_issues[agent_key]
+        review = agent_review_issues[agent_key]
+        
+        if confirmed:
+            agent_status_map[agent_key] = "affected"
+            affected_agents_count += 1
+        elif review:
+            agent_status_map[agent_key] = "review_only"
+            review_only_agents_count += 1
+        else:
+            agent_status_map[agent_key] = "compliant"
+            compliant_agents_count += 1
+            
+    issue_template = {
+        "missing_team_assignment": {
+            "id": "missing_team_assignment",
+            "severity": "high",
+            "title": "Equipe não vinculada",
+            "description": "O agente não possui uma equipe vinculada nos campos de grupos/equipes do Pipeimob.",
+            "impact": "As vendas não podem ser classificadas com segurança nos filtros, rankings e comparativos de equipes.",
+            "pipeimob_location": "Pipeimob → cadastro do agente ou usuário → grupos/equipes a que pertence.",
+            "correction_steps": [
+                "Selecione a equipe comercial oficial da pessoa e salve o cadastro. Não utilize filial, cargo, nome da pessoa ou outro grupo administrativo como equipe.",
+                "Volte ao BI e clique em Atualizar para revalidar os dados."
+            ]
+        },
+        "configuration_mapping_required": {
+            "id": "configuration_mapping_required",
+            "severity": "review",
+            "title": "Grupo ainda não classificado",
+            "description": "O agente possui um grupo no Pipeimob, mas o BI ainda não consegue confirmar se esse grupo representa uma equipe comercial.",
+            "impact": "A validação comercial da equipe está pendente até que o ID do grupo seja mapeado.",
+            "pipeimob_location": "Configuração do sistema (Render → PIPEIMOB_OFFICIAL_TEAM_GROUPS_JSON).",
+            "correction_steps": [
+                "O agente possui um grupo no Pipeimob, mas o BI ainda não consegue confirmar se esse grupo representa uma equipe comercial. Revise a configuração oficial de equipes."
+            ]
+        },
+        "inconsistent_team_assignment": {
+            "id": "inconsistent_team_assignment",
+            "severity": "review",
+            "title": "Vínculo inconsistente de equipe",
+            "description": "O agente está associado a mais de uma equipe oficial diferente durante o período analisado.",
+            "impact": "O histórico do agente apresenta conflito de equipes nas transações do período.",
+            "pipeimob_location": "Pipeimob → cadastro do agente ou usuário → grupos/equipes a que pertence.",
+            "correction_steps": [
+                "Revise os negócios do corretor e ajuste o cadastro para garantir o pertencimento a uma única equipe oficial ativa no período."
+            ]
+        },
+        "missing_manager_assignment": {
+            "id": "missing_manager_assignment",
+            "severity": "high",
+            "title": "Gestor ausente",
+            "description": "A transação não possui um agente gestor identificado.",
+            "impact": "A transação fica sem atribuição a um corretor ou equipe responsável.",
+            "pipeimob_location": "Pipeimob → Negócio → Responsável/Gestor.",
+            "correction_steps": [
+                "A transação não possui agente gestor identificado. Abra o negócio no Pipeimob, vincule o responsável correto e salve."
+            ]
+        }
+    }
+    
+    issue_counts = collections.defaultdict(lambda: {"agents": set(), "tx_count": 0})
+    for eval_item in tx_evals:
+        agent_key = eval_item["agent_key"]
+        for issue_id in (eval_item["confirmed"] | eval_item["review"]):
+            if agent_key:
+                issue_counts[issue_id]["agents"].add(agent_key)
+            issue_counts[issue_id]["tx_count"] += 1
+            
+    issues_list = []
+    for issue_id, counts in issue_counts.items():
+        if issue_id in issue_template:
+            tpl = issue_template[issue_id].copy()
+            tpl["affected_agents_count"] = len(counts["agents"])
+            tpl["affected_transactions_count"] = counts["tx_count"]
+            issues_list.append(tpl)
+            
+    affected_agents_list = []
+    review_agents_list = []
+    
+    for agent_key, info in distinct_agents.items():
+        state = agent_status_map[agent_key]
+        confirmed = sorted(list(agent_confirmed_issues[agent_key]))
+        review = sorted(list(agent_review_issues[agent_key]))
+        
+        detail = {
+            "agent_name": info["name"],
+            "confirmed_issue_ids": confirmed,
+            "review_issue_ids": review,
+            "branch_value": info["branch"],
+            "affected_transactions_count": agent_affected_tx_count[agent_key]
+        }
+        
+        resolved_group_names = []
+        for gval in info["groups_seen"]:
+            if gval in group_mapping:
+                resolved_group_names.append(group_mapping[gval]["name"])
+            else:
+                resolved_group_names.append("Grupo Não Classificado")
+                
+        detail["current_team_values"] = sorted(list(set(resolved_group_names)))
+        
+        if state == "affected":
+            affected_agents_list.append(detail)
+        elif state == "review_only":
+            review_agents_list.append(detail)
+            
+    affected_agents_list.sort(key=lambda x: x["agent_name"])
+    review_agents_list.sort(key=lambda x: x["agent_name"])
+    
+    distinct_agents_count = len(distinct_agents)
+    
+    agent_compliance_ratio = (
+        round(compliant_agents_count / distinct_agents_count, 4)
+        if distinct_agents_count > 0 else 0.0
+    )
+    transaction_compliance_ratio = (
+        round(compliant_transactions_count / len(filtered), 4)
+        if len(filtered) > 0 else 0.0
+    )
+    
+    if affected_agents_count == 0 and review_only_agents_count == 0 and unassigned_manager_transactions_count == 0 and review_only_transactions_count == 0:
+        overall_status = "ok"
+    else:
+        if distinct_agents_count > 0 and (affected_agents_count / distinct_agents_count) > 0.30:
+            overall_status = "critical"
+        else:
+            overall_status = "attention"
+            
+    agents_reconciled = (compliant_agents_count + affected_agents_count + review_only_agents_count == distinct_agents_count)
+    transactions_reconciled = (compliant_transactions_count + affected_transactions_count + review_only_transactions_count == len(filtered))
+    
+    dq_summary = {
+        "status": overall_status,
+        "distinct_agents_count": distinct_agents_count,
+        "compliant_agents_count": compliant_agents_count,
+        "affected_agents_count": affected_agents_count,
+        "review_only_agents_count": review_only_agents_count,
+        "compliant_transactions_count": compliant_transactions_count,
+        "affected_transactions_count": affected_transactions_count,
+        "review_only_transactions_count": review_only_transactions_count,
+        "unassigned_manager_transactions_count": unassigned_manager_transactions_count,
+        "agent_compliance_ratio": agent_compliance_ratio,
+        "transaction_compliance_ratio": transaction_compliance_ratio
+    }
+    
+    dq_teams = {
+        "source_fields": {
+            "primary": "agente_gestor_grupos_a_que_pertence",
+            "primary_type": "array_of_group_ids",
+            "legacy_text_fields": [
+                "agente_gestor_grupos_a_que_pertence1",
+                "agente_gestor_grupos_a_que_pertence2",
+                "agente_gestor_grupos_a_que_pertence3"
+            ]
+        },
+        "configuration_status": config_status,
+        "official_teams_configured": config_configured,
+        "official_teams": config_official_teams,
+        "issues": issues_list,
+        "affected_agents": affected_agents_list,
+        "review_agents": review_agents_list,
+        "reconciliation": {
+            "agents_reconciled": agents_reconciled,
+            "transactions_reconciled": transactions_reconciled
+        }
+    }
+    
+    timestamp_utc = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    
+    data_quality = {
+        "period_basis": "ccv",
+        "generated_at": timestamp_utc,
+        "transaction_count": len(filtered),
+        "summary": dq_summary,
+        "teams": dq_teams
+    }
+
     return {
         "summary": summary,
         "origins": origins,
@@ -1612,7 +2002,8 @@ def compute_dashboard_aggregates(
         "unclassified": unclassified_payload,
         "reconciliation": reconciliation,
         "commission_financials": commission_financials,
-        "sales_cycle": sales_cycle
+        "sales_cycle": sales_cycle,
+        "data_quality": data_quality
     }
 
 
@@ -2490,6 +2881,55 @@ class DashboardPeriod(BaseModel):
     start: Optional[str] = None
     end: Optional[str] = None
 
+class DataQualityIssue(BaseModel):
+    id: str
+    severity: str
+    title: str
+    description: str
+    affected_agents_count: int
+    affected_transactions_count: int
+    impact: str
+    pipeimob_location: str
+    correction_steps: List[str]
+
+class DataQualityAgentDetail(BaseModel):
+    agent_name: str
+    confirmed_issue_ids: List[str]
+    review_issue_ids: List[str]
+    current_team_values: List[str]
+    branch_value: Optional[str] = None
+    affected_transactions_count: int
+
+class DataQualitySummary(BaseModel):
+    status: str
+    distinct_agents_count: int
+    compliant_agents_count: int
+    affected_agents_count: int
+    review_only_agents_count: int
+    compliant_transactions_count: int
+    affected_transactions_count: int
+    review_only_transactions_count: int
+    unassigned_manager_transactions_count: int
+    agent_compliance_ratio: float
+    transaction_compliance_ratio: float
+
+class DataQualityTeams(BaseModel):
+    source_fields: dict
+    configuration_status: str
+    official_teams_configured: bool
+    official_teams: List[str]
+    issues: List[DataQualityIssue]
+    affected_agents: List[DataQualityAgentDetail]
+    review_agents: List[DataQualityAgentDetail]
+    reconciliation: dict
+
+class DataQualityPayload(BaseModel):
+    period_basis: str
+    generated_at: str
+    transaction_count: int
+    summary: DataQualitySummary
+    teams: DataQualityTeams
+
 class DashboardFullResponse(BaseModel):
     data_mode: str
     source: str
@@ -2511,6 +2951,7 @@ class DashboardFullResponse(BaseModel):
     filters_applied: Optional[dict] = None
     commission_financials: Optional[CommissionFinancials] = None
     debug_metrics: Optional[dict] = None
+    data_quality: Optional[DataQualityPayload] = None
 
 # Helper to format and add X-Data-Mode response headers
 def get_metadata_wrapper(data_mode: str, source: str):
@@ -3411,5 +3852,6 @@ async def get_dashboard_full(
         generated_at=generated_at_utc,
         filters_applied=filters_applied,
         commission_financials=CommissionFinancials(**aggregates["commission_financials"]),
-        debug_metrics=debug_metrics
+        debug_metrics=debug_metrics,
+        data_quality=DataQualityPayload(**aggregates["data_quality"]) if aggregates.get("data_quality") is not None else None
     )
