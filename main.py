@@ -2529,24 +2529,47 @@ async def get_diagnose_groups():
     )
     if not txs:
         return {"error": "no transactions found"}
-    first = txs[0]
-    keys = list(first.keys())
-    agent_keys = [k for k in keys if "agente" in k or "gestor" in k or "grupo" in k or "equipe" in k or "filial" in k]
-    filial_count = sum(1 for tx in txs if tx.get("agente_gestor_filial_a_que_pertence") is not None)
-    g1_count = sum(1 for tx in txs if tx.get("agente_gestor_grupos_a_que_pertence1") is not None)
-    g2_count = sum(1 for tx in txs if tx.get("agente_gestor_grupos_a_que_pertence2") is not None)
-    g3_count = sum(1 for tx in txs if tx.get("agente_gestor_grupos_a_que_pertence3") is not None)
+        
+    all_keys = set()
+    for tx in txs:
+        all_keys.update(tx.keys())
+        
+    agent_keys = sorted([k for k in all_keys if "agente" in k or "gestor" in k or "grupo" in k or "equipe" in k or "filial" in k or "pertence" in k])
     
+    # Check counts of non-null for both candidate key names
+    fields_to_check = [
+        "agente_gestor",
+        "agente_gestor_email",
+        "lider_equipe",
+        "agente_gestor_grupo_filial",
+        "agente_gestor_grupos_a_que_pertence",
+        "agente_gestor_filial_a_que_pertence",
+        "agente_gestor_grupos_a_que_pertence1",
+        "agente_gestor_grupos_a_que_pertence2",
+        "agente_gestor_grupos_a_que_pertence3"
+    ]
+    
+    counts = {}
+    types = {}
+    for f in fields_to_check:
+        non_null_vals = [tx.get(f) for tx in txs if tx.get(f) is not None]
+        counts[f] = len(non_null_vals)
+        types[f] = str(type(non_null_vals[0])) if non_null_vals else "None"
+        
+    # Get a sample of unique values for groups
+    sample_groups = set()
+    for tx in txs:
+        g = tx.get("agente_gestor_grupos_a_que_pertence")
+        if isinstance(g, list):
+            sample_groups.update(g)
+        elif g:
+            sample_groups.add(str(g))
+            
     return {
-        "first_tx_agent_fields": {k: first.get(k) for k in agent_keys},
-        "all_agent_keys_in_first_tx": agent_keys,
-        "counts": {
-            "total_transactions": len(txs),
-            "filial_non_null": filial_count,
-            "g1_non_null": g1_count,
-            "g2_non_null": g2_count,
-            "g3_non_null": g3_count
-        }
+        "all_agent_related_keys_found_in_any_tx": agent_keys,
+        "counts": counts,
+        "types": types,
+        "sample_groups_found": sorted(list(sample_groups))
     }
 
 # Endpoint routes
