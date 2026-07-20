@@ -93,6 +93,20 @@ def clean_decimal(val_raw: Any) -> Optional[Decimal]:
     except Exception:
         return None
 
+def load_env_file(filepath: str):
+    if os.path.exists(filepath):
+        with open(filepath, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    k, v = line.split("=", 1)
+                    k = k.strip()
+                    v = v.strip().strip("'\"")
+                    if k:
+                        os.environ[k] = v
+
 def main():
     if len(sys.argv) < 2:
         print("run_status: operational_error")
@@ -129,6 +143,10 @@ def main():
         print("Error: Missing required columns 'transacao_uniqueID' or 'comissionado_valor' in CSV.")
         sys.exit(2)
 
+    # Load env files
+    load_env_file(".env.local")
+    load_env_file(".env")
+
     # 2. Fetch API Transactions
     api_key = os.environ.get("PIPEIMOB_API_KEY")
     api_secret = os.environ.get("PIPEIMOB_SECRET_KEY")
@@ -136,7 +154,7 @@ def main():
     if not api_key or not api_secret:
         print("run_status: operational_error")
         print("validation_status = operational_error")
-        print("Error: PIPEIMOB_API_KEY and PIPEIMOB_SECRET_KEY must be configured in environment.")
+        print("Error: PIPEIMOB_API_KEY and PIPEIMOB_SECRET_KEY must be configured in environment or .env.local.")
         sys.exit(2)
 
     # Fetch pages
