@@ -1,0 +1,37 @@
+[
+  {
+    "total_comissao": "10000.00",
+    "comissionado_valor": "4000.00",
+    "data_assinatura_ccv": "2026-01-15",
+    "data_recebimento_comissao": "2026-01-20",
+    "data_pagamento_comissao": "2026-01-20"
+  },
+  {
+    "total_comissao": "15000.00",
+    "comissionado_valor": "",
+    "data_assinatura_ccv": "2026-02-10",
+    "data_recebimento_comissao": "",
+    "data_pagamento_comissao": ""
+  },
+  {
+    "total_comissao": "8000.00",
+    "comissionado_valor": "-100.00",
+    "data_assinatura_ccv": "2026-03-05",
+    "data_recebimento_comissao": "",
+    "data_pagamento_comissao": ""
+  },
+  {
+    "total_comissao": "20000.00",
+    "comissionado_valor": "25000.00",
+    "data_assinatura_ccv": "2026-04-12",
+    "data_recebimento_comissao": "2026-04-15",
+    "data_pagamento_comissao": "2026-04-15"
+  },
+  {
+    "total_comissao": "",
+    "comissionado_valor": "3000.00",
+    "data_assinatura_ccv": "2026-05-18",
+    "data_recebimento_comissao": "",
+    "data_pagamento_comissao": ""
+  }
+]
