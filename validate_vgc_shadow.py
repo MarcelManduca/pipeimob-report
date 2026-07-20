@@ -1,13 +1,17 @@
 import csv
 import sys
 import os
+import urllib.request
+import urllib.error
+import ssl
+import json
 from decimal import Decimal
 from typing import Optional, List, Dict, Any
 
 # Ensure project root is in sys.path
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
-from main import fetch_all_pipeimob_transactions
+from main import get_auth_token
 
 class CandidateRule:
     def __init__(self, name: str):
@@ -91,49 +95,152 @@ def clean_decimal(val_raw: Any) -> Optional[Decimal]:
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python3 validate_vgc_shadow.py <path_to_csv_export>")
-        sys.exit(1)
+        print("run_status: operational_error")
+        print("validation_status = operational_error")
+        print("Error: Missing CSV path argument.")
+        sys.exit(2)
 
     csv_path = sys.argv[1]
     if not os.path.exists(csv_path):
+        print("run_status: operational_error")
+        print("validation_status = operational_error")
         print(f"Error: CSV file not found at {csv_path}")
-        sys.exit(1)
+        sys.exit(2)
 
     # 1. Read CSV
-    with open(csv_path, mode="r", encoding="utf-8-sig", errors="ignore") as fh:
-        sample = fh.read(2048)
-        delim = ";" if ";" in sample else ","
+    try:
+        with open(csv_path, mode="r", encoding="utf-8-sig", errors="ignore") as fh:
+            sample = fh.read(2048)
+            delim = ";" if ";" in sample else ","
 
-    with open(csv_path, mode="r", encoding="utf-8-sig") as fh:
-        reader = csv.DictReader(fh, delimiter=delim)
-        csv_rows = list(reader)
+        with open(csv_path, mode="r", encoding="utf-8-sig") as fh:
+            reader = csv.DictReader(fh, delimiter=delim)
+            csv_rows = list(reader)
+            headers = reader.fieldnames or []
+    except Exception as e:
+        print("run_status: operational_error")
+        print("validation_status = operational_error")
+        print(f"Error: Failed to read CSV: {e}")
+        sys.exit(2)
+
+    if "transacao_uniqueID" not in headers or "comissionado_valor" not in headers:
+        print("run_status: operational_error")
+        print("validation_status = operational_error")
+        print("Error: Missing required columns 'transacao_uniqueID' or 'comissionado_valor' in CSV.")
+        sys.exit(2)
 
     # 2. Fetch API Transactions
     api_key = os.environ.get("PIPEIMOB_API_KEY")
     api_secret = os.environ.get("PIPEIMOB_SECRET_KEY")
     
     if not api_key or not api_secret:
+        print("run_status: operational_error")
+        print("validation_status = operational_error")
         print("Error: PIPEIMOB_API_KEY and PIPEIMOB_SECRET_KEY must be configured in environment.")
-        sys.exit(1)
+        sys.exit(2)
 
+    # Fetch pages
+    base_url = "https://api.pipeimob.com.br/v2"
+    url_prefix = "&data_inicio_ccv=2026-01-01&data_fim_ccv=2026-06-30"
+    
+    all_transactions = []
+    seen_ids = set()
+    current_page = 1
+    pages_fetched = 0
+    total_reported = None
+    pagination_finished_normally = False
+
+    ssl_context = ssl.create_default_context()
+    ssl_context.check_hostname = False
+    ssl_context.verify_mode = ssl.CERT_NONE
+
+    print("Authenticating with Pipeimob API...")
     try:
-        print("Fetching transactions from Pipeimob API H1 2026...")
-        txs, pages = fetch_all_pipeimob_transactions(
-            api_key=api_key,
-            api_secret=api_secret,
-            data_inicio_ccv="2026-01-01",
-            data_fim_ccv="2026-06-30"
-        )
+        token = get_auth_token(api_key, api_secret)
+        if not token:
+            print("run_status: operational_error")
+            print("validation_status = operational_error")
+            print("Error: Authentication succeeded but returned empty token.")
+            sys.exit(2)
     except Exception as e:
-        print(f"Failed to fetch API transactions: {e}")
-        sys.exit(1)
+        print("run_status: operational_error")
+        print("validation_status = operational_error")
+        print(f"Error: Authentication failed: {e}")
+        sys.exit(2)
+
+    print("Fetching transaction pages from Pipeimob API...")
+    try:
+        while True:
+            if current_page > 100:  # Infinite loop protection
+                break
+                
+            url = f"{base_url}/negocios/transacoes?pagina={current_page}{url_prefix}"
+            req = urllib.request.Request(
+                url,
+                headers={'Authorization': f'Bearer {token}', 'User-Agent': 'Mozilla/5.0'}
+            )
+            
+            with urllib.request.urlopen(req, context=ssl_context, timeout=15) as response:
+                res_body = json.loads(response.read().decode('utf-8'))
+                if not res_body.get("success"):
+                    print("run_status: operational_error")
+                    print("validation_status = operational_error")
+                    print("Error: API response success=False.")
+                    sys.exit(2)
+                
+                pages_fetched += 1
+                txs = res_body.get("data", {}).get("transacoes", []) if isinstance(res_body.get("data"), dict) else []
+                
+                for tx in txs:
+                    tx_id = tx.get("transacao_unique_id_pipeimob")
+                    if tx_id:
+                        if tx_id not in seen_ids:
+                            seen_ids.add(tx_id)
+                            all_transactions.append(tx)
+                    else:
+                        all_transactions.append(tx)
+
+                # Pagination metadata
+                meta_p = None
+                if "meta" in res_body and isinstance(res_body["meta"], dict) and "pagination" in res_body["meta"]:
+                    meta_p = res_body["meta"]["pagination"]
+                elif "data" in res_body and isinstance(res_body["data"], dict) and "meta" in res_body["data"] and isinstance(res_body["data"]["meta"], dict) and "pagination" in res_body["data"]["meta"]:
+                    meta_p = res_body["data"]["meta"]["pagination"]
+                
+                if meta_p is None:
+                    print("run_status: operational_error")
+                    print("validation_status = operational_error")
+                    print("Error: Pagination metadata not found in response.")
+                    sys.exit(2)
+                
+                if total_reported is None:
+                    total_reported = meta_p.get("total")
+                
+                last_page = meta_p.get("total_pages") or 1
+                if current_page >= last_page:
+                    pagination_finished_normally = True
+                    break
+                    
+                current_page += 1
+    except Exception as e:
+        print("run_status: operational_error")
+        print("validation_status = operational_error")
+        print(f"Error during API pagination: {e}")
+        sys.exit(2)
+
+    # Check pagination consistency
+    if total_reported is not None and len(all_transactions) != total_reported:
+        print("run_status: operational_error")
+        print("validation_status = operational_error")
+        print(f"Error: Fetched transactions count ({len(all_transactions)}) does not match reported total ({total_reported}).")
+        sys.exit(2)
 
     # 3. Analyze IDs & Duplications
     missing_api_id_count = 0
     duplicate_api_id_count = 0
     api_ids = []
     api_by_id = {}
-    for tx in txs:
+    for tx in all_transactions:
         tx_id = tx.get("transacao_unique_id_pipeimob")
         if not tx_id:
             missing_api_id_count += 1
@@ -166,7 +273,7 @@ def main():
     unmatched_export_transaction_count = len(set(export_by_id.keys()) - matched_ids)
 
     print("\nID Mapping Metrics:")
-    print(f"  total_api_transactions: {len(txs)}")
+    print(f"  total_api_transactions: {len(all_transactions)}")
     print(f"  total_export_rows: {len(csv_rows)}")
     print(f"  missing_api_id_count: {missing_api_id_count}")
     print(f"  missing_export_id_count: {missing_export_id_count}")
@@ -175,6 +282,13 @@ def main():
     print(f"  matched_transaction_count: {matched_transaction_count}")
     print(f"  unmatched_api_transaction_count: {unmatched_api_transaction_count}")
     print(f"  unmatched_export_transaction_count: {unmatched_export_transaction_count}")
+
+    # Pagination Validation Print
+    print("\nPagination Metrics:")
+    print(f"  pages_consultadas: {pages_fetched}")
+    print(f"  total_informado_pela_api: {total_reported}")
+    print(f"  quantidade_processada: {len(all_transactions)}")
+    print(f"  paginacao_terminou_normalmente: {pagination_finished_normally}")
 
     # 4. Evaluate Candidates
     candidates = [
@@ -236,7 +350,24 @@ def main():
             cand.aggregate_difference += diff
             cand.absolute_aggregate_difference += abs(diff)
 
+        # Approved calculation check
+        approved = (matched_transaction_count == len(all_transactions) and 
+                    unmatched_api_transaction_count == 0 and 
+                    duplicate_api_id_count == 0 and 
+                    duplicate_export_id_count == 0 and 
+                    cand.value_mismatch_count == 0 and 
+                    cand.missing_status_mismatch_count == 0 and 
+                    cand.multiple_candidate_count == 0 and 
+                    cand.maximum_difference <= Decimal("0.01") and 
+                    cand.absolute_aggregate_difference <= Decimal("0.01"))
+
         print(f"\nCandidate: {cand.name}")
+        print(f"  transaction_count: {len(all_transactions)}")
+        print(f"  matched_transaction_count: {matched_transaction_count}")
+        print(f"  unmatched_api_transaction_count: {unmatched_api_transaction_count}")
+        print(f"  unmatched_export_transaction_count: {unmatched_export_transaction_count}")
+        print(f"  duplicate_api_id_count: {duplicate_api_id_count}")
+        print(f"  duplicate_export_id_count: {duplicate_export_id_count}")
         print(f"  export_present_count: {export_present_count}")
         print(f"  export_missing_count: {export_missing_count}")
         print(f"  candidate_present_count: {cand.candidate_present_count}")
@@ -251,27 +382,31 @@ def main():
         print(f"  maximum_difference: R$ {cand.maximum_difference}")
         print(f"  aggregate_difference: R$ {cand.aggregate_difference}")
         print(f"  absolute_aggregate_difference: R$ {cand.absolute_aggregate_difference}")
+        print(f"  approved: {approved}")
 
     # Determine validation approval
     approved_cand = None
     for cand in candidates:
-        if (matched_transaction_count == len(txs) and 
-            unmatched_api_transaction_count == 0 and 
-            duplicate_api_id_count == 0 and 
-            duplicate_export_id_count == 0 and 
-            cand.value_mismatch_count == 0 and 
-            cand.missing_status_mismatch_count == 0 and 
-            cand.multiple_candidate_count == 0 and 
-            cand.maximum_difference <= Decimal("0.01") and 
-            cand.absolute_aggregate_difference <= Decimal("0.01")):
+        approved = (matched_transaction_count == len(all_transactions) and 
+                    unmatched_api_transaction_count == 0 and 
+                    duplicate_api_id_count == 0 and 
+                    duplicate_export_id_count == 0 and 
+                    cand.value_mismatch_count == 0 and 
+                    cand.missing_status_mismatch_count == 0 and 
+                    cand.multiple_candidate_count == 0 and 
+                    cand.maximum_difference <= Decimal("0.01") and 
+                    cand.absolute_aggregate_difference <= Decimal("0.01"))
+        if approved:
             approved_cand = cand
             break
 
     if approved_cand:
-        print(f"\nCONCLUSION: APPROVED rule '{approved_cand.name}' for activation!")
+        print("\nrun_status: validated_candidate")
+        print(f"CONCLUSION: APPROVED rule '{approved_cand.name}' for activation!")
         sys.exit(0)
     else:
-        print("\nCONCLUSION: REJECTED! No candidate rule met all criteria for promotion.")
+        print("\nrun_status: no_valid_candidate")
+        print("CONCLUSION: REJECTED! No candidate rule met all criteria for promotion.")
         sys.exit(1)
 
 if __name__ == "__main__":
