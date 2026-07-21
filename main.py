@@ -3486,7 +3486,7 @@ async def verify_backend_api_key(
             except Exception as e:
                 detail = "Invalid or expired access token."
                 if request and request.headers.get("x-debug-auth") == "true":
-                    detail = f"Invalid or expired access token: get_signing_key_from_jwt: {type(e).__name__}: {str(e)}"
+                    detail = f"Invalid or expired access token: get_signing_key_from_jwt: {type(e).__name__}: {str(e)} | JWKS_URL: {os.getenv('SUPABASE_JWKS_URL')}"
                 raise AuthException(
                     status_code=401,
                     detail=detail,
