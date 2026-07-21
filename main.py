@@ -3431,9 +3431,12 @@ async def verify_backend_api_key(
         jwks_url = os.getenv("SUPABASE_JWKS_URL")
         
         if not jwks_url and app_env == "production":
+            detail = "Invalid or expired access token."
+            if request and request.headers.get("x-debug-auth") == "true":
+                detail = "Invalid or expired access token: SUPABASE_JWKS_URL is not set in production!"
             raise AuthException(
                 status_code=401,
-                detail="Invalid or expired access token.",
+                detail=detail,
                 error_code="invalid_access_token"
             )
             
