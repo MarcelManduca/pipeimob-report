@@ -460,6 +460,10 @@ def test_jwt_auth_extraction_and_caching(mock_urlopen):
                         {
                             "comissionado_imobiliária": True,
                             "comissionado_valor": 6000.0
+                        },
+                        {
+                            "comissionado_imobiliária": False,
+                            "comissionado_valor": 4000.0
                         }
                     ]
                 }
@@ -1814,7 +1818,8 @@ def test_vgc_commission_composition_canonical():
     ]
     res_invalid = compute_dashboard_aggregates(txs_invalid_val, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
     assert res_invalid["commission_financials"]["composition"]["gralha"] == "0.00"
-    assert res_invalid["commission_financials"]["composition"]["demais_participantes"] == "5000.00"
+    assert res_invalid["commission_financials"]["composition"]["demais_participantes"] == "0.00"
+    assert res_invalid["commission_financials"]["vgc_composition"]["unclassified"]["amount"] == "5000.00"
 
 
 def test_vgc_reconciliation_integrity():
@@ -1832,7 +1837,8 @@ def test_vgc_reconciliation_integrity():
     res = compute_dashboard_aggregates(txs_inconsistent, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
     financials = res["commission_financials"]
     assert financials["composition"]["reconciled"] is False
-    assert float(financials["composition"]["demais_participantes"]) == -2000.0
+    assert float(financials["composition"]["demais_participantes"]) == 0.0
+    assert float(financials["vgc_composition"]["unclassified"]["amount"]) == 10000.0
 
 
 def test_vgc_receipt_date_status_only():
@@ -1842,7 +1848,8 @@ def test_vgc_receipt_date_status_only():
         {
             "total_comissao": 10000.0,
             "comissionados": [
-                {"nome": "Gralha", "tipo": "Empresa", "valor": 4000.0, "comissionado_imobiliaria": True, "comissionado_valor": 4000.0}
+                {"nome": "Gralha", "tipo": "Empresa", "valor": 4000.0, "comissionado_imobiliaria": True, "comissionado_valor": 4000.0},
+                {"nome": "Outro", "tipo": "Corretor", "valor": 6000.0, "comissionado_valor": 6000.0}
             ],
             "data_assinatura_ccv": "2026-03-15",
             "data_recebimento_comissao": "2026-04-10" # Past date relative to now (which is 2026-07-17)
@@ -1850,7 +1857,8 @@ def test_vgc_receipt_date_status_only():
         {
             "total_comissao": 5000.0,
             "comissionados": [
-                {"nome": "Gralha", "tipo": "Empresa", "valor": 2000.0, "comissionado_imobiliaria": True, "comissionado_valor": 2000.0}
+                {"nome": "Gralha", "tipo": "Empresa", "valor": 2000.0, "comissionado_imobiliaria": True, "comissionado_valor": 2000.0},
+                {"nome": "Outro", "tipo": "Corretor", "valor": 3000.0, "comissionado_valor": 3000.0}
             ],
             "data_assinatura_ccv": "2026-03-15",
             "data_recebimento_comissao": "" # Empty date -> pending_no_date
@@ -1858,7 +1866,8 @@ def test_vgc_receipt_date_status_only():
         {
             "total_comissao": 3000.0,
             "comissionados": [
-                {"nome": "Gralha", "tipo": "Empresa", "valor": 1000.0, "comissionado_imobiliaria": True, "comissionado_valor": 1000.0}
+                {"nome": "Gralha", "tipo": "Empresa", "valor": 1000.0, "comissionado_imobiliaria": True, "comissionado_valor": 1000.0},
+                {"nome": "Outro", "tipo": "Corretor", "valor": 2000.0, "comissionado_valor": 2000.0}
             ],
             "data_assinatura_ccv": "2026-03-15",
             "data_recebimento_comissao": "not-a-valid-date" # Invalid date -> unknown_invalid_date
@@ -1896,7 +1905,8 @@ def test_vgc_receipt_proportional_allocation():
         {
             "total_comissao": 10000.0,
             "comissionados": [
-                {"nome": "Gralha", "tipo": "Empresa", "valor": 6000.0, "comissionado_imobiliaria": True, "comissionado_valor": 6000.0}
+                {"nome": "Gralha", "tipo": "Empresa", "valor": 6000.0, "comissionado_imobiliaria": True, "comissionado_valor": 6000.0},
+                {"nome": "Outro", "tipo": "Corretor", "valor": 4000.0, "comissionado_valor": 4000.0}
             ],
             "data_assinatura_ccv": "2026-03-15",
             "valor_recebido": 3000.0 # Under V1, we only classify by date. No date -> pending_no_date
@@ -1928,64 +1938,64 @@ def test_vgc_v1_classification_comprehensive():
         # Today's date -> received
         {
             "total_comissao": 1000.0,
-            "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 500.0}],
+            "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 1000.0}],
             "data_recebimento_comissao": today_str
         },
         # Yesterday's date -> received
         {
             "total_comissao": 2000.0,
-            "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 1000.0}],
+            "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 2000.0}],
             "data_recebimento_comissao": yesterday_str
         },
-        # Tomorrow's date -> pending (future)
+        # Tomorrow's date -> unknown (future)
         {
             "total_comissao": 3000.0,
-            "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 1500.0}],
+            "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 3000.0}],
             "data_recebimento_comissao": tomorrow_str
         },
         # Missing date -> pending (no date)
         {
             "total_comissao": 4000.0,
-            "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 2000.0}],
+            "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 4000.0}],
             "data_recebimento_comissao": None
         },
         # Empty string date -> pending (no date)
         {
             "total_comissao": 5000.0,
-            "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 2500.0}],
+            "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 5000.0}],
             "data_recebimento_comissao": "   "
         },
         # Invalid date format -> unknown
         {
             "total_comissao": 6000.0,
-            "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 3000.0}],
+            "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 6000.0}],
             "data_recebimento_comissao": "invalid-format"
         },
         # DD/MM/YYYY format -> received
         {
             "total_comissao": 7000.0,
-            "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 3500.0}],
+            "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 7000.0}],
             "data_recebimento_comissao": "10/05/2026"
         },
         # ISO 8601 datetime -> received
         {
             "total_comissao": 8000.0,
-            "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 4000.0}],
+            "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 8000.0}],
             "data_recebimento_comissao": "2026-05-20T15:30:00Z"
         },
-        # Priority: data_recebimento_comissao (future) over data_pagamento_comissao (past) -> pending (future)
+        # Priority: data_pagamento_comissao_prevista (past/yesterday) wins over data_recebimento_comissao (future/tomorrow) -> received
         {
             "total_comissao": 9000.0,
-            "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 4500.0}],
+            "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 9000.0}],
             "data_recebimento_comissao": tomorrow_str,
-            "data_pagamento_comissao": yesterday_str
+            "data_pagamento_comissao_prevista": yesterday_str
         },
-        # Fallback to data_pagamento_comissao if data_recebimento_comissao is missing -> received
+        # Fallback to data_pagamento_comissao_prevista if data_recebimento_comissao is missing -> received
         {
             "total_comissao": 10000.0,
-            "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 5000.0}],
+            "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 10000.0}],
             "data_recebimento_comissao": None,
-            "data_pagamento_comissao": yesterday_str
+            "data_pagamento_comissao_prevista": yesterday_str
         }
     ]
     
@@ -1996,27 +2006,17 @@ def test_vgc_v1_classification_comprehensive():
     assert financials["timezone"] == "America/Sao_Paulo"
     assert financials["semantic_validation"] == "provisional_v1"
     
-    # 2 received (today, yesterday) + 1 received (DD/MM/YYYY) + 1 received (ISO 8601) + 1 received (fallback to pagamento) = 5
-    assert financials["received"]["transaction_count"] == 5
-    # 1 pending future (tomorrow) + 1 pending future (priority) = 2
-    assert financials["pending"]["future_date_count"] == 2
-    # 1 missing + 1 empty = 2
+    assert financials["received"]["transaction_count"] == 6
+    assert financials["pending"]["future_date_count"] == 0
     assert financials["pending"]["without_date_count"] == 2
-    assert financials["pending"]["transaction_count"] == 4
-    # 1 invalid = 1
-    assert financials["unknown"]["transaction_count"] == 1
-    assert financials["unknown"]["invalid_date_count"] == 1
+    assert financials["pending"]["transaction_count"] == 2
+    assert financials["unknown"]["transaction_count"] == 2
+    assert financials["unknown"]["invalid_date_count"] == 2
     
-    # Check receipt sources count
-    # 10 total txs:
-    # data_recebimento_comissao: 7
-    # data_pagamento_comissao: 1
-    # missing: 2
-    assert financials["receipt_date_sources"]["data_recebimento_comissao"] == 7
-    assert financials["receipt_date_sources"]["data_pagamento_comissao"] == 1
+    assert financials["receipt_date_sources"]["data_recebimento_comissao"] == 6
+    assert financials["receipt_date_sources"]["data_pagamento_comissao_prevista"] == 2
     assert financials["receipt_date_sources"]["missing"] == 2
     
-    # In live data or computed, reconciling should be true if logic matches
     assert financials["composition"]["reconciled"] is True
 
 
@@ -2972,6 +2972,398 @@ def test_warmup_periods_config(monkeypatch):
         assert dashboard_cache.get(key) is not None
     finally:
         patcher.stop()
+
+
+def test_vgc_phase2_accent_and_fallback():
+    from main import compute_dashboard_aggregates
+    
+    # 1. Check comissionado_imobiliária (with accent) and comissionado_filial
+    txs = [
+        {
+            "total_comissao": 10000.0,
+            "comissionados": [
+                {"comissionado_imobiliária": True, "comissionado_valor": 3000.0},
+                {"comissionado_filial": True, "comissionado_valor": 2000.0},
+                {"comissionado_imobiliária": False, "comissionado_valor": 5000.0}
+            ],
+            "data_assinatura_ccv": "2026-03-15"
+        }
+    ]
+    res = compute_dashboard_aggregates(txs, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
+    comp = res["commission_financials"]["vgc_composition"]
+    assert comp["gralha"]["amount"] == "5000.00"
+    assert comp["demais_participantes"]["amount"] == "5000.00"
+    assert comp["data_quality"]["valid_split_count"] == 1
+    
+    # 2. Check fallback comissionado_imobiliaria (without accent)
+    txs_fallback = [
+        {
+            "total_comissao": 5000.0,
+            "comissionados": [
+                {"comissionado_imobiliaria": True, "comissionado_valor": 2500.0},
+                {"comissionado_imobiliaria": False, "comissionado_valor": 2500.0}
+            ],
+            "data_assinatura_ccv": "2026-03-15"
+        }
+    ]
+    res_fallback = compute_dashboard_aggregates(txs_fallback, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
+    comp_fb = res_fallback["commission_financials"]["vgc_composition"]
+    assert comp_fb["gralha"]["amount"] == "2500.00"
+    assert comp_fb["demais_participantes"]["amount"] == "2500.00"
+    
+    # 3. Check matrix and filial included and multiple valid items summed
+    txs_multiple = [
+        {
+            "total_comissao": 10000.0,
+            "comissionados": [
+                {"comissionado_imobiliária": True, "comissionado_valor": 2000.0},
+                {"comissionado_filial": True, "comissionado_valor": 3000.0},
+                {"comissionado_imobiliaria": True, "comissionado_valor": 1000.0}, # fallback also counted
+                {"comissionado_imobiliária": False, "comissionado_valor": 4000.0}
+            ],
+            "data_assinatura_ccv": "2026-03-15"
+        }
+    ]
+    res_mult = compute_dashboard_aggregates(txs_multiple, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
+    comp_mult = res_mult["commission_financials"]["vgc_composition"]
+    assert comp_mult["gralha"]["amount"] == "6000.00"
+    assert comp_mult["demais_participantes"]["amount"] == "4000.00"
+
+    # 4. Absence of filters by CNPJ, nome, tipo
+    txs_no_filters = [
+        {
+            "total_comissao": 8000.0,
+            "comissionados": [
+                {
+                    "comissionado_imobiliária": True, 
+                    "comissionado_valor": 4000.0,
+                    "cnpj": "12.345.678/0001-99", 
+                    "nome": "Qualquer Nome", 
+                    "tipo": "Qualquer Tipo",
+                    "localizacao": "Qualquer Localizacao"
+                },
+                {
+                    "comissionado_imobiliária": False, 
+                    "comissionado_valor": 4000.0
+                }
+            ],
+            "data_assinatura_ccv": "2026-03-15"
+        }
+    ]
+    res_nof = compute_dashboard_aggregates(txs_no_filters, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
+    comp_nof = res_nof["commission_financials"]["vgc_composition"]
+    assert comp_nof["gralha"]["amount"] == "4000.00"
+
+
+def test_vgc_phase2_zero_company_share():
+    from main import compute_dashboard_aggregates
+    
+    # 1. No item matches company/filial -> valid_zero_company_share
+    txs = [
+        {
+            "total_comissao": 10000.0,
+            "comissionados": [
+                {"comissionado_imobiliária": False, "comissionado_filial": False, "comissionado_valor": 6000.0},
+                {"comissionado_imobiliária": False, "comissionado_valor": 4000.0}
+            ],
+            "data_assinatura_ccv": "2026-03-15"
+        }
+    ]
+    res = compute_dashboard_aggregates(txs, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
+    comp = res["commission_financials"]["vgc_composition"]
+    assert comp["gralha"]["amount"] == "0.00"
+    assert comp["demais_participantes"]["amount"] == "10000.00"
+    assert comp["data_quality"]["valid_zero_company_share_count"] == 1
+    assert comp["data_quality"]["valid_split_count"] == 0
+
+
+def test_vgc_phase2_array_anomalies():
+    from main import compute_dashboard_aggregates
+    
+    # 1. Missing array (None)
+    txs_missing = [
+        {
+            "total_comissao": 10000.0,
+            "comissionados": None,
+            "data_assinatura_ccv": "2026-03-15"
+        }
+    ]
+    res_m = compute_dashboard_aggregates(txs_missing, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
+    comp_m = res_m["commission_financials"]["vgc_composition"]
+    assert comp_m["gralha"]["amount"] == "0.00"
+    assert comp_m["demais_participantes"]["amount"] == "0.00"
+    assert comp_m["unclassified"]["amount"] == "10000.00"
+    assert comp_m["data_quality"]["missing_array_count"] == 1
+    
+    # 2. Malformed array (not a list)
+    txs_malformed = [
+        {
+            "total_comissao": 10000.0,
+            "comissionados": "not_a_list",
+            "data_assinatura_ccv": "2026-03-15"
+        }
+    ]
+    res_mal = compute_dashboard_aggregates(txs_malformed, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
+    comp_mal = res_mal["commission_financials"]["vgc_composition"]
+    assert comp_mal["gralha"]["amount"] == "0.00"
+    assert comp_mal["demais_participantes"]["amount"] == "0.00"
+    assert comp_mal["unclassified"]["amount"] == "10000.00"
+    assert comp_mal["data_quality"]["malformed_array_count"] == 1
+
+    # 3. Invalid comissionado_valor (e.g. empty string)
+    txs_invalid = [
+        {
+            "total_comissao": 5000.0,
+            "comissionados": [
+                {"comissionado_imobiliária": True, "comissionado_valor": ""},
+                {"comissionado_imobiliária": False, "comissionado_valor": 5000.0}
+            ],
+            "data_assinatura_ccv": "2026-03-15"
+        }
+    ]
+    res_inv = compute_dashboard_aggregates(txs_invalid, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
+    comp_inv = res_inv["commission_financials"]["vgc_composition"]
+    assert comp_inv["gralha"]["amount"] == "0.00"
+    assert comp_inv["demais_participantes"]["amount"] == "0.00"
+    assert comp_inv["unclassified"]["amount"] == "5000.00"
+    assert comp_inv["data_quality"]["invalid_item_value_count"] == 1
+
+    # 4. Negative value
+    txs_negative = [
+        {
+            "total_comissao": 5000.0,
+            "comissionados": [
+                {"comissionado_imobiliária": True, "comissionado_valor": -100.0},
+                {"comissionado_imobiliária": False, "comissionado_valor": 5100.0}
+            ],
+            "data_assinatura_ccv": "2026-03-15"
+        }
+    ]
+    res_neg = compute_dashboard_aggregates(txs_negative, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
+    comp_neg = res_neg["commission_financials"]["vgc_composition"]
+    assert comp_neg["gralha"]["amount"] == "0.00"
+    assert comp_neg["demais_participantes"]["amount"] == "0.00"
+    assert comp_neg["unclassified"]["amount"] == "5000.00"
+    assert comp_neg["data_quality"]["invalid_item_value_count"] == 1
+
+
+def test_vgc_phase2_reconciliation_tolerance_and_categories():
+    from main import compute_dashboard_aggregates
+    from decimal import Decimal
+    
+    # 1. Reconciliation mismatch with difference <= 0.01 (reconciled!)
+    txs_tol = [
+        {
+            "total_comissao": 10000.0,
+            "comissionados": [
+                {"comissionado_imobiliária": True, "comissionado_valor": 5000.00},
+                {"comissionado_imobiliária": False, "comissionado_valor": 5000.01}
+            ],
+            "data_assinatura_ccv": "2026-03-15"
+        }
+    ]
+    res_tol = compute_dashboard_aggregates(txs_tol, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
+    comp_tol = res_tol["commission_financials"]["vgc_composition"]
+    assert comp_tol["gralha"]["amount"] == "5000.00"
+    assert comp_tol["demais_participantes"]["amount"] == "5000.00"
+    assert comp_tol["unclassified"]["amount"] == "0.00"
+    assert comp_tol["data_quality"]["reconciliation_mismatch_count"] == 0
+
+    # 2. Reconciliation mismatch with difference > 0.01 (mismatch!)
+    txs_mismatch = [
+        {
+            "total_comissao": 10000.0,
+            "comissionados": [
+                {"comissionado_imobiliária": True, "comissionado_valor": 5000.00},
+                {"comissionado_imobiliária": False, "comissionado_valor": 5000.02} # difference is 0.02
+            ],
+            "data_assinatura_ccv": "2026-03-15"
+        }
+    ]
+    res_mis = compute_dashboard_aggregates(txs_mismatch, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
+    comp_mis = res_mis["commission_financials"]["vgc_composition"]
+    assert comp_mis["gralha"]["amount"] == "0.00"
+    assert comp_mis["demais_participantes"]["amount"] == "0.00"
+    assert comp_mis["unclassified"]["amount"] == "10000.00"
+    assert comp_mis["data_quality"]["reconciliation_mismatch_count"] == 1
+    assert comp_mis["data_quality"]["reconciliation_difference"] == "0.02"
+
+    # 3. Verify math: total = gralha + demais_participantes + unclassified
+    tot_val = Decimal(comp_mis["total"]["amount"])
+    gralha_val = Decimal(comp_mis["gralha"]["amount"])
+    demais_val = Decimal(comp_mis["demais_participantes"]["amount"])
+    unclass_val = Decimal(comp_mis["unclassified"]["amount"])
+    assert tot_val == gralha_val + demais_val + unclass_val
+
+
+def test_vgc_phase2_deprecated_alias_corretores_equipe():
+    from main import compute_dashboard_aggregates
+    
+    txs = [
+        {
+            "total_comissao": 10000.0,
+            "comissionados": [
+                {"comissionado_imobiliária": True, "comissionado_valor": 3000.0},
+                {"comissionado_imobiliária": False, "comissionado_valor": 7000.0}
+            ],
+            "data_assinatura_ccv": "2026-03-15"
+        }
+    ]
+    res = compute_dashboard_aggregates(txs, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
+    comp = res["commission_financials"]["vgc_composition"]
+    assert "corretores_equipe" in comp
+    assert comp["corretores_equipe"] == comp["demais_participantes"]
+
+
+def test_vgc_phase2_payment_receipt_semantic_rules():
+    from main import compute_dashboard_aggregates
+    from zoneinfo import ZoneInfo
+    from datetime import datetime, timedelta
+    
+    sp_tz = ZoneInfo("America/Sao_Paulo")
+    now_sp = datetime.now(sp_tz)
+    today_str = now_sp.strftime("%Y-%m-%d")
+    yesterday_str = (now_sp - timedelta(days=1)).strftime("%Y-%m-%d")
+    tomorrow_str = (now_sp + timedelta(days=1)).strftime("%Y-%m-%d")
+    
+    txs = [
+        # 1. data_pagamento_comissao_prevista valid and past -> received
+        {
+            "total_comissao": 1000.0,
+            "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 1000.0}],
+            "data_pagamento_comissao_prevista": yesterday_str,
+            "data_assinatura_ccv": "2026-03-15"
+        },
+        # 2. data_pagamento_comissao_prevista future -> unknown
+        {
+            "total_comissao": 2000.0,
+            "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 2000.0}],
+            "data_pagamento_comissao_prevista": tomorrow_str,
+            "data_assinatura_ccv": "2026-03-15"
+        },
+        # 3. data_pagamento_comissao_prevista missing/empty -> pending
+        {
+            "total_comissao": 3000.0,
+            "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 3000.0}],
+            "data_pagamento_comissao_prevista": "",
+            "data_assinatura_ccv": "2026-03-15"
+        },
+        # 4. data_pagamento_comissao_prevista invalid date format -> unknown
+        {
+            "total_comissao": 4000.0,
+            "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 4000.0}],
+            "data_pagamento_comissao_prevista": "not-a-date",
+            "data_assinatura_ccv": "2026-03-15"
+        },
+        # 5. data_pagamento_comissao (scheduled/prevista API) NOT used to determine receipt
+        {
+            "total_comissao": 5000.0,
+            "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 5000.0}],
+            "data_pagamento_comissao_prevista": None,
+            "data_recebimento_comissao": None,
+            "data_pagamento_comissao": yesterday_str, # should not be used!
+            "data_assinatura_ccv": "2026-03-15"
+        }
+    ]
+    res = compute_dashboard_aggregates(txs, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
+    financials = res["commission_financials"]
+    assert financials["received"]["transaction_count"] == 1
+    assert financials["pending"]["transaction_count"] == 2 # item 3 and item 5
+    assert financials["unknown"]["transaction_count"] == 2 # item 2 and item 4
+
+
+def test_vgc_phase2_no_float_or_pii():
+    from main import compute_dashboard_aggregates, extract_commission_split
+    from decimal import Decimal
+    
+    tx = {
+        "total_comissao": 10000.00,
+        "comissionados": [
+            {
+                "comissionado_imobiliária": True, 
+                "comissionado_valor": 4000.00,
+                "nome_colaborador": "Maria Silva",
+                "cnpj_colaborador": "12.345.678/0001-00"
+            },
+            {
+                "comissionado_imobiliária": False, 
+                "comissionado_valor": 6000.00,
+                "nome_colaborador": "João Souza"
+            }
+        ],
+        "data_assinatura_ccv": "2026-03-15"
+    }
+    
+    # Assert extract_commission_split does not use float internally
+    ext = extract_commission_split(tx)
+    assert isinstance(ext.gralha_amount, Decimal)
+    assert isinstance(ext.all_participants_amount, Decimal)
+    
+    res = compute_dashboard_aggregates([tx], data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
+    comp = res["commission_financials"]["vgc_composition"]
+    
+    # Assert no sensitive personal data (PII) is exposed in contract
+    raw_response_str = json.dumps(comp)
+    assert "Maria Silva" not in raw_response_str
+    assert "João Souza" not in raw_response_str
+    assert "12.345.678/0001-00" not in raw_response_str
+
+
+def test_vgc_phase2_auth_and_other_metrics():
+    from main import app, verify_backend_api_key
+    from fastapi.testclient import TestClient
+    from unittest.mock import patch
+    
+    client = TestClient(app)
+    
+    # 1. 401 without JWT
+    res = client.get("/api/dashboard/full")
+    assert res.status_code == 401
+    
+    # 2. 401 with legacy headers
+    res_legacy = client.get("/api/dashboard/full", headers={"X-Backend-API-Key": "some-key"})
+    assert res_legacy.status_code == 401
+    
+    # Override auth for JWT
+    app.dependency_overrides[verify_backend_api_key] = lambda: {"sub": "user-123", "role": "authenticated", "email": "test@test.com"}
+    
+    try:
+        # Mock transactions pagination inside load_transactions_dataset
+        with patch("main.fetch_all_pipeimob_transactions") as mock_fetch:
+            mock_fetch.return_value = ([], 1)
+            res_ok = client.get("/api/dashboard/full?data_inicio_ccv=2026-01-01")
+            assert res_ok.status_code != 401
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_vgc_priority_prevista_wins():
+    from main import compute_dashboard_aggregates
+    from zoneinfo import ZoneInfo
+    from datetime import datetime, timedelta
+    
+    sp_tz = ZoneInfo("America/Sao_Paulo")
+    now_sp = datetime.now(sp_tz)
+    yesterday_str = (now_sp - timedelta(days=1)).strftime("%Y-%m-%d")
+    tomorrow_str = (now_sp + timedelta(days=1)).strftime("%Y-%m-%d")
+    
+    txs = [
+        {
+            "total_comissao": 10000.0,
+            "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 10000.0}],
+            # data_pagamento_comissao_prevista (yesterday/received) wins over data_recebimento_comissao (tomorrow/unknown)
+            "data_pagamento_comissao_prevista": yesterday_str,
+            "data_recebimento_comissao": tomorrow_str,
+            "data_assinatura_ccv": "2026-03-15"
+        }
+    ]
+    res = compute_dashboard_aggregates(txs, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
+    financials = res["commission_financials"]
+    # Should be classified as received (because data_pagamento_comissao_prevista wins and is in the past)
+    assert financials["received"]["transaction_count"] == 1
+    assert financials["unknown"]["transaction_count"] == 0
+    assert financials["receipt_date_sources"]["data_pagamento_comissao_prevista"] == 1
+    assert financials["receipt_date_sources"]["data_recebimento_comissao"] == 0
 
 
 

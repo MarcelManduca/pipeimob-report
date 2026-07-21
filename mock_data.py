@@ -44,6 +44,7 @@ def generate_mock_transactions():
         commission_rate = 0.05 + (float((i * 2) % 3) * 0.01)  # 5% to 7%
         total_commission = float(round(contract_val * commission_rate, 2))
         commission_imobiliaria = float(round(total_commission * 0.5, 2))
+        commission_corretor = float(round(total_commission - commission_imobiliaria, 2))
         
         days_offset = (i * 14) % 850
         tx_datetime = start_date + timedelta(days=days_offset)
@@ -89,7 +90,7 @@ def generate_mock_transactions():
             "forma_pagamento": forma_pgto,
             "comissionados": [
                 {"nome": "Imobiliária Demonstrativa", "tipo": "Empresa", "valor": commission_imobiliaria, "comissionado_imobiliaria": True, "comissionado_valor": commission_imobiliaria},
-                {"nome": manager, "tipo": "Corretor", "valor": float(round(total_commission * 0.4, 2)), "comissionado_valor": float(round(total_commission * 0.4, 2))}
+                {"nome": manager, "tipo": "Corretor", "valor": commission_corretor, "comissionado_valor": commission_corretor}
             ],
             "clientes": [
                 {

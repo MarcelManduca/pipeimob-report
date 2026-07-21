@@ -61,7 +61,7 @@ class DashboardCache:
 dashboard_cache = DashboardCache()
 dashboard_cache.clear()
 
-DASHBOARD_CACHE_VERSION = "sales-cycle-v3-quality"
+DASHBOARD_CACHE_VERSION = "sales-cycle-v4-vgc-phase2"
 
 class AsyncSingleFlightRegistry:
     def __init__(self):
@@ -555,13 +555,13 @@ def validate_dataset_origin(mode: str, source: str, dataset: list):
         )
 
 def get_receipt_date(tx: dict) -> tuple[Optional[str], Optional[str]]:
+    d_prev = tx.get("data_pagamento_comissao_prevista")
+    if d_prev is not None and str(d_prev).strip() != "":
+        return str(d_prev).strip(), "data_pagamento_comissao_prevista"
+        
     d_rec = tx.get("data_recebimento_comissao")
     if d_rec is not None and str(d_rec).strip() != "":
         return str(d_rec).strip(), "data_recebimento_comissao"
-    
-    d_pag = tx.get("data_pagamento_comissao")
-    if d_pag is not None and str(d_pag).strip() != "":
-        return str(d_pag).strip(), "data_pagamento_comissao"
         
     return None, None
 
@@ -631,32 +631,161 @@ def calculate_percentile(sorted_values: list, percentile: float) -> float:
     return round(val, 1)
 
 
-def calculate_vgc_split(tx: dict) -> tuple[Decimal, Decimal, Decimal]:
+def to_decimal(val) -> Decimal:
+    if isinstance(val, (int, Decimal)):
+        return Decimal(val)
+    if isinstance(val, float):
+        return Decimal(str(val))
+    val_str = str(val).strip()
+    if not val_str:
+        raise ValueError("Empty value")
+    val_str = val_str.replace("R$", "").strip()
+    if "," in val_str:
+        if "." in val_str:
+            val_str = val_str.replace(".", "")
+        val_str = val_str.replace(",", ".")
+    return Decimal(val_str)
+
+class CommissionSplitExtraction:
+    def __init__(
+        self,
+        gralha_amount: Optional[Decimal],
+        all_participants_amount: Optional[Decimal],
+        status: str,
+        matching_company_items_count: int,
+        items_count: int
+    ):
+        self.gralha_amount = gralha_amount
+        self.all_participants_amount = all_participants_amount
+        self.status = status
+        self.matching_company_items_count = matching_company_items_count
+        self.items_count = items_count
+
+def extract_commission_split(tx: dict) -> CommissionSplitExtraction:
+    comissionados = tx.get("comissionados")
+    
     total_comm_raw = tx.get("total_comissao")
-    if total_comm_raw is None:
-        vgc_total = Decimal("0.0")
+    if total_comm_raw is None or str(total_comm_raw).strip() == "":
+        total_comissao = Decimal("0")
     else:
         try:
-            vgc_total = Decimal(str(total_comm_raw))
+            total_comissao = to_decimal(total_comm_raw)
         except Exception:
-            vgc_total = Decimal("0.0")
+            total_comissao = Decimal("0")
+
+    if comissionados is None:
+        return CommissionSplitExtraction(
+            gralha_amount=None,
+            all_participants_amount=None,
+            status="missing_array",
+            matching_company_items_count=0,
+            items_count=0
+        )
+        
+    if not isinstance(comissionados, list):
+        return CommissionSplitExtraction(
+            gralha_amount=None,
+            all_participants_amount=None,
+            status="malformed_array",
+            matching_company_items_count=0,
+            items_count=0
+        )
+        
+    gralha_amount = Decimal("0")
+    all_participants_amount = Decimal("0")
+    matching_company_items_count = 0
+    items_count = len(comissionados)
+    
+    for item in comissionados:
+        if not isinstance(item, dict):
+            return CommissionSplitExtraction(
+                gralha_amount=None,
+                all_participants_amount=None,
+                status="invalid_value",
+                matching_company_items_count=0,
+                items_count=items_count
+            )
             
-    vgc_gralha = Decimal("0.0")
-    comissionados = tx.get("comissionados")
-    if isinstance(comissionados, list):
-        for c in comissionados:
-            if isinstance(c, dict):
-                is_imob = c.get("comissionado_imobiliária")
-                if is_imob is None:
-                    is_imob = c.get("comissionado_imobiliaria")
-                if is_imob is True or str(is_imob).lower() in ["true", "1"]:
-                    val_raw = c.get("comissionado_valor") or c.get("valor") or 0.0
-                    try:
-                        vgc_gralha += Decimal(str(val_raw))
-                    except Exception:
-                        pass
-                        
-    vgc_demais_participantes = vgc_total - vgc_gralha
+        val_raw = item.get("comissionado_valor")
+        if val_raw is None or str(val_raw).strip() == "":
+            return CommissionSplitExtraction(
+                gralha_amount=None,
+                all_participants_amount=None,
+                status="invalid_value",
+                matching_company_items_count=0,
+                items_count=items_count
+            )
+            
+        try:
+            val = to_decimal(val_raw)
+            if val < 0:
+                return CommissionSplitExtraction(
+                    gralha_amount=None,
+                    all_participants_amount=None,
+                    status="invalid_value",
+                    matching_company_items_count=0,
+                    items_count=items_count
+                )
+        except Exception:
+            return CommissionSplitExtraction(
+                gralha_amount=None,
+                all_participants_amount=None,
+                status="invalid_value",
+                matching_company_items_count=0,
+                items_count=items_count
+            )
+            
+        all_participants_amount += val
+        
+        is_imob = item.get("comissionado_imobiliária")
+        if is_imob is None:
+            is_imob = item.get("comissionado_imobiliaria")
+            
+        is_filial = item.get("comissionado_filial")
+        
+        is_imob_bool = is_imob is True or str(is_imob).lower() in ["true", "1"]
+        is_filial_bool = is_filial is True or str(is_filial).lower() in ["true", "1"]
+        
+        if is_imob_bool or is_filial_bool:
+            gralha_amount += val
+            matching_company_items_count += 1
+            
+    diff = abs(all_participants_amount - total_comissao)
+    if diff > Decimal("0.01"):
+        return CommissionSplitExtraction(
+            gralha_amount=gralha_amount,
+            all_participants_amount=all_participants_amount,
+            status="reconciliation_mismatch",
+            matching_company_items_count=matching_company_items_count,
+            items_count=items_count
+        )
+        
+    return CommissionSplitExtraction(
+        gralha_amount=gralha_amount,
+        all_participants_amount=all_participants_amount,
+        status="valid",
+        matching_company_items_count=matching_company_items_count,
+        items_count=items_count
+    )
+
+def calculate_vgc_split(tx: dict) -> tuple[Decimal, Decimal, Decimal]:
+    total_comm_raw = tx.get("total_comissao")
+    if total_comm_raw is None or str(total_comm_raw).strip() == "":
+        vgc_total = Decimal("0")
+    else:
+        try:
+            vgc_total = to_decimal(total_comm_raw)
+        except Exception:
+            vgc_total = Decimal("0")
+            
+    ext = extract_commission_split(tx)
+    if ext.status == "valid":
+        vgc_gralha = ext.gralha_amount
+        vgc_demais_participantes = vgc_total - vgc_gralha
+    else:
+        vgc_gralha = Decimal("0")
+        vgc_demais_participantes = Decimal("0")
+        
     return vgc_total, vgc_gralha, vgc_demais_participantes
 
 async def load_transactions_dataset(
@@ -1285,100 +1414,202 @@ def compute_dashboard_aggregates(
     tot_vgc_total = Decimal("0.0")
     tot_gralha = Decimal("0.0")
     tot_demais = Decimal("0.0")
+    tot_unclassified = Decimal("0.0")
     
     # Source counters
     receipt_date_sources = {
         "data_recebimento_comissao": 0,
         "data_pagamento_comissao": 0,
+        "data_pagamento_comissao_prevista": 0,
         "missing": 0
     }
     
-    # Classification counters & sums
+    # Data Quality counters
+    valid_split_count = 0
+    valid_zero_company_share_count = 0
+    missing_array_count = 0
+    malformed_array_count = 0
+    invalid_item_value_count = 0
+    reconciliation_mismatch_count = 0
+    reconciliation_diff_sum = Decimal("0")
+    
+    # Classification sums by state
     received_total = Decimal("0.0")
     received_gralha = Decimal("0.0")
     received_demais = Decimal("0.0")
+    received_unclassified = Decimal("0.0")
     received_count = 0
     
     pending_total = Decimal("0.0")
     pending_gralha = Decimal("0.0")
     pending_demais = Decimal("0.0")
+    pending_unclassified = Decimal("0.0")
     pending_count = 0
-    pending_future_date_count = 0
-    pending_without_date_count = 0
     
     unknown_total = Decimal("0.0")
     unknown_gralha = Decimal("0.0")
     unknown_demais = Decimal("0.0")
+    unknown_unclassified = Decimal("0.0")
     unknown_count = 0
-    unknown_invalid_date_count = 0
     
     for tx in filtered:
-        vgc_total, vgc_gralha, vgc_demais = calculate_vgc_split(tx)
+        # 1. Total Commission
+        total_comm_raw = tx.get("total_comissao")
+        if total_comm_raw is None or str(total_comm_raw).strip() == "":
+            vgc_total = Decimal("0")
+        else:
+            try:
+                vgc_total = to_decimal(total_comm_raw)
+            except Exception:
+                vgc_total = Decimal("0")
+                
+        # 2. Extract split
+        ext = extract_commission_split(tx)
         
-        tot_vgc_total += vgc_total
-        tot_gralha += vgc_gralha
-        tot_demais += vgc_demais
-        
-        # Get receipt date and source
+        # Track data quality
+        if ext.status == "valid":
+            if ext.matching_company_items_count > 0:
+                valid_split_count += 1
+            else:
+                valid_zero_company_share_count += 1
+        elif ext.status == "missing_array":
+            missing_array_count += 1
+        elif ext.status == "malformed_array":
+            malformed_array_count += 1
+        elif ext.status == "invalid_value":
+            invalid_item_value_count += 1
+        elif ext.status == "reconciliation_mismatch":
+            reconciliation_mismatch_count += 1
+            
+        # Track reconciliation difference
+        if ext.all_participants_amount is not None:
+            reconciliation_diff_sum += abs(ext.all_participants_amount - vgc_total)
+        else:
+            reconciliation_diff_sum += vgc_total
+            
+        # 3. Categorize split
+        if ext.status == "valid":
+            vgc_gralha = ext.gralha_amount
+            vgc_demais = vgc_total - vgc_gralha
+            vgc_unclassified = Decimal("0")
+        else:
+            vgc_gralha = Decimal("0")
+            vgc_demais = Decimal("0")
+            vgc_unclassified = vgc_total
+            
+        # 4. Get receipt date and source
         date_str, source = get_receipt_date(tx)
-        
-        if source == "data_recebimento_comissao":
+        if source == "data_pagamento_comissao_prevista":
+            receipt_date_sources["data_pagamento_comissao_prevista"] += 1
+        elif source == "data_recebimento_comissao":
             receipt_date_sources["data_recebimento_comissao"] += 1
-        elif source == "data_pagamento_comissao":
-            receipt_date_sources["data_pagamento_comissao"] += 1
         else:
             receipt_date_sources["missing"] += 1
             
+        # 5. Classify by receipt status
         if date_str is None:
-            # C. A RECEBER - SEM DATA
+            # Sem recebimento registrado -> pending
             pending_total += vgc_total
             pending_gralha += vgc_gralha
             pending_demais += vgc_demais
+            pending_unclassified += vgc_unclassified
             pending_count += 1
-            pending_without_date_count += 1
         else:
-            # Parse the date using parse_explicit_date
             receipt_date = parse_explicit_date(date_str)
-            if receipt_date is not None:
-                if receipt_date <= as_of_date_obj:
-                    # A. RECEBIDA
-                    received_total += vgc_total
-                    received_gralha += vgc_gralha
-                    received_demais += vgc_demais
-                    received_count += 1
-                else:
-                    # B. A RECEBER - DATA FUTURA
-                    pending_total += vgc_total
-                    pending_gralha += vgc_gralha
-                    pending_demais += vgc_demais
-                    pending_count += 1
-                    pending_future_date_count += 1
-            else:
-                # D. SITUAÇÃO DESCONHECIDA
+            if receipt_date is None or receipt_date > as_of_date_obj:
+                # Situação desconhecida e issue de qualidade -> unknown
                 unknown_total += vgc_total
                 unknown_gralha += vgc_gralha
                 unknown_demais += vgc_demais
+                unknown_unclassified += vgc_unclassified
                 unknown_count += 1
-                unknown_invalid_date_count += 1
+            else:
+                # Com recebimento registrado -> received
+                received_total += vgc_total
+                received_gralha += vgc_gralha
+                received_demais += vgc_demais
+                received_unclassified += vgc_unclassified
+                received_count += 1
                 
-    # Reconciliations
-    diff1 = abs((tot_gralha + tot_demais) - tot_vgc_total)
+        tot_vgc_total += vgc_total
+        tot_gralha += vgc_gralha
+        tot_demais += vgc_demais
+        tot_unclassified += vgc_unclassified
+        
+    # Reconciliations (for validation / dashboard_cache)
+    diff1 = abs((tot_gralha + tot_demais + tot_unclassified) - tot_vgc_total)
     diff2 = abs((received_total + pending_total + unknown_total) - tot_vgc_total)
     diff3 = abs((received_gralha + pending_gralha + unknown_gralha) - tot_gralha)
     diff4 = abs((received_demais + pending_demais + unknown_demais) - tot_demais)
+    diff5 = abs((received_unclassified + pending_unclassified + unknown_unclassified) - tot_unclassified)
     
-    reconciliation_difference = diff1 + diff2 + diff3 + diff4
-    reconciled = (reconciliation_difference == Decimal("0.0"))
+    reconciliation_difference_internal = diff1 + diff2 + diff3 + diff4 + diff5
+    reconciled = (
+        reconciliation_difference_internal == Decimal("0.0") and
+        reconciliation_mismatch_count == 0 and
+        invalid_item_value_count == 0 and
+        malformed_array_count == 0 and
+        missing_array_count == 0
+    )
     
     # Audit quantity reconciliations
-    quantity_reconciled = (
-        (received_count + pending_count + unknown_count == len(filtered)) and
-        (pending_future_date_count + pending_without_date_count == pending_count)
-    )
-    if not quantity_reconciled or tot_gralha > tot_vgc_total or tot_gralha < 0 or tot_demais < 0:
+    quantity_reconciled = (received_count + pending_count + unknown_count == len(filtered))
+    if not quantity_reconciled or tot_gralha < 0 or tot_demais < 0 or tot_unclassified < 0:
         reconciled = False
         
     received_ratio = float(received_total / tot_vgc_total) if tot_vgc_total > 0 else 0.0
+    gralha_ratio = float(tot_gralha / tot_vgc_total) if tot_vgc_total > 0 else 0.0
+    demais_ratio = float(tot_demais / tot_vgc_total) if tot_vgc_total > 0 else 0.0
+    unclassified_ratio = float(tot_unclassified / tot_vgc_total) if tot_vgc_total > 0 else 0.0
+    
+    # 6. Contract build
+    vgc_composition = {
+        "source_field": "comissionados[].comissionado_valor",
+        "company_identification_rule": "comissionado_imobiliária_or_comissionado_filial",
+        "calculation_status": "validated",
+        "total": {
+            "amount": f"{tot_vgc_total:.2f}",
+            "ratio": 1.0
+        },
+        "gralha": {
+            "amount": f"{tot_gralha:.2f}",
+            "ratio": gralha_ratio,
+            "received": f"{received_gralha:.2f}",
+            "pending": f"{pending_gralha:.2f}",
+            "unknown": f"{unknown_gralha:.2f}"
+        },
+        "demais_participantes": {
+            "amount": f"{tot_demais:.2f}",
+            "ratio": demais_ratio,
+            "received": f"{received_demais:.2f}",
+            "pending": f"{pending_demais:.2f}",
+            "unknown": f"{unknown_demais:.2f}"
+        },
+        "corretores_equipe": {
+            "amount": f"{tot_demais:.2f}",
+            "ratio": demais_ratio,
+            "received": f"{received_demais:.2f}",
+            "pending": f"{pending_demais:.2f}",
+            "unknown": f"{unknown_demais:.2f}"
+        },
+        "unclassified": {
+            "amount": f"{tot_unclassified:.2f}",
+            "ratio": unclassified_ratio,
+            "received": f"{received_unclassified:.2f}",
+            "pending": f"{pending_unclassified:.2f}",
+            "unknown": f"{unknown_unclassified:.2f}"
+        },
+        "data_quality": {
+            "records_count": len(filtered),
+            "valid_split_count": valid_split_count,
+            "valid_zero_company_share_count": valid_zero_company_share_count,
+            "missing_array_count": missing_array_count,
+            "malformed_array_count": malformed_array_count,
+            "invalid_item_value_count": invalid_item_value_count,
+            "reconciliation_mismatch_count": reconciliation_mismatch_count,
+            "reconciliation_difference": f"{reconciliation_diff_sum:.2f}"
+        }
+    }
     
     commission_financials = {
         "period_basis": "ccv",
@@ -1391,9 +1622,10 @@ def compute_dashboard_aggregates(
         "composition": {
             "gralha": f"{tot_gralha:.2f}",
             "demais_participantes": f"{tot_demais:.2f}",
-            "reconciliation_difference": f"{reconciliation_difference:.2f}",
+            "reconciliation_difference": f"{reconciliation_diff_sum:.2f}",
             "reconciled": reconciled
         },
+        "vgc_composition": vgc_composition,
         "received": {
             "total": f"{received_total:.2f}",
             "gralha": f"{received_gralha:.2f}",
@@ -1405,15 +1637,15 @@ def compute_dashboard_aggregates(
             "gralha": f"{pending_gralha:.2f}",
             "demais_participantes": f"{pending_demais:.2f}",
             "transaction_count": pending_count,
-            "future_date_count": pending_future_date_count,
-            "without_date_count": pending_without_date_count
+            "future_date_count": 0,
+            "without_date_count": pending_count
         },
         "unknown": {
             "total": f"{unknown_total:.2f}",
             "gralha": f"{unknown_gralha:.2f}",
             "demais_participantes": f"{unknown_demais:.2f}",
             "transaction_count": unknown_count,
-            "invalid_date_count": unknown_invalid_date_count
+            "invalid_date_count": unknown_count
         },
         "received_ratio": received_ratio,
         "semantic_validation": "provisional_v1",
@@ -1722,10 +1954,11 @@ def compute_dashboard_aggregates(
         "event": "vgc_analysis_completed_v1",
         "receipt_date_source_data_recebimento_count": receipt_date_sources["data_recebimento_comissao"],
         "receipt_date_source_data_pagamento_count": receipt_date_sources["data_pagamento_comissao"],
+        "receipt_date_source_data_pagamento_prevista_count": receipt_date_sources["data_pagamento_comissao_prevista"],
         "received_count": received_count,
-        "pending_future_date_count": pending_future_date_count,
-        "pending_without_date_count": pending_without_date_count,
-        "unknown_invalid_date_count": unknown_invalid_date_count
+        "pending_future_date_count": 0,
+        "pending_without_date_count": pending_count,
+        "unknown_invalid_date_count": unknown_count
     }
     print(f"SECURE_LOG: {json.dumps(vgc_log)}")
 
@@ -2868,7 +3101,40 @@ class VGCUnknown(BaseModel):
 class ReceiptDateSources(BaseModel):
     data_recebimento_comissao: int
     data_pagamento_comissao: int
+    data_pagamento_comissao_prevista: Optional[int] = None
     missing: int
+
+class VGCCompositionDetail(BaseModel):
+    amount: str
+    ratio: float
+    received: str
+    pending: str
+    unknown: str
+
+class VGCCompositionTotal(BaseModel):
+    amount: str
+    ratio: float = 1.0
+
+class VGCCompositionDataQuality(BaseModel):
+    records_count: int
+    valid_split_count: int
+    valid_zero_company_share_count: int
+    missing_array_count: int
+    malformed_array_count: int
+    invalid_item_value_count: int
+    reconciliation_mismatch_count: int
+    reconciliation_difference: str
+
+class VGCCompositionV2(BaseModel):
+    source_field: str = "comissionados[].comissionado_valor"
+    company_identification_rule: str = "comissionado_imobiliária_or_comissionado_filial"
+    calculation_status: str = "validated"
+    total: VGCCompositionTotal
+    gralha: VGCCompositionDetail
+    demais_participantes: VGCCompositionDetail
+    corretores_equipe: VGCCompositionDetail
+    unclassified: VGCCompositionDetail
+    data_quality: VGCCompositionDataQuality
 
 class CommissionFinancials(BaseModel):
     period_basis: str = "ccv"
@@ -2878,7 +3144,8 @@ class CommissionFinancials(BaseModel):
     allocation_method: str = "status_only"
     receipt_date_sources: ReceiptDateSources
     vgc_total: str
-    composition: VGCComposition
+    composition: Optional[VGCComposition] = None
+    vgc_composition: VGCCompositionV2
     received: VGCReceived
     pending: VGCPending
     unknown: VGCUnknown
