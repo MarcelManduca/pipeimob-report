@@ -3379,12 +3379,15 @@ def test_vgc_receipt_missing_and_absent_classifies_as_pending():
         {"total_comissao": 4000.0, "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 4000.0}], "data_pagamento_comissao_prevista": "   ", "data_assinatura_ccv": "2026-03-15"},
         # 5. "None" string
         {"total_comissao": 5000.0, "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 5000.0}], "data_pagamento_comissao_prevista": "None", "data_assinatura_ccv": "2026-03-15"},
+        # 6. "null" string
+        {"total_comissao": 6000.0, "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 6000.0}], "data_pagamento_comissao_prevista": "null", "data_assinatura_ccv": "2026-03-15"},
     ]
     res = compute_dashboard_aggregates(txs, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
     financials = res["commission_financials"]
-    assert financials["pending_transactions_count"] == 5
+    assert financials["pending_transactions_count"] == 6
     assert financials["received_transactions_count"] == 0
     assert financials["unknown_transactions_count"] == 0
+    assert financials["receipt_data_quality"]["missing_date_count"] == 6
 
 
 def test_vgc_receipt_unknown_only_for_invalid_or_future():
@@ -3400,6 +3403,8 @@ def test_vgc_receipt_unknown_only_for_invalid_or_future():
     assert financials["unknown_transactions_count"] == 2
     assert financials["pending_transactions_count"] == 0
     assert financials["received_transactions_count"] == 0
+    assert financials["receipt_data_quality"]["future_date_count"] == 1
+    assert financials["receipt_data_quality"]["invalid_date_count"] == 1
 
 
 def test_vgc_calculation_status_validated_vs_partial():
@@ -3450,5 +3455,50 @@ def test_vgc_sum_and_reconciliation_difference_016():
     assert comp["calculation_status"] == "partial"
 
 
-
-
+def test_vgc_receipt_data_quality_comprehensive_closure():
+    from main import compute_dashboard_aggregates
+    
+    txs = [
+        # 1. missing key (missing)
+        {"total_comissao": 1000.00, "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 1000.00}], "data_assinatura_ccv": "2026-03-15"},
+        # 2. None value (missing)
+        {"total_comissao": 1000.00, "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 1000.00}], "data_pagamento_comissao_prevista": None, "data_assinatura_ccv": "2026-03-15"},
+        # 3. empty string (missing)
+        {"total_comissao": 1000.00, "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 1000.00}], "data_pagamento_comissao_prevista": "", "data_assinatura_ccv": "2026-03-15"},
+        # 4. whitespace string (missing)
+        {"total_comissao": 1000.00, "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 1000.00}], "data_pagamento_comissao_prevista": "   ", "data_assinatura_ccv": "2026-03-15"},
+        # 5. "None" string (missing)
+        {"total_comissao": 1000.00, "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 1000.00}], "data_pagamento_comissao_prevista": "None", "data_assinatura_ccv": "2026-03-15"},
+        # 6. "null" string (missing)
+        {"total_comissao": 1000.00, "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 1000.00}], "data_pagamento_comissao_prevista": "null", "data_assinatura_ccv": "2026-03-15"},
+        # 7. valid past date (received)
+        {"total_comissao": 1000.00, "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 1000.00}], "data_pagamento_comissao_prevista": "2026-03-15", "data_assinatura_ccv": "2026-03-15"},
+        # 8. equal to reference date (received)
+        {"total_comissao": 1000.00, "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 1000.00}], "data_pagamento_comissao_prevista": "2026-06-30", "data_assinatura_ccv": "2026-03-15"},
+        # 9. valid future date (future -> unknown)
+        {"total_comissao": 1000.00, "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 1000.00}], "data_pagamento_comissao_prevista": "2050-01-01", "data_assinatura_ccv": "2026-03-15"},
+        # 10. invalid date format (invalid -> unknown)
+        {"total_comissao": 1000.00, "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 1000.00}], "data_pagamento_comissao_prevista": "not-a-date", "data_assinatura_ccv": "2026-03-15"},
+    ]
+    
+    res = compute_dashboard_aggregates(txs, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
+    financials = res["commission_financials"]
+    q = financials["receipt_data_quality"]
+    
+    # Assert closures
+    assert q["missing_date_count"] == 6
+    assert q["received_date_count"] == 2
+    assert q["future_date_count"] == 1
+    assert q["invalid_date_count"] == 1
+    
+    records_count = len(txs)
+    # Closure of quality counts: received + missing + invalid + future == records_count
+    assert q["received_date_count"] + q["missing_date_count"] + q["invalid_date_count"] + q["future_date_count"] == records_count
+    
+    # Closure mapping to transaction counts
+    assert financials["received_transactions_count"] == q["received_date_count"]
+    assert financials["pending_transactions_count"] == q["missing_date_count"]
+    assert financials["unknown_transactions_count"] == q["invalid_date_count"] + q["future_date_count"]
+    
+    # Closure of status counts: received + pending + unknown == records_count
+    assert financials["received_transactions_count"] + financials["pending_transactions_count"] + financials["unknown_transactions_count"] == records_count

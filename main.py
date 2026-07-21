@@ -1459,6 +1459,11 @@ def compute_dashboard_aggregates(
     unknown_demais = Decimal("0.0")
     unknown_unclassified = Decimal("0.0")
     unknown_count = 0
+
+    received_date_count = 0
+    missing_date_count = 0
+    invalid_date_count = 0
+    future_date_count = 0
     
     for tx in filtered:
         # 1. Total Commission
@@ -1517,6 +1522,7 @@ def compute_dashboard_aggregates(
         # 5. Classify by receipt status
         if date_str is None or str(date_str).strip() == "" or str(date_str).strip().lower() in ["none", "null"]:
             # Sem recebimento registrado -> pending
+            missing_date_count += 1
             pending_total += vgc_total
             pending_gralha += vgc_gralha
             pending_demais += vgc_demais
@@ -1524,15 +1530,25 @@ def compute_dashboard_aggregates(
             pending_count += 1
         else:
             receipt_date = parse_explicit_date(date_str)
-            if receipt_date is None or receipt_date > as_of_date_obj:
-                # Situação desconhecida e issue de qualidade -> unknown
+            if receipt_date is None:
+                # Valor presente que não pode ser interpretado -> unknown (invalid_date)
+                invalid_date_count += 1
+                unknown_total += vgc_total
+                unknown_gralha += vgc_gralha
+                unknown_demais += vgc_demais
+                unknown_unclassified += vgc_unclassified
+                unknown_count += 1
+            elif receipt_date > as_of_date_obj:
+                # Data válida futura -> unknown (future_date)
+                future_date_count += 1
                 unknown_total += vgc_total
                 unknown_gralha += vgc_gralha
                 unknown_demais += vgc_demais
                 unknown_unclassified += vgc_unclassified
                 unknown_count += 1
             else:
-                # Com recebimento registrado -> received
+                # Data válida passada ou presente -> received (received_date)
+                received_date_count += 1
                 received_total += vgc_total
                 received_gralha += vgc_gralha
                 received_demais += vgc_demais
@@ -1646,6 +1662,12 @@ def compute_dashboard_aggregates(
         "received_transactions_count": received_count,
         "pending_transactions_count": pending_count,
         "unknown_transactions_count": unknown_count,
+        "receipt_data_quality": {
+            "received_date_count": received_date_count,
+            "missing_date_count": missing_date_count,
+            "invalid_date_count": invalid_date_count,
+            "future_date_count": future_date_count
+        },
         "received": {
             "total": f"{received_total:.2f}",
             "gralha": f"{received_gralha:.2f}",
@@ -3156,6 +3178,12 @@ class VGCCompositionV2(BaseModel):
     unclassified: VGCCompositionDetail
     data_quality: VGCCompositionDataQuality
 
+class ReceiptDataQuality(BaseModel):
+    received_date_count: int
+    missing_date_count: int
+    invalid_date_count: int
+    future_date_count: int
+
 class CommissionFinancials(BaseModel):
     period_basis: str = "ccv"
     as_of_date: str
@@ -3175,6 +3203,7 @@ class CommissionFinancials(BaseModel):
     received_transactions_count: int
     pending_transactions_count: int
     unknown_transactions_count: int
+    receipt_data_quality: ReceiptDataQuality
 
 class SalesCycleBucket(BaseModel):
     key: str
