@@ -14,6 +14,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
+# Centralized HTTP Timeout configuration for external API requests (connection and read timeout)
+try:
+    _env_timeout = int(os.getenv("PIPEIMOB_HTTP_TIMEOUT_SECONDS", "12"))
+    # Enforce bounds: min 1 second, max 30 seconds to stay compatible with frontend gateway timeouts
+    PIPEIMOB_HTTP_TIMEOUT_SECONDS = max(1, min(30, _env_timeout))
+except ValueError:
+    PIPEIMOB_HTTP_TIMEOUT_SECONDS = 12
+
 # Token Cache in memory
 class TokenCache:
     def __init__(self):
@@ -291,7 +299,7 @@ def get_auth_token(api_key: str, api_secret: str, force_refresh: bool = False) -
     )
     try:
         # Use a short timeout to handle hanging requests
-        with urllib.request.urlopen(req, context=ssl_context, timeout=8) as response:
+        with urllib.request.urlopen(req, context=ssl_context, timeout=min(8, PIPEIMOB_HTTP_TIMEOUT_SECONDS)) as response:
             res_body = json.loads(response.read().decode('utf-8'))
             if res_body.get("success"):
                 data = res_body.get("data") or {}
@@ -402,7 +410,7 @@ def fetch_all_pipeimob_transactions(
             headers={'Authorization': f'Bearer {token}', 'User-Agent': 'Mozilla/5.0'}
         )
         try:
-            with urllib.request.urlopen(req, context=ssl_context, timeout=60) as response:
+            with urllib.request.urlopen(req, context=ssl_context, timeout=PIPEIMOB_HTTP_TIMEOUT_SECONDS) as response:
                 res_body = json.loads(response.read().decode('utf-8'))
                 if not res_body.get("success"):
                     raise IntegrationUnavailableError(
