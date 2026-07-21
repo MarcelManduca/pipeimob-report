@@ -3405,6 +3405,7 @@ def get_jwk_client():
             _jwk_client = PyJWKClient(jwks_url)
     return _jwk_client
 async def verify_backend_api_key(
+    request: Request,
     authorization: Optional[str] = Header(None)
 ):
     import jwt
@@ -3555,28 +3556,40 @@ async def verify_backend_api_key(
             
     except AuthException:
         raise
-    except jwt.ExpiredSignatureError:
+    except jwt.ExpiredSignatureError as e:
+        detail = "Invalid or expired access token."
+        if request and request.headers.get("x-debug-auth") == "true":
+            detail = f"Invalid or expired access token: ExpiredSignatureError: {str(e)}"
         raise AuthException(
             status_code=401,
-            detail="Invalid or expired access token.",
+            detail=detail,
             error_code="invalid_access_token"
         )
-    except jwt.InvalidIssuerError:
+    except jwt.InvalidIssuerError as e:
+        detail = "Invalid or expired access token."
+        if request and request.headers.get("x-debug-auth") == "true":
+            detail = f"Invalid or expired access token: InvalidIssuerError: {str(e)}"
         raise AuthException(
             status_code=401,
-            detail="Invalid or expired access token.",
+            detail=detail,
             error_code="invalid_access_token"
         )
-    except jwt.InvalidAudienceError:
+    except jwt.InvalidAudienceError as e:
+        detail = "Invalid or expired access token."
+        if request and request.headers.get("x-debug-auth") == "true":
+            detail = f"Invalid or expired access token: InvalidAudienceError: {str(e)}"
         raise AuthException(
             status_code=401,
-            detail="Invalid or expired access token.",
+            detail=detail,
             error_code="invalid_access_token"
         )
-    except Exception:
+    except Exception as e:
+        detail = "Invalid or expired access token."
+        if request and request.headers.get("x-debug-auth") == "true":
+            detail = f"Invalid or expired access token: Exception: {str(e)}"
         raise AuthException(
             status_code=401,
-            detail="Invalid or expired access token.",
+            detail=detail,
             error_code="invalid_access_token"
         )
         
