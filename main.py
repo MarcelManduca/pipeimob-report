@@ -402,7 +402,7 @@ def fetch_all_pipeimob_transactions(
             headers={'Authorization': f'Bearer {token}', 'User-Agent': 'Mozilla/5.0'}
         )
         try:
-            with urllib.request.urlopen(req, context=ssl_context, timeout=12) as response:
+            with urllib.request.urlopen(req, context=ssl_context, timeout=60) as response:
                 res_body = json.loads(response.read().decode('utf-8'))
                 if not res_body.get("success"):
                     raise IntegrationUnavailableError(
