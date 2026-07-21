@@ -1515,7 +1515,7 @@ def compute_dashboard_aggregates(
             receipt_date_sources["missing"] += 1
             
         # 5. Classify by receipt status
-        if date_str is None:
+        if date_str is None or str(date_str).strip() == "" or str(date_str).strip().lower() in ["none", "null"]:
             # Sem recebimento registrado -> pending
             pending_total += vgc_total
             pending_gralha += vgc_gralha
@@ -1571,10 +1571,19 @@ def compute_dashboard_aggregates(
     unclassified_ratio = float(tot_unclassified / tot_vgc_total) if tot_vgc_total > 0 else 0.0
     
     # 6. Contract build
+    has_issues = (
+        tot_unclassified > Decimal("0") or
+        reconciliation_mismatch_count > 0 or
+        invalid_item_value_count > 0 or
+        missing_array_count > 0 or
+        malformed_array_count > 0
+    )
+    calculation_status = "partial" if has_issues else "validated"
+
     vgc_composition = {
         "source_field": "comissionados[].comissionado_valor",
         "company_identification_rule": "comissionado_imobiliária_or_comissionado_filial",
-        "calculation_status": "validated",
+        "calculation_status": calculation_status,
         "total": {
             "amount": f"{tot_vgc_total:.2f}",
             "ratio": 1.0
@@ -1634,6 +1643,9 @@ def compute_dashboard_aggregates(
             "reconciled": reconciled
         },
         "vgc_composition": vgc_composition,
+        "received_transactions_count": received_count,
+        "pending_transactions_count": pending_count,
+        "unknown_transactions_count": unknown_count,
         "received": {
             "total": f"{received_total:.2f}",
             "gralha": f"{received_gralha:.2f}",
@@ -3160,6 +3172,9 @@ class CommissionFinancials(BaseModel):
     received_ratio: float
     semantic_validation: str = "provisional_v1"
     disclaimer: Optional[str] = None
+    received_transactions_count: int
+    pending_transactions_count: int
+    unknown_transactions_count: int
 
 class SalesCycleBucket(BaseModel):
     key: str
