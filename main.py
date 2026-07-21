@@ -3488,13 +3488,18 @@ async def verify_backend_api_key(
             
             aud = os.getenv("SUPABASE_JWT_AUDIENCE", "authenticated")
             iss = os.getenv("SUPABASE_ISSUER")
+            allowed_iss = None
+            if iss:
+                allowed_iss = [iss]
+                if not iss.endswith("/auth/v1"):
+                    allowed_iss.append(f"{iss}/auth/v1")
             
             payload = jwt.decode(
                 token,
                 signing_key.key,
                 algorithms=["RS256", "ES256"],
                 audience=aud,
-                issuer=iss,
+                issuer=allowed_iss,
                 options={"require": ["exp", "iss", "aud", "sub"]}
             )
         else:
@@ -3515,8 +3520,12 @@ async def verify_backend_api_key(
                 
             # Explicit iss check
             expected_iss = os.getenv("SUPABASE_ISSUER")
-            if expected_iss and payload.get("iss") != expected_iss:
-                raise jwt.InvalidIssuerError("Invalid issuer")
+            if expected_iss:
+                expected_iss_list = [expected_iss]
+                if not expected_iss.endswith("/auth/v1"):
+                    expected_iss_list.append(f"{expected_iss}/auth/v1")
+                if payload.get("iss") not in expected_iss_list:
+                    raise jwt.InvalidIssuerError("Invalid issuer")
                 
             # Explicit aud check
             expected_aud = os.getenv("SUPABASE_JWT_AUDIENCE", "authenticated")
