@@ -3502,3 +3502,110 @@ def test_vgc_receipt_data_quality_comprehensive_closure():
     
     # Closure of status counts: received + pending + unknown == records_count
     assert financials["received_transactions_count"] + financials["pending_transactions_count"] + financials["unknown_transactions_count"] == records_count
+
+
+def test_dashboard_full_endpoint_serialization_and_restrictions():
+    from fastapi.testclient import TestClient
+    from main import app, verify_backend_api_key, DASHBOARD_CACHE_VERSION
+    from unittest.mock import patch
+    import os
+    import json
+    
+    client = TestClient(app)
+    
+    # Bypass auth
+    app.dependency_overrides[verify_backend_api_key] = lambda: {"sub": "user-123", "role": "authenticated", "email": "test@test.com"}
+    
+    try:
+        mock_txs = [
+            # received
+            {"total_comissao": 1000.00, "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 1000.00}], "data_pagamento_comissao_prevista": "2026-03-15", "data_assinatura_ccv": "2026-03-15", "valor_contrato": 50000.0, "transacao_unique_id_pipeimob": "tx1", "codigo_contrato": "code1", "agente_gestor": "Manager A"},
+            # missing (pending)
+            {"total_comissao": 2000.00, "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 2000.00}], "data_pagamento_comissao_prevista": None, "data_assinatura_ccv": "2026-03-15", "valor_contrato": 100000.0, "transacao_unique_id_pipeimob": "tx2", "codigo_contrato": "code2", "agente_gestor": "Manager B"},
+            # future (unknown)
+            {"total_comissao": 3000.00, "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 3000.00}], "data_pagamento_comissao_prevista": "2050-01-01", "data_assinatura_ccv": "2026-03-15", "valor_contrato": 150000.0, "transacao_unique_id_pipeimob": "tx3", "codigo_contrato": "code3", "agente_gestor": "Manager C"},
+            # invalid (unknown)
+            {"total_comissao": 4000.00, "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 4000.00}], "data_pagamento_comissao_prevista": "invalid", "data_assinatura_ccv": "2026-03-15", "valor_contrato": 200000.0, "transacao_unique_id_pipeimob": "tx4", "codigo_contrato": "code4", "agente_gestor": "Manager D"}
+        ]
+        
+        # Test with EXPOSE_RAW_TRANSACTIONS = false (default)
+        with patch("main.fetch_all_pipeimob_transactions", return_value=(mock_txs, 1)), \
+             patch.dict(os.environ, {
+                 "PIPEIMOB_DATA_MODE": "live",
+                 "PIPEIMOB_API_KEY": "mock_key",
+                 "PIPEIMOB_SECRET_KEY": "mock_secret",
+                 "EXPOSE_RAW_TRANSACTIONS": "false"
+             }):
+             
+            res = client.get("/api/dashboard/full?data_inicio_ccv=2026-01-01&data_fim_ccv=2026-06-30")
+            assert res.status_code == 200
+            data = res.json()
+            
+            # Assert cache version changed check
+            assert DASHBOARD_CACHE_VERSION == "sales-cycle-v5-vgc-data-quality"
+            
+            # Assert receipt_data_quality is present and serialized correctly
+            financials = data.get("commission_financials")
+            assert financials is not None
+            q = financials.get("receipt_data_quality")
+            assert q is not None
+            
+            # Check counts
+            assert q["received_date_count"] == 1
+            assert q["missing_date_count"] == 1
+            assert q["future_date_count"] == 1
+            assert q["invalid_date_count"] == 1
+            
+            # Closure of four counts
+            assert q["received_date_count"] + q["missing_date_count"] + q["invalid_date_count"] + q["future_date_count"] == 4
+            
+            # Reconciliations with transaction counts
+            assert financials["received_transactions_count"] == q["received_date_count"]
+            assert financials["pending_transactions_count"] == q["missing_date_count"]
+            assert financials["unknown_transactions_count"] == q["invalid_date_count"] + q["future_date_count"]
+            
+            # Check disclaimer text is semantic and updated
+            disclaimer = financials.get("disclaimer")
+            assert disclaimer is not None
+            assert "data válida até a data de referência (as_of_date): recebido;" in disclaimer
+            assert "data ausente: pendente;" in disclaimer
+            assert "data futura ou inválida: desconhecido;" in disclaimer
+            assert "não comprova a liquidação" in disclaimer
+            assert "datas futuras são pendentes" not in disclaimer
+            
+            # Check that individual transaction records are omitted when EXPOSE_RAW_TRANSACTIONS=false
+            commissions_data = data.get("commissions")
+            assert commissions_data is not None
+            assert commissions_data.get("commissions") == [] # MUST BE EMPTY!
+            
+            # Ensure no individual transactional fields exist anywhere in the payload
+            payload_str = json.dumps(data)
+            assert "transaction_id" not in payload_str
+            assert "contract_code" not in payload_str
+            assert "code1" not in payload_str
+            assert "code2" not in payload_str
+            
+            # Verify no regressions in financial composition values
+            assert float(financials["vgc_total"]) == 10000.00
+            assert float(financials["vgc_composition"]["gralha"]["amount"]) == 10000.00
+            assert float(financials["vgc_composition"]["demais_participantes"]["amount"]) == 0.00
+            
+        # Test with EXPOSE_RAW_TRANSACTIONS = true (for local controlled environment)
+        with patch("main.fetch_all_pipeimob_transactions", return_value=(mock_txs, 1)), \
+             patch.dict(os.environ, {
+                 "PIPEIMOB_DATA_MODE": "live",
+                 "PIPEIMOB_API_KEY": "mock_key",
+                 "PIPEIMOB_SECRET_KEY": "mock_secret",
+                 "EXPOSE_RAW_TRANSACTIONS": "true"
+             }):
+             
+            res_exposed = client.get("/api/dashboard/full?data_inicio_ccv=2026-01-01&data_fim_ccv=2026-06-30")
+            assert res_exposed.status_code == 200
+            data_exposed = res_exposed.json()
+            comm_list = data_exposed.get("commissions", {}).get("commissions", [])
+            assert len(comm_list) == 4
+            assert comm_list[0]["contract_code"] == "code1"
+            assert comm_list[0]["transaction_id"] == "tx1"
+            
+    finally:
+        app.dependency_overrides.clear()

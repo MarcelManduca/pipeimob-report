@@ -69,7 +69,7 @@ class DashboardCache:
 dashboard_cache = DashboardCache()
 dashboard_cache.clear()
 
-DASHBOARD_CACHE_VERSION = "sales-cycle-v4-vgc-phase2"
+DASHBOARD_CACHE_VERSION = "sales-cycle-v5-vgc-data-quality"
 
 class AsyncSingleFlightRegistry:
     def __init__(self):
@@ -1230,10 +1230,11 @@ def compute_dashboard_aggregates(
             "manager": tx.get("agente_gestor") or "Sem Gestor"
         })
     avg_rate_comm = float(round((total_comm / total_sales_comm) * 100, 2)) if total_sales_comm > 0 else 0.0
+    expose_raw = os.getenv("EXPOSE_RAW_TRANSACTIONS", "false").strip().lower() == "true"
     commissions_payload = {
         "total_commissions": float(round(total_comm, 2)),
         "avg_commission_rate": avg_rate_comm,
-        "commissions": commissions
+        "commissions": commissions if expose_raw else []
     }
     
     # 7. Timeline
@@ -1692,10 +1693,9 @@ def compute_dashboard_aggregates(
         "received_ratio": received_ratio,
         "semantic_validation": "provisional_v1",
         "disclaimer": (
-            "Versão 1: a classificação considera como recebido o VGC com data "
-            "registrada até a data de referência. Datas futuras ou ausentes são "
-            "consideradas a receber. A fonte financeira definitiva aguarda confirmação "
-            "do Pipeimob."
+            "Classificação das datas de recebimento: data válida até a data de referência (as_of_date): recebido; "
+            "data ausente: pendente; data futura ou inválida: desconhecido; a classificação é transacional e "
+            "não comprova a liquidação de todas as parcelas financeiras."
         )
     }
     
