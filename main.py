@@ -3405,7 +3405,6 @@ def get_jwk_client():
             _jwk_client = PyJWKClient(jwks_url)
     return _jwk_client
 async def verify_backend_api_key(
-    request: Request,
     authorization: Optional[str] = Header(None)
 ):
     import jwt
@@ -3431,12 +3430,9 @@ async def verify_backend_api_key(
         jwks_url = os.getenv("SUPABASE_JWKS_URL")
         
         if not jwks_url and app_env == "production":
-            detail = "Invalid or expired access token."
-            if request and request.headers.get("x-debug-auth") == "true":
-                detail = "Invalid or expired access token: SUPABASE_JWKS_URL is not set in production!"
             raise AuthException(
                 status_code=401,
-                detail=detail,
+                detail="Invalid or expired access token.",
                 error_code="invalid_access_token"
             )
             
@@ -3483,30 +3479,22 @@ async def verify_backend_api_key(
                 
             try:
                 signing_key = client.get_signing_key_from_jwt(token)
-            except Exception as e:
-                detail = "Invalid or expired access token."
-                if request and request.headers.get("x-debug-auth") == "true":
-                    detail = f"Invalid or expired access token: get_signing_key_from_jwt: {type(e).__name__}: {str(e)} | JWKS_URL: {os.getenv('SUPABASE_JWKS_URL')}"
+            except Exception:
                 raise AuthException(
                     status_code=401,
-                    detail=detail,
+                    detail="Invalid or expired access token.",
                     error_code="invalid_access_token"
                 )
             
             aud = os.getenv("SUPABASE_JWT_AUDIENCE", "authenticated")
             iss = os.getenv("SUPABASE_ISSUER")
-            allowed_iss = None
-            if iss:
-                allowed_iss = [iss]
-                if not iss.endswith("/auth/v1"):
-                    allowed_iss.append(f"{iss}/auth/v1")
             
             payload = jwt.decode(
                 token,
                 signing_key.key,
                 algorithms=["RS256", "ES256"],
                 audience=aud,
-                issuer=allowed_iss,
+                issuer=iss,
                 options={"require": ["exp", "iss", "aud", "sub"]}
             )
         else:
@@ -3527,12 +3515,8 @@ async def verify_backend_api_key(
                 
             # Explicit iss check
             expected_iss = os.getenv("SUPABASE_ISSUER")
-            if expected_iss:
-                expected_iss_list = [expected_iss]
-                if not expected_iss.endswith("/auth/v1"):
-                    expected_iss_list.append(f"{expected_iss}/auth/v1")
-                if payload.get("iss") not in expected_iss_list:
-                    raise jwt.InvalidIssuerError("Invalid issuer")
+            if expected_iss and payload.get("iss") != expected_iss:
+                raise jwt.InvalidIssuerError("Invalid issuer")
                 
             # Explicit aud check
             expected_aud = os.getenv("SUPABASE_JWT_AUDIENCE", "authenticated")
@@ -3562,40 +3546,28 @@ async def verify_backend_api_key(
             
     except AuthException:
         raise
-    except jwt.ExpiredSignatureError as e:
-        detail = "Invalid or expired access token."
-        if request and request.headers.get("x-debug-auth") == "true":
-            detail = f"Invalid or expired access token: ExpiredSignatureError: {str(e)}"
+    except jwt.ExpiredSignatureError:
         raise AuthException(
             status_code=401,
-            detail=detail,
+            detail="Invalid or expired access token.",
             error_code="invalid_access_token"
         )
-    except jwt.InvalidIssuerError as e:
-        detail = "Invalid or expired access token."
-        if request and request.headers.get("x-debug-auth") == "true":
-            detail = f"Invalid or expired access token: InvalidIssuerError: {str(e)}"
+    except jwt.InvalidIssuerError:
         raise AuthException(
             status_code=401,
-            detail=detail,
+            detail="Invalid or expired access token.",
             error_code="invalid_access_token"
         )
-    except jwt.InvalidAudienceError as e:
-        detail = "Invalid or expired access token."
-        if request and request.headers.get("x-debug-auth") == "true":
-            detail = f"Invalid or expired access token: InvalidAudienceError: {str(e)}"
+    except jwt.InvalidAudienceError:
         raise AuthException(
             status_code=401,
-            detail=detail,
+            detail="Invalid or expired access token.",
             error_code="invalid_access_token"
         )
-    except Exception as e:
-        detail = "Invalid or expired access token."
-        if request and request.headers.get("x-debug-auth") == "true":
-            detail = f"Invalid or expired access token: Exception: {str(e)}"
+    except Exception:
         raise AuthException(
             status_code=401,
-            detail=detail,
+            detail="Invalid or expired access token.",
             error_code="invalid_access_token"
         )
         
