@@ -69,7 +69,7 @@ class DashboardCache:
 dashboard_cache = DashboardCache()
 dashboard_cache.clear()
 
-DASHBOARD_CACHE_VERSION = "sales-cycle-v5-vgc-data-quality"
+DASHBOARD_CACHE_VERSION = "sales-cycle-v6-vgc-pending-unknown-fix"
 
 class AsyncSingleFlightRegistry:
     def __init__(self):
@@ -1522,39 +1522,38 @@ def compute_dashboard_aggregates(
             
         # 5. Classify by receipt status
         if date_str is None or str(date_str).strip() == "" or str(date_str).strip().lower() in ["none", "null"]:
-            # Sem recebimento registrado -> pending
+            status = "missing"
             missing_date_count += 1
+        else:
+            receipt_date = parse_explicit_date(date_str)
+            if receipt_date is None:
+                status = "invalid"
+                invalid_date_count += 1
+            elif receipt_date > as_of_date_obj:
+                status = "future"
+                future_date_count += 1
+            else:
+                status = "received"
+                received_date_count += 1
+
+        if status == "missing":
             pending_total += vgc_total
             pending_gralha += vgc_gralha
             pending_demais += vgc_demais
             pending_unclassified += vgc_unclassified
             pending_count += 1
-        else:
-            receipt_date = parse_explicit_date(date_str)
-            if receipt_date is None:
-                # Valor presente que não pode ser interpretado -> unknown (invalid_date)
-                invalid_date_count += 1
-                unknown_total += vgc_total
-                unknown_gralha += vgc_gralha
-                unknown_demais += vgc_demais
-                unknown_unclassified += vgc_unclassified
-                unknown_count += 1
-            elif receipt_date > as_of_date_obj:
-                # Data válida futura -> unknown (future_date)
-                future_date_count += 1
-                unknown_total += vgc_total
-                unknown_gralha += vgc_gralha
-                unknown_demais += vgc_demais
-                unknown_unclassified += vgc_unclassified
-                unknown_count += 1
-            else:
-                # Data válida passada ou presente -> received (received_date)
-                received_date_count += 1
-                received_total += vgc_total
-                received_gralha += vgc_gralha
-                received_demais += vgc_demais
-                received_unclassified += vgc_unclassified
-                received_count += 1
+        elif status in ("invalid", "future"):
+            unknown_total += vgc_total
+            unknown_gralha += vgc_gralha
+            unknown_demais += vgc_demais
+            unknown_unclassified += vgc_unclassified
+            unknown_count += 1
+        elif status == "received":
+            received_total += vgc_total
+            received_gralha += vgc_gralha
+            received_demais += vgc_demais
+            received_unclassified += vgc_unclassified
+            received_count += 1
                 
         tot_vgc_total += vgc_total
         tot_gralha += vgc_gralha
@@ -1680,7 +1679,6 @@ def compute_dashboard_aggregates(
             "gralha": f"{pending_gralha:.2f}",
             "demais_participantes": f"{pending_demais:.2f}",
             "transaction_count": pending_count,
-            "future_date_count": 0,
             "without_date_count": pending_count
         },
         "unknown": {
@@ -1688,7 +1686,8 @@ def compute_dashboard_aggregates(
             "gralha": f"{unknown_gralha:.2f}",
             "demais_participantes": f"{unknown_demais:.2f}",
             "transaction_count": unknown_count,
-            "invalid_date_count": unknown_count
+            "invalid_date_count": invalid_date_count,
+            "future_date_count": future_date_count
         },
         "received_ratio": received_ratio,
         "semantic_validation": "provisional_v1",
@@ -3130,7 +3129,6 @@ class VGCPending(BaseModel):
     gralha: str
     demais_participantes: str
     transaction_count: int
-    future_date_count: int
     without_date_count: int
 
 class VGCUnknown(BaseModel):
@@ -3139,6 +3137,7 @@ class VGCUnknown(BaseModel):
     demais_participantes: str
     transaction_count: int
     invalid_date_count: int
+    future_date_count: int
 
 class ReceiptDateSources(BaseModel):
     data_recebimento_comissao: int

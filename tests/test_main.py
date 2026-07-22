@@ -1889,13 +1889,13 @@ def test_vgc_receipt_date_status_only():
     assert financials["pending"]["demais_participantes"] == "3000.00"
     assert financials["pending"]["transaction_count"] == 1
     assert financials["pending"]["without_date_count"] == 1
-    assert financials["pending"]["future_date_count"] == 0
     
     assert financials["unknown"]["total"] == "3000.00"
     assert financials["unknown"]["gralha"] == "1000.00"
     assert financials["unknown"]["demais_participantes"] == "2000.00"
     assert financials["unknown"]["transaction_count"] == 1
     assert financials["unknown"]["invalid_date_count"] == 1
+    assert financials["unknown"]["future_date_count"] == 0
 
 
 def test_vgc_receipt_proportional_allocation():
@@ -2007,11 +2007,11 @@ def test_vgc_v1_classification_comprehensive():
     assert financials["semantic_validation"] == "provisional_v1"
     
     assert financials["received"]["transaction_count"] == 6
-    assert financials["pending"]["future_date_count"] == 0
     assert financials["pending"]["without_date_count"] == 2
     assert financials["pending"]["transaction_count"] == 2
     assert financials["unknown"]["transaction_count"] == 2
-    assert financials["unknown"]["invalid_date_count"] == 2
+    assert financials["unknown"]["invalid_date_count"] == 1
+    assert financials["unknown"]["future_date_count"] == 1
     
     assert financials["receipt_date_sources"]["data_recebimento_comissao"] == 6
     assert financials["receipt_date_sources"]["data_pagamento_comissao_prevista"] == 2
@@ -3500,6 +3500,12 @@ def test_vgc_receipt_data_quality_comprehensive_closure():
     assert financials["pending_transactions_count"] == q["missing_date_count"]
     assert financials["unknown_transactions_count"] == q["invalid_date_count"] + q["future_date_count"]
     
+    # Assert pending and unknown dictionary structures
+    assert "future_date_count" not in financials["pending"]
+    assert financials["pending"]["without_date_count"] == q["missing_date_count"]
+    assert financials["unknown"]["invalid_date_count"] == q["invalid_date_count"]
+    assert financials["unknown"]["future_date_count"] == q["future_date_count"]
+    
     # Closure of status counts: received + pending + unknown == records_count
     assert financials["received_transactions_count"] + financials["pending_transactions_count"] + financials["unknown_transactions_count"] == records_count
 
@@ -3542,7 +3548,7 @@ def test_dashboard_full_endpoint_serialization_and_restrictions():
             data = res.json()
             
             # Assert cache version changed check
-            assert DASHBOARD_CACHE_VERSION == "sales-cycle-v5-vgc-data-quality"
+            assert DASHBOARD_CACHE_VERSION == "sales-cycle-v6-vgc-pending-unknown-fix"
             
             # Assert receipt_data_quality is present and serialized correctly
             financials = data.get("commission_financials")
@@ -3559,7 +3565,26 @@ def test_dashboard_full_endpoint_serialization_and_restrictions():
             # Closure of four counts
             assert q["received_date_count"] + q["missing_date_count"] + q["invalid_date_count"] + q["future_date_count"] == 4
             
+            # Assert pending dict contains only total, gralha, demais_participantes, transaction_count, without_date_count
+            pending_dict = financials.get("pending")
+            assert pending_dict is not None
+            assert "future_date_count" not in pending_dict
+            assert pending_dict["without_date_count"] == q["missing_date_count"]
+            assert pending_dict["transaction_count"] == q["missing_date_count"]
+            
+            # Assert unknown dict contains total, gralha, demais_participantes, transaction_count, invalid_date_count, future_date_count
+            unknown_dict = financials.get("unknown")
+            assert unknown_dict is not None
+            assert unknown_dict["invalid_date_count"] == q["invalid_date_count"]
+            assert unknown_dict["future_date_count"] == q["future_date_count"]
+            assert unknown_dict["transaction_count"] == unknown_dict["invalid_date_count"] + unknown_dict["future_date_count"]
+            
             # Reconciliations with transaction counts
+            assert financials["received"]["transaction_count"] == q["received_date_count"]
+            assert financials["pending"]["transaction_count"] == q["missing_date_count"]
+            assert financials["unknown"]["transaction_count"] == q["invalid_date_count"] + q["future_date_count"]
+            
+            # Closure of status counts: received + pending + unknown == records_count
             assert financials["received_transactions_count"] == q["received_date_count"]
             assert financials["pending_transactions_count"] == q["missing_date_count"]
             assert financials["unknown_transactions_count"] == q["invalid_date_count"] + q["future_date_count"]
