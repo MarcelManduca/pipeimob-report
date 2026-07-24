@@ -87,10 +87,10 @@ def test_get_catalog_returns_transactions_resource():
     assert response.status_code == 200
     data = response.json()
     assert data["api_version"] == "v2"
-    
+
     resources = data["resources"]
     assert len(resources) == 1
-    
+
     resource = resources[0]
     assert resource["id"] == "transactions"
     assert resource["name"] == "Transações"
@@ -104,11 +104,11 @@ def test_get_catalog_returns_transactions_resource():
 def test_get_catalog_contains_expected_fields():
     response = client.get("/api/catalog")
     resource = response.json()["resources"][0]
-    
+
     expected_fields = [
-        "transacao_unique_id_pipeimob", "codigo_contrato", "codigo_imovel", 
-        "etapa_atual", "data_contrato", "data_inicio_venda", "valor_contrato", 
-        "total_comissao", "comissao_imobiliaria", "agente_gestor", 
+        "transacao_unique_id_pipeimob", "codigo_contrato", "codigo_imovel",
+        "etapa_atual", "data_contrato", "data_inicio_venda", "valor_contrato",
+        "total_comissao", "comissao_imobiliaria", "agente_gestor",
         "midia_origem_compradores", "forma_pagamento", "comissionados", "clientes"
     ]
     for field in expected_fields:
@@ -117,7 +117,7 @@ def test_get_catalog_contains_expected_fields():
 def test_get_catalog_contains_expected_filters():
     response = client.get("/api/catalog")
     resource = response.json()["resources"][0]
-    
+
     expected_filters = ["data_inicio_criacao"]
     for filter_name in expected_filters:
         assert filter_name in resource["supported_filters"]
@@ -166,12 +166,12 @@ def test_get_transactions_demo_metadata_and_headers():
     response = client.get("/api/transactions")
     assert response.status_code == 200
     assert response.headers.get("X-Data-Mode") == "demo"
-    
+
     data = response.json()
     assert data["data_mode"] == "demo"
     assert data["source"] == "synthetic_mock"
     assert "generated_at" in data
-    
+
     # Check wrapped count
     payload = data["data"]
     assert payload["count"] == 60
@@ -184,7 +184,7 @@ def test_get_transactions_with_filters():
     payload = response.json()["data"]
     for tx in payload["transactions"]:
         assert "Corretor Alfa" in tx["agente_gestor"]
-        
+
     # Test period filter (data_inicio_criacao)
     response_date = client.get("/api/transactions?data_inicio_criacao=2025-01-01")
     assert response_date.status_code == 200
@@ -207,10 +207,10 @@ def test_get_dashboard_summary_metadata():
     assert response.status_code == 200
     data = response.json()
     assert data["data_mode"] == "demo"
-    
+
     # Headers in TestClient are lowercased
     assert response.headers.get("x-data-mode") == "demo"
-    
+
     payload = data["data"]
     assert payload["total_sales"] > 0
     assert payload["transaction_count"] == 60
@@ -261,7 +261,7 @@ def test_production_unconfigured_without_mode():
     # Production without mode environment variable configured
     os.environ["APP_ENV"] = "production"
     os.environ.pop("PIPEIMOB_DATA_MODE", None)
-    
+
     response = client.get("/api/health")
     assert response.status_code == 200
     data = response.json()
@@ -276,7 +276,7 @@ def test_live_without_credentials_missing_credentials():
     os.environ["PIPEIMOB_DATA_MODE"] = "live"
     os.environ.pop("PIPEIMOB_API_KEY", None)
     os.environ.pop("PIPEIMOB_SECRET_KEY", None)
-    
+
     response = client.get("/api/health")
     assert response.status_code == 200
     data = response.json()
@@ -289,7 +289,7 @@ def test_live_with_credentials_configured():
     os.environ["PIPEIMOB_DATA_MODE"] = "live"
     os.environ["PIPEIMOB_API_KEY"] = "real_key"
     os.environ["PIPEIMOB_SECRET_KEY"] = "real_secret"
-    
+
     response = client.get("/api/health")
     assert response.status_code == 200
     data = response.json()
@@ -307,7 +307,7 @@ def test_unconfigured_endpoints_return_503():
         response = client.get("/api/transactions")
         assert response.status_code == 503
         assert "Configuration pending" in response.json()["detail"]
-        
+
         response = client.get("/api/dashboard/summary")
         assert response.status_code == 503
         assert "Configuration pending" in response.json()["detail"]
@@ -319,7 +319,7 @@ def test_six_filters_appear_in_catalog():
     response = client.get("/api/catalog")
     assert response.status_code == 200
     resource = response.json()["resources"][0]
-    
+
     expected_filters = [
         "data_inicio_criacao",
         "data_fim_criacao",
@@ -333,7 +333,7 @@ def test_six_filters_appear_in_catalog():
     ]
     for filter_name in expected_filters:
         assert filter_name in resource["supported_filters"]
-        
+
     assert resource["filters_api_direct"] == [
         "data_inicio_criacao",
         "data_fim_criacao",
@@ -360,21 +360,21 @@ def test_catalog_status_states():
     os.environ["PIPEIMOB_DATA_MODE"] = "demo"
     response = client.get("/api/catalog")
     assert response.json()["resources"][0]["status"] == "implemented_pending_live_validation"
-    
+
     # 2. Live Mode (no credentials)
     os.environ["PIPEIMOB_DATA_MODE"] = "live"
     os.environ.pop("PIPEIMOB_API_KEY", None)
     os.environ.pop("PIPEIMOB_SECRET_KEY", None)
     response = client.get("/api/catalog")
     assert response.json()["resources"][0]["status"] == "implemented_pending_live_validation"
-    
+
     # 3. Unconfigured Mode (production)
     os.environ["APP_ENV"] = "production"
     os.environ.pop("PIPEIMOB_DATA_MODE", None)
     response = client.get("/api/catalog")
     assert response.json()["resources"][0]["status"] == "implemented_pending_live_validation"
     os.environ["APP_ENV"] = "development"
-    
+
     # 4. Live Mode (with credentials configured)
     os.environ["PIPEIMOB_DATA_MODE"] = "live"
     os.environ["PIPEIMOB_API_KEY"] = "fake_key"
@@ -388,7 +388,7 @@ def test_live_mode_without_credentials_returns_error():
     os.environ["PIPEIMOB_DATA_MODE"] = "live"
     os.environ.pop("PIPEIMOB_API_KEY", None)
     os.environ.pop("PIPEIMOB_SECRET_KEY", None)
-    
+
     # Must supply a direct filter so it doesn't fail on filter check first
     response = client.get("/api/transactions?data_inicio_criacao=2026-01-01")
     assert response.status_code == 503
@@ -398,7 +398,7 @@ def test_headers_credentials_are_ignored():
     os.environ["PIPEIMOB_DATA_MODE"] = "live"
     os.environ.pop("PIPEIMOB_API_KEY", None)
     os.environ.pop("PIPEIMOB_SECRET_KEY", None)
-    
+
     headers = {
         "X-API-Key": "client_supplied_key",
         "X-Secret-Key": "client_supplied_secret"
@@ -411,7 +411,7 @@ def test_live_mode_failure_does_not_return_mock():
     os.environ["PIPEIMOB_DATA_MODE"] = "live"
     os.environ["PIPEIMOB_API_KEY"] = "fake_key"
     os.environ["PIPEIMOB_SECRET_KEY"] = "fake_secret"
-    
+
     response = client.get("/api/transactions?data_inicio_criacao=2026-01-01")
     assert response.status_code == 503
     assert "Failed to authenticate" in response.json()["detail"] or "Authentication payload" in response.json()["detail"]
@@ -420,7 +420,7 @@ def test_live_mode_missing_direct_filter_returns_400():
     os.environ["PIPEIMOB_DATA_MODE"] = "live"
     os.environ["PIPEIMOB_API_KEY"] = "fake_key"
     os.environ["PIPEIMOB_SECRET_KEY"] = "fake_secret"
-    
+
     response = client.get("/api/transactions")
     assert response.status_code == 400
     assert "At least one direct filter parameter is required" in response.json()["detail"]
@@ -444,7 +444,7 @@ def test_jwt_auth_extraction_and_caching(mock_urlopen):
             "expires_in": 3600
         }
     }).encode("utf-8")
-    
+
     # Mock transactions list response with meta.pagination
     mock_txs_response = MagicMock()
     mock_txs_response.__enter__.return_value = mock_txs_response
@@ -475,21 +475,21 @@ def test_jwt_auth_extraction_and_caching(mock_urlopen):
             }
         }
     }).encode("utf-8")
-    
+
     # urlopen returns auth first, then txs
     mock_urlopen.side_effect = [mock_auth_response, mock_txs_response]
-    
+
     os.environ["PIPEIMOB_DATA_MODE"] = "live"
     os.environ["PIPEIMOB_API_KEY"] = "fake_key"
     os.environ["PIPEIMOB_SECRET_KEY"] = "fake_secret"
-    
+
     response = client.get("/api/transactions?data_inicio_criacao=2026-01-01")
     assert response.status_code == 200
     res_data = response.json()
     assert res_data["data_mode"] == "live"
     assert len(res_data["data"]["transactions"]) == 1
     assert res_data["data"]["transactions"][0]["transacao_unique_id_pipeimob"] == "tx_mock_1"
-    
+
     # Verify comissao_imobiliaria calculation
     assert res_data["data"]["transactions"][0]["comissao_imobiliaria"] == 6000.0
 
@@ -510,11 +510,11 @@ def test_401_retry_once_and_prevent_loop(mock_urlopen):
             "expires_in": 3600
         }
     }).encode("utf-8")
-    
+
     # Mock HTTP 401 error for transactions call
     from urllib.error import HTTPError
     mock_401_err = HTTPError("http://api.pipeimob.com.br/api/v2/negocios/transacoes", 401, "Unauthorized", {}, None)
-    
+
     # Mock final transactions success response with meta.pagination
     mock_txs_response = MagicMock()
     mock_txs_response.__enter__.return_value = mock_txs_response
@@ -529,13 +529,13 @@ def test_401_retry_once_and_prevent_loop(mock_urlopen):
             }
         }
     }).encode("utf-8")
-    
+
     mock_urlopen.side_effect = [mock_auth_response, mock_401_err, mock_auth_response, mock_txs_response]
-    
+
     os.environ["PIPEIMOB_DATA_MODE"] = "live"
     os.environ["PIPEIMOB_API_KEY"] = "fake_key"
     os.environ["PIPEIMOB_SECRET_KEY"] = "fake_secret"
-    
+
     response = client.get("/api/transactions?data_inicio_criacao=2026-01-01")
     assert response.status_code == 200, response.json()
     assert response.json()["data_mode"] == "live"
@@ -557,11 +557,11 @@ def test_401_retry_once_and_prevent_loop(mock_urlopen):
             "expires_in": 3600
         }
     }).encode("utf-8")
-    
+
     # Mock HTTP 401 error for transactions call
     from urllib.error import HTTPError
     mock_401_err = HTTPError("http://api.pipeimob.com.br/api/v2/negocios/transacoes", 401, "Unauthorized", {}, None)
-    
+
     # Mock final transactions success response with meta.pagination
     mock_txs_response = MagicMock()
     mock_txs_response.__enter__.return_value = mock_txs_response
@@ -583,13 +583,13 @@ def test_401_retry_once_and_prevent_loop(mock_urlopen):
             }
         }
     }).encode("utf-8")
-    
+
     mock_urlopen.side_effect = [mock_auth_response, mock_401_err, mock_auth_response, mock_txs_response]
-    
+
     os.environ["PIPEIMOB_DATA_MODE"] = "live"
     os.environ["PIPEIMOB_API_KEY"] = "fake_key"
     os.environ["PIPEIMOB_SECRET_KEY"] = "fake_secret"
-    
+
     response = client.get("/api/transactions?data_inicio_criacao=2026-01-01")
     assert response.status_code == 200, response.json()
     assert response.json()["data_mode"] == "live"
@@ -611,7 +611,7 @@ def test_data_meta_pagination_fallback(mock_urlopen):
             "expires_in": 3600
         }
     }).encode("utf-8")
-    
+
     # Mock transactions response with data.meta.pagination (nested pagination)
     mock_txs_response = MagicMock()
     mock_txs_response.__enter__.return_value = mock_txs_response
@@ -633,13 +633,13 @@ def test_data_meta_pagination_fallback(mock_urlopen):
             }
         }
     }).encode("utf-8")
-    
+
     mock_urlopen.side_effect = [mock_auth_response, mock_txs_response]
-    
+
     os.environ["PIPEIMOB_DATA_MODE"] = "live"
     os.environ["PIPEIMOB_API_KEY"] = "fake_key"
     os.environ["PIPEIMOB_SECRET_KEY"] = "fake_secret"
-    
+
     response = client.get("/api/transactions?data_inicio_criacao=2026-01-01")
     assert response.status_code == 200, response.json()
     assert response.json()["data_mode"] == "live"
@@ -648,28 +648,28 @@ def test_openapi_includes_new_endpoints_and_schemas():
     response = client.get("/openapi.json")
     assert response.status_code == 200
     openapi_data = response.json()
-    
+
     paths = openapi_data["paths"]
     assert "/api/transactions" in paths
     assert "/api/dashboard/summary" in paths
-    
+
     tx_get_params = paths["/api/transactions"]["get"].get("parameters", [])
     param_names = [p["name"].lower() for p in tx_get_params]
     assert "x-api-key" not in param_names
     assert "x-secret-key" not in param_names
-    
+
     # Verify new filters appear in Swagger parameters list
     assert "codigo_imovel" in param_names
     assert "codigo_contrato" in param_names
     assert "transacao_unique_id" in param_names
     assert "etapa_atual" in param_names
     assert "pagina" in param_names
-    
+
     # Check limit-related parameters are absent
     assert "limit" not in param_names
     assert "page_limit" not in param_names
     assert "page_size" not in param_names
-    
+
     schemas = openapi_data["components"]["schemas"]
     assert "TransactionsListResponse" in schemas
     assert "DashboardSummaryResponse" in schemas
@@ -690,7 +690,7 @@ def test_openapi_includes_new_endpoints_and_schemas():
     for path in data_endpoints:
         assert path in paths
         assert "503" in paths[path]["get"]["responses"]
-        
+
     # Verify main examples do not use demo mode as production default
     tx_schema = schemas["TransactionsListResponse"]
     assert tx_schema["properties"]["data_mode"]["example"] == "live"
@@ -723,7 +723,7 @@ def test_live_mode_only_pagina_returns_400():
     os.environ["PIPEIMOB_DATA_MODE"] = "live"
     os.environ["PIPEIMOB_API_KEY"] = "fake_key"
     os.environ["PIPEIMOB_SECRET_KEY"] = "fake_secret"
-    
+
     # Query with ONLY pagina (should fail as it doesn't satisfy direct filter requirement on its own)
     response = client.get("/api/transactions?pagina=1")
     assert response.status_code == 400
@@ -746,7 +746,7 @@ def test_live_mode_pagina_with_direct_filter_is_allowed(mock_urlopen):
             "expires_in": 3600
         }
     }).encode("utf-8")
-    
+
     # Mock transactions list response
     mock_txs_response = MagicMock()
     mock_txs_response.__enter__.return_value = mock_txs_response
@@ -768,13 +768,13 @@ def test_live_mode_pagina_with_direct_filter_is_allowed(mock_urlopen):
             }
         }
     }).encode("utf-8")
-    
+
     mock_urlopen.side_effect = [mock_auth_response, mock_txs_response]
-    
+
     os.environ["PIPEIMOB_DATA_MODE"] = "live"
     os.environ["PIPEIMOB_API_KEY"] = "fake_key"
     os.environ["PIPEIMOB_SECRET_KEY"] = "fake_secret"
-    
+
     # Query with direct filter AND pagina
     response = client.get("/api/transactions?data_inicio_ccv=2026-07-01&pagina=1")
     assert response.status_code == 200
@@ -784,7 +784,7 @@ def test_public_endpoints_accessible_without_token():
     # GET /api/health is public
     res_health = unauth_client.get("/api/health")
     assert res_health.status_code == 200
-    
+
     # GET /api/catalog is public
     res_catalog = unauth_client.get("/api/catalog")
     assert res_catalog.status_code == 200
@@ -803,7 +803,7 @@ def test_protected_endpoints_auth_failures():
         "/api/dashboard/commissions",
         "/api/dashboard/timeline"
     ]
-    
+
     # 1. Missing Authorization header -> HTTP 401 (Authentication required)
     for ep in endpoints:
         res = unauth_client.get(ep)
@@ -837,11 +837,11 @@ def test_user_authorization_allowlists():
     # 1. User email/domain outside allowlist -> HTTP 403 Forbidden
     unauthorized_token = create_mock_jwt(email="hacker@gmail.com")
     unauth_user_client = TestClient(app, headers={"Authorization": f"Bearer {unauthorized_token}"})
-    
+
     # Temporarily set allowed env variables to gralhaimoveis.com.br only (which doesn't match gmail.com)
     os.environ["ALLOWED_EMAIL_DOMAINS"] = "gralhaimoveis.com.br"
     os.environ["ALLOWED_USER_EMAILS"] = ""
-    
+
     res = unauth_user_client.get("/api/dashboard/summary")
     assert res.status_code == 403
     body = res.json()
@@ -865,7 +865,7 @@ def test_user_authorization_allowlists():
 def test_invalid_header_rejection():
     os.environ["PIPEIMOB_DATA_MODE"] = "demo"
     unauth_client = TestClient(app)
-    
+
     # Passing unmapped headers -> HTTP 401 Unauthorized now
     res = unauth_client.get("/api/dashboard/summary", headers={"X-Header-Test": "some_value"})
     assert res.status_code == 401
@@ -875,21 +875,21 @@ def test_privacy_compliance_on_public_responses():
     # Set demo data mode to use mock transactions
     os.environ["PIPEIMOB_DATA_MODE"] = "demo"
     os.environ["EXPOSE_RAW_TRANSACTIONS"] = "false"
-    
+
     # 1. Fetch transactions list
     response = client.get("/api/transactions")
     assert response.status_code == 200
     data = response.json()
-    
+
     # Assert that EXPOSE_RAW_TRANSACTIONS defaults to false and payload is sanitized
     assert os.getenv("EXPOSE_RAW_TRANSACTIONS", "false").lower() == "false"
-    
+
     # Let's perform recursive checks on all keys and values in the response JSON
     sensitive_keys = {
-        "cpf", "cnpj", "celular", "email", "link_acesso", "documentos", 
+        "cpf", "cnpj", "celular", "email", "link_acesso", "documentos",
         "cobrancas_bancarias", "url", "token", "api_key", "secret_key"
     }
-    
+
     def verify_no_sensitive_data(node):
         if isinstance(node, dict):
             for k, v in node.items():
@@ -909,7 +909,7 @@ def test_privacy_compliance_on_public_responses():
                 assert sensitive not in val_lower, f"Sensitive substring '{sensitive}' found in string value: {node}"
 
     verify_no_sensitive_data(data)
-    
+
     # 2. Fetch single transaction details
     tx_id = data["data"]["transactions"][0]["transacao_unique_id_pipeimob"]
     detail_res = client.get(f"/api/transactions/{tx_id}")
@@ -951,21 +951,21 @@ def test_expose_raw_transactions_flag():
 
 def test_supabase_jwt_validation_claims_and_unsafe_jwks():
     os.environ["PIPEIMOB_DATA_MODE"] = "demo"
-    
+
     # 1. Incorrect Issuer (expected: https://mock.supabase.co/auth/v1) -> HTTP 401
     bad_iss_token = create_mock_jwt(iss="https://hacker-issuer.supabase.co/auth/v1")
     bad_iss_client = TestClient(app, headers={"Authorization": f"Bearer {bad_iss_token}"})
     res = bad_iss_client.get("/api/dashboard/summary")
     assert res.status_code == 401
     assert "Invalid or expired access token." in res.json()["detail"]
-    
+
     # 2. Incorrect Audience (expected: authenticated) -> HTTP 401
     bad_aud_token = create_mock_jwt(aud="hacker-audience")
     bad_aud_client = TestClient(app, headers={"Authorization": f"Bearer {bad_aud_token}"})
     res = bad_aud_client.get("/api/dashboard/summary")
     assert res.status_code == 401
     assert "Invalid or expired access token." in res.json()["detail"]
-    
+
     # 3. JWKS empty / unavailable -> HTTP 503 Service Unavailable
     os.environ["SUPABASE_JWKS_URL"] = "https://mock.supabase.co/auth/v1/.well-known/jwks.json"
     try:
@@ -1008,11 +1008,11 @@ def test_disallowed_algorithm_returns_401(mock_get_jwk_client):
         mock_key.key = "dummy_public_key"
         mock_jwk_client.get_signing_key_from_jwt.return_value = mock_key
         mock_get_jwk_client.return_value = mock_jwk_client
-        
+
         # Create token signed with HS256
         hs256_token = create_mock_jwt(alg="HS256")
         hs256_client = TestClient(app, headers={"Authorization": f"Bearer {hs256_token}"})
-        
+
         res = hs256_client.get("/api/dashboard/summary")
         assert res.status_code == 401
         assert "Invalid or expired access token." in res.json()["detail"]
@@ -1043,7 +1043,7 @@ def test_antifallback_api_exception_does_not_silently_fallback_to_mock():
     os.environ["PIPEIMOB_DATA_MODE"] = "live"
     os.environ["PIPEIMOB_API_KEY"] = "fake_key"
     os.environ["PIPEIMOB_SECRET_KEY"] = "fake_secret"
-    
+
     with patch("urllib.request.urlopen", side_effect=Exception("API connection failed")):
         response = client.get("/api/transactions?data_inicio_criacao=2026-01-01")
         assert response.status_code == 503
@@ -1055,12 +1055,12 @@ def test_antifallback_production_mode_imports_mock():
     from main import validate_dataset_origin
     os.environ["APP_ENV"] = "production"
     os.environ["PIPEIMOB_DATA_MODE"] = "live"
-    
+
     with pytest.raises(HTTPException) as exc_info:
         validate_dataset_origin("demo", "synthetic_mock", [])
     assert exc_info.value.status_code == 500
     assert "Critical failure: Live mode in production cannot use mock data" in exc_info.value.detail
-    
+
     os.environ["APP_ENV"] = "development"
 
 @patch("main.get_jwk_client")
@@ -1076,7 +1076,7 @@ def test_jwt_kid_desconhecido_retorna_401(mock_get_jwk_client):
         mock_client.get_jwk_set.return_value = mock_jwk_set
         mock_client.get_signing_key_from_jwt.side_effect = Exception("Signing key not found")
         mock_get_jwk_client.return_value = mock_client
-        
+
         token = create_mock_jwt()
         test_client = TestClient(app, headers={"Authorization": f"Bearer {token}"})
         res = test_client.get("/api/dashboard/summary")
@@ -1108,7 +1108,7 @@ def test_jwt_assinatura_invalida_retorna_401(mock_get_jwk_client):
         mock_client.get_jwk_set.return_value = mock_jwk_set
         mock_client.get_signing_key_from_jwt.return_value = mock_key
         mock_get_jwk_client.return_value = mock_client
-        
+
         token = create_mock_jwt()
         test_client = TestClient(app, headers={"Authorization": f"Bearer {token}"})
         res = test_client.get("/api/dashboard/summary")
@@ -1125,7 +1125,7 @@ def test_jwks_offline_retorna_503(mock_get_jwk_client):
         mock_client = MagicMock()
         mock_client.get_jwk_set.side_effect = PyJWKClientConnectionError("Connection timed out")
         mock_get_jwk_client.return_value = mock_client
-        
+
         token = create_mock_jwt()
         test_client = TestClient(app, headers={"Authorization": f"Bearer {token}"})
         res = test_client.get("/api/dashboard/summary")
@@ -1143,7 +1143,7 @@ def test_jwks_vazio_retorna_503(mock_get_jwk_client):
         mock_jwk_set.keys = []
         mock_client.get_jwk_set.return_value = mock_jwk_set
         mock_get_jwk_client.return_value = mock_client
-        
+
         token = create_mock_jwt()
         test_client = TestClient(app, headers={"Authorization": f"Bearer {token}"})
         res = test_client.get("/api/dashboard/summary")
@@ -1167,7 +1167,7 @@ def test_jwt_valido_retorna_200(mock_jwt_decode, mock_get_jwk_client):
         mock_client.get_jwk_set.return_value = mock_jwk_set
         mock_client.get_signing_key_from_jwt.return_value = mock_key
         mock_get_jwk_client.return_value = mock_client
-        
+
         mock_jwt_decode.return_value = {
             "email": "corretor@gralhaimoveis.com.br",
             "sub": "mock_user_123",
@@ -1176,7 +1176,7 @@ def test_jwt_valido_retorna_200(mock_jwt_decode, mock_get_jwk_client):
             "iss": "https://mock.supabase.co/auth/v1",
             "exp": time.time() + 3600
         }
-        
+
         token = create_mock_jwt()
         test_client = TestClient(app, headers={"Authorization": f"Bearer {token}"})
         res = test_client.get("/api/dashboard/summary")
@@ -1211,7 +1211,7 @@ def test_sequential_pagination_10_pages_and_decimal_precision():
     # Page 10 has 4 transactions.
     # Total = 229.
     pages = []
-    
+
     # Let's create transactions. To check Decimal precision, let's make their values fractional.
     # Page 1 has values that sum up with complex fractional parts:
     # 25 transactions of 1000000.01 each.
@@ -1233,7 +1233,7 @@ def test_sequential_pagination_10_pages_and_decimal_precision():
                 "data_contrato": "2026-07-02"
             })
             tx_index += 1
-        
+
         pages.append({
             "success": True,
             "data": {
@@ -1263,7 +1263,7 @@ def test_sequential_pagination_10_pages_and_decimal_precision():
                 }
             }).encode("utf-8")
             return res
-            
+
         res.read.return_value = json.dumps(pages[call_count]).encode("utf-8")
         call_count += 1
         return res
@@ -1276,7 +1276,7 @@ def test_sequential_pagination_10_pages_and_decimal_precision():
         assert data["data_mode"] == "live"
         assert data["pages_fetched"] == 10
         assert data["transaction_count"] == 229
-        
+
         # Checking Decimal precision sum:
         # VGV = 229 * 1000000.01 = 229000002.29
         # commissions = 229 * 50000.01 = 11450002.29
@@ -1325,7 +1325,7 @@ def test_sequential_pagination_error_aborts_entirely():
                 }
             }).encode("utf-8")
             return res
-            
+
         if call_count == 0:
             call_count += 1
             res.read.return_value = json.dumps(page1).encode("utf-8")
@@ -1389,7 +1389,7 @@ def test_sequential_pagination_deduplication():
                 }
             }).encode("utf-8")
             return res
-            
+
         payload = page1 if call_count == 0 else page2
         call_count += 1
         res.read.return_value = json.dumps(payload).encode("utf-8")
@@ -1406,7 +1406,7 @@ def test_sequential_pagination_deduplication():
 
 def test_timeline_date_parsing_and_priority():
     from main import extract_transaction_date, parse_date_to_year_month, compute_dashboard_aggregates
-    
+
     # 1. Test priority
     tx1 = {
         "data_assinatura_ccv": "2026-01-01",
@@ -1414,13 +1414,13 @@ def test_timeline_date_parsing_and_priority():
         "data_contrato": "2026-03-03"
     }
     assert extract_transaction_date(tx1) == "2026-01-01"
-    
+
     tx2 = {
         "data_contrato": "2026-03-03",
         "data_criacao": "2026-04-04"
     }
     assert extract_transaction_date(tx2) == "2026-03-03"
-    
+
     # Nested check
     tx3 = {
         "nested": {
@@ -1428,18 +1428,18 @@ def test_timeline_date_parsing_and_priority():
         }
     }
     assert extract_transaction_date(tx3) == "2026-02-02"
-    
+
     # 2. Test date formats
     assert parse_date_to_year_month("2026-01-02") == (2026, 1)
     assert parse_date_to_year_month("2026-02-03T12:00:00") == (2026, 2)
     assert parse_date_to_year_month("2026-03-04T12:00:00Z") == (2026, 3)
     assert parse_date_to_year_month("2026-04-05T12:00:00.123Z") == (2026, 4)
     assert parse_date_to_year_month("06/07/2026") == (2026, 7)
-    
+
     # Invalid formats should return None
     assert parse_date_to_year_month("invalid-date") is None
     assert parse_date_to_year_month(None) is None
-    
+
     # 3. Test timeline prepopulation, Decimal precision, empty month, and reconciliation
     filtered_txs = [
         {"data_assinatura_ccv": "2026-01-10", "valor_contrato": 100000.05, "total_comissao": 5000.05},
@@ -1451,41 +1451,41 @@ def test_timeline_date_parsing_and_priority():
         # Missing date transaction (should be unclassified)
         {"valor_contrato": 40000.0, "total_comissao": 2000.0}
     ]
-    
+
     res = compute_dashboard_aggregates(
         filtered_txs,
         data_inicio_ccv="2026-01-01",
         data_fim_ccv="2026-06-30"
     )
-    
+
     summary = res["summary"]
     timeline = res["timeline"]
     unclassified = res["unclassified"]
     reconciliation = res["reconciliation"]
-    
+
     assert summary["transaction_count"] == 6
     assert summary["total_sales"] == 840000.50
     assert summary["total_commissions"] == 42000.50
-    
+
     assert len(timeline) == 6
     months = [t["month"] for t in timeline]
     assert months == ["2026-01", "2026-02", "2026-03", "2026-04", "2026-05", "2026-06"]
-    
+
     # Verify that unclassified transactions are NOT assigned to Jan/26 (first month)
     # January should have exactly 1 transaction (the 100000.05 sales transaction)
     assert timeline[0]["transaction_count"] == 1
     assert timeline[0]["total_sales"] == "100000.05"
     assert timeline[0]["total_commissions"] == "5000.05"
-    
+
     # Prepopulated empty months should be 0
     assert timeline[2]["transaction_count"] == 0
     assert timeline[2]["total_sales"] == "0.00"
     assert timeline[2]["total_commissions"] == "0.00"
-    
+
     assert timeline[4]["transaction_count"] == 0
     assert timeline[4]["total_sales"] == "0.00"
     assert timeline[4]["total_commissions"] == "0.00"
-    
+
     # Check unclassified values
     # sales: 50000.0 (invalid) + 40000.0 (missing) = 90000.0
     # commissions: 2500.0 + 2000.0 = 4500.0
@@ -1494,22 +1494,22 @@ def test_timeline_date_parsing_and_priority():
     assert unclassified["total_commissions"] == "4500.00"
     assert unclassified["missing_date_count"] == 1
     assert unclassified["invalid_date_count"] == 1
-    
+
     # Check reconciliation values
     # rule: timeline totals + unclassified totals = summary totals
     timeline_count_sum = sum(t["transaction_count"] for t in timeline)
     timeline_sales_sum = sum(float(t["total_sales"]) for t in timeline)
     timeline_comm_sum = sum(float(t["total_commissions"]) for t in timeline)
-    
+
     assert timeline_count_sum + unclassified["transaction_count"] == summary["transaction_count"]
     assert round(timeline_sales_sum + float(unclassified["total_sales"]), 2) == summary["total_sales"]
     assert round(timeline_comm_sum + float(unclassified["total_commissions"]), 2) == summary["total_commissions"]
-    
+
     assert reconciliation["is_reconciled"] is True
     assert reconciliation["summary_transaction_count"] == 6
     assert reconciliation["timeline_transaction_count"] == 4
     assert reconciliation["unclassified_transaction_count"] == 2
-    
+
     # 4. Test when all dates are valid
     valid_txs = [
         {"data_assinatura_ccv": "2026-01-10", "valor_contrato": 100000.0, "total_comissao": 5000.0},
@@ -1525,7 +1525,7 @@ def test_timeline_date_parsing_and_priority():
     assert res_valid["reconciliation"]["summary_transaction_count"] == 2
     assert res_valid["reconciliation"]["timeline_transaction_count"] == 2
     assert res_valid["reconciliation"]["unclassified_transaction_count"] == 0
-    
+
     for t in timeline:
         assert "comprador" not in t
         assert "cliente" not in t
@@ -1537,7 +1537,7 @@ def test_timeline_date_parsing_and_priority():
 
 def test_sanitize_transaction_preserves_operational_fields():
     from main import sanitize_transaction
-    
+
     raw_tx = {
         "transacao_unique_id_pipeimob": "123",
         "codigo_contrato": "CON-123",
@@ -1568,9 +1568,9 @@ def test_sanitize_transaction_preserves_operational_fields():
             {"nome": "Cliente Privado", "papel": "Comprador"}
         ]
     }
-    
+
     sanitized = sanitize_transaction(raw_tx)
-    
+
     assert sanitized["transacao_unique_id_pipeimob"] == "123"
     assert sanitized["codigo_contrato"] == "CON-123"
     assert sanitized["codigo_imovel"] == "IMO-123"
@@ -1587,10 +1587,10 @@ def test_sanitize_transaction_preserves_operational_fields():
     assert sanitized["etapa_atual"] == "Fechamento"
     assert sanitized["midia_origem_compradores"] == "Portal Imobiliário"
     assert sanitized["agente_gestor"] == "Eduardo Nascimento"
-    
+
     assert sanitized["compradores"] == 1
     assert sanitized["vendedores"] == 1
-    
+
     assert "cpf_cliente" not in sanitized
     assert "email_cliente" not in sanitized
     assert "celular_cliente" not in sanitized
@@ -1599,13 +1599,13 @@ def test_sanitize_transaction_preserves_operational_fields():
 
 def test_dashboard_full_contract_schema_and_debug_metrics_behavior():
     os.environ["PIPEIMOB_DATA_MODE"] = "demo"
-    
+
     # 1. Test with ENABLE_SAFE_DEBUG_METRICS=false (default/unset)
     os.environ["ENABLE_SAFE_DEBUG_METRICS"] = "false"
     response = client.get("/api/dashboard/full?data_inicio_ccv=2026-01-01&data_fim_ccv=2026-06-30")
     assert response.status_code == 200
     data = response.json()
-    
+
     assert "data_mode" in data
     assert "source" in data
     assert "period" in data
@@ -1618,15 +1618,15 @@ def test_dashboard_full_contract_schema_and_debug_metrics_behavior():
     assert "managers" in data
     assert "payments" in data
     assert "commissions" in data
-    
+
     assert data.get("schema_version") == "1.0"
     assert "generated_at" in data
     assert "filters_applied" in data
     assert data["filters_applied"].get("data_inicio_ccv") == "2026-01-01"
     assert data["filters_applied"].get("data_fim_ccv") == "2026-06-30"
-    
+
     assert data.get("debug_metrics") is None
-    
+
     # 2. Test with ENABLE_SAFE_DEBUG_METRICS=true
     os.environ["ENABLE_SAFE_DEBUG_METRICS"] = "true"
     response_debug = client.get("/api/dashboard/full?data_inicio_ccv=2026-01-01&data_fim_ccv=2026-06-30")
@@ -1634,7 +1634,7 @@ def test_dashboard_full_contract_schema_and_debug_metrics_behavior():
     data_debug = response_debug.json()
     assert data_debug.get("debug_metrics") is not None
     assert "priority_keys_presence" in data_debug["debug_metrics"]
-    
+
     resp_str = json.dumps(data_debug)
     for pii_term in ["cpf", "cnpj", "celular", "email", "documentos", "link_acesso"]:
         assert pii_term not in resp_str.lower() or "count" in pii_term or "unclassified" in pii_term or "reconciliation" in pii_term or "debug_metrics" in pii_term
@@ -1642,28 +1642,28 @@ def test_dashboard_full_contract_schema_and_debug_metrics_behavior():
 
 def test_timeline_equal_summary_when_all_dates_valid():
     from main import compute_dashboard_aggregates
-    
+
     valid_txs = [
         {"data_assinatura_ccv": "2026-01-10", "valor_contrato": 100000.0, "total_comissao": 5000.0},
         {"data_ccv": "2026-02-15", "valor_contrato": 200000.0, "total_comissao": 10000.0},
         {"data_contrato": "2026-03-20", "valor_contrato": 300000.0, "total_comissao": 15000.0}
     ]
-    
+
     res = compute_dashboard_aggregates(valid_txs, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-03-31")
-    
+
     summary = res["summary"]
     timeline = res["timeline"]
     unclassified = res["unclassified"]
-    
+
     assert unclassified["transaction_count"] == 0
     assert unclassified["out_of_range_count"] == 0
     assert unclassified["missing_date_count"] == 0
     assert unclassified["invalid_date_count"] == 0
-    
+
     timeline_count_sum = sum(t["transaction_count"] for t in timeline)
     timeline_sales_sum = sum(float(t["total_sales"]) for t in timeline)
     timeline_comm_sum = sum(float(t["total_commissions"]) for t in timeline)
-    
+
     assert timeline_count_sum == summary["transaction_count"]
     assert abs(timeline_sales_sum - summary["total_sales"]) < 0.01
     assert abs(timeline_comm_sum - summary["total_commissions"]) < 0.01
@@ -1671,20 +1671,20 @@ def test_timeline_equal_summary_when_all_dates_valid():
 
 def test_no_artificial_boundary_month_assignment():
     from main import compute_dashboard_aggregates
-    
+
     txs = [
         {"data_assinatura_ccv": "2026-04-10", "valor_contrato": 500000.0, "total_comissao": 25000.0},
         {"data_assinatura_ccv": "2026-01-15", "valor_contrato": 100000.0, "total_comissao": 5000.0},
     ]
-    
+
     res = compute_dashboard_aggregates(txs, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-03-31")
-    
+
     timeline = res["timeline"]
     unclassified = res["unclassified"]
-    
+
     assert timeline[0]["transaction_count"] == 1
     assert timeline[2]["transaction_count"] == 0
-    
+
     assert unclassified["transaction_count"] == 1
     assert unclassified["out_of_range_count"] == 1
 
@@ -1693,9 +1693,9 @@ from unittest.mock import patch, MagicMock
 
 def test_live_pagination_229_records():
     from main import fetch_all_pipeimob_transactions
-    
+
     responses = []
-    
+
     for p in range(1, 10):
         txs = []
         for i in range(25):
@@ -1718,7 +1718,7 @@ def test_live_pagination_229_records():
                 }
             }
         })
-        
+
     txs_10 = []
     for i in range(4):
         txs_10.append({
@@ -1740,10 +1740,10 @@ def test_live_pagination_229_records():
             }
         }
     })
-    
+
     with patch("urllib.request.urlopen") as mock_urlopen, \
          patch("main.get_auth_token", return_value="mock_access_token"):
-         
+
         mock_res_objects = []
         for r in responses:
             mock_res = MagicMock()
@@ -1751,22 +1751,22 @@ def test_live_pagination_229_records():
             mock_res.read.return_value = json.dumps(r).encode("utf-8")
             mock_res.getcode.return_value = 200
             mock_res_objects.append(mock_res)
-            
+
         mock_urlopen.side_effect = mock_res_objects
-        
+
         txs, pages = fetch_all_pipeimob_transactions(
             api_key="mock_key",
             api_secret="mock_secret",
             data_inicio_ccv="2026-01-01",
             data_fim_ccv="2026-06-30"
         )
-        
+
         assert len(txs) == 229
         assert pages == 10
-        
+
         from main import compute_dashboard_aggregates
         aggregates = compute_dashboard_aggregates(txs, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
-        
+
         summary = aggregates["summary"]
         assert summary["transaction_count"] == 229
         assert float(summary["total_sales"]) == 321435117.89
@@ -1775,7 +1775,7 @@ def test_live_pagination_229_records():
 
 def test_vgc_commission_composition_canonical():
     from main import compute_dashboard_aggregates
-    
+
     txs = [
         {
             "total_comissao": 10000.0,
@@ -1794,7 +1794,7 @@ def test_vgc_commission_composition_canonical():
     assert financials["composition"]["gralha"] == "5000.00"
     assert financials["composition"]["demais_participantes"] == "5000.00"
     assert financials["composition"]["reconciled"] is True
-    
+
     txs_empty = [
         {
             "total_comissao": 0.0,
@@ -1806,7 +1806,7 @@ def test_vgc_commission_composition_canonical():
     assert res_empty["commission_financials"]["vgc_total"] == "0.00"
     assert res_empty["commission_financials"]["composition"]["gralha"] == "0.00"
     assert res_empty["commission_financials"]["composition"]["demais_participantes"] == "0.00"
-    
+
     txs_invalid_val = [
         {
             "total_comissao": 5000.0,
@@ -1824,7 +1824,7 @@ def test_vgc_commission_composition_canonical():
 
 def test_vgc_reconciliation_integrity():
     from main import compute_dashboard_aggregates
-    
+
     txs_inconsistent = [
         {
             "total_comissao": 10000.0,
@@ -1843,7 +1843,7 @@ def test_vgc_reconciliation_integrity():
 
 def test_vgc_receipt_date_status_only():
     from main import compute_dashboard_aggregates
-    
+
     txs = [
         {
             "total_comissao": 10000.0,
@@ -1873,23 +1873,23 @@ def test_vgc_receipt_date_status_only():
             "data_recebimento_comissao": "not-a-valid-date" # Invalid date -> unknown_invalid_date
         }
     ]
-    
+
     res = compute_dashboard_aggregates(txs, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
     financials = res["commission_financials"]
     assert financials["calculation_method"] == "registered_receipt_date_v1"
     assert financials["allocation_method"] == "status_only"
-    
+
     assert financials["received"]["total"] == "10000.00"
     assert financials["received"]["gralha"] == "4000.00"
     assert financials["received"]["demais_participantes"] == "6000.00"
     assert financials["received"]["transaction_count"] == 1
-    
+
     assert financials["pending"]["total"] == "5000.00"
     assert financials["pending"]["gralha"] == "2000.00"
     assert financials["pending"]["demais_participantes"] == "3000.00"
     assert financials["pending"]["transaction_count"] == 1
     assert financials["pending"]["without_date_count"] == 1
-    
+
     assert financials["unknown"]["total"] == "3000.00"
     assert financials["unknown"]["gralha"] == "1000.00"
     assert financials["unknown"]["demais_participantes"] == "2000.00"
@@ -1900,7 +1900,7 @@ def test_vgc_receipt_date_status_only():
 
 def test_vgc_receipt_proportional_allocation():
     from main import compute_dashboard_aggregates
-    
+
     txs = [
         {
             "total_comissao": 10000.0,
@@ -1912,12 +1912,12 @@ def test_vgc_receipt_proportional_allocation():
             "valor_recebido": 3000.0 # Under V1, we only classify by date. No date -> pending_no_date
         }
     ]
-    
+
     res = compute_dashboard_aggregates(txs, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
     financials = res["commission_financials"]
     assert financials["calculation_method"] == "registered_receipt_date_v1"
     assert financials["allocation_method"] == "status_only"
-    
+
     assert financials["received"]["total"] == "0.00"
     assert financials["pending"]["total"] == "10000.00"
     assert financials["pending"]["without_date_count"] == 1
@@ -1927,13 +1927,13 @@ def test_vgc_v1_classification_comprehensive():
     from main import compute_dashboard_aggregates
     from zoneinfo import ZoneInfo
     from datetime import datetime, timedelta
-    
+
     sp_tz = ZoneInfo("America/Sao_Paulo")
     now_sp = datetime.now(sp_tz)
     today_str = now_sp.strftime("%Y-%m-%d")
     yesterday_str = (now_sp - timedelta(days=1)).strftime("%Y-%m-%d")
     tomorrow_str = (now_sp + timedelta(days=1)).strftime("%Y-%m-%d")
-    
+
     txs = [
         # Today's date -> received
         {
@@ -1998,31 +1998,31 @@ def test_vgc_v1_classification_comprehensive():
             "data_pagamento_comissao_prevista": yesterday_str
         }
     ]
-    
+
     res = compute_dashboard_aggregates(txs, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
     financials = res["commission_financials"]
-    
+
     assert financials["as_of_date"] == today_str
     assert financials["timezone"] == "America/Sao_Paulo"
     assert financials["semantic_validation"] == "provisional_v1"
-    
+
     assert financials["received"]["transaction_count"] == 6
     assert financials["pending"]["without_date_count"] == 2
     assert financials["pending"]["transaction_count"] == 2
     assert financials["unknown"]["transaction_count"] == 2
     assert financials["unknown"]["invalid_date_count"] == 1
     assert financials["unknown"]["future_date_count"] == 1
-    
+
     assert financials["receipt_date_sources"]["data_recebimento_comissao"] == 6
     assert financials["receipt_date_sources"]["data_pagamento_comissao_prevista"] == 2
     assert financials["receipt_date_sources"]["missing"] == 2
-    
+
     assert financials["composition"]["reconciled"] is True
 
 
 def test_sales_cycle_comprehensive():
     from main import compute_dashboard_aggregates
-    
+
     txs = [
         # captação e assinatura no mesmo dia (0 dias) -> bucket 0_30_days
         {
@@ -2115,47 +2115,47 @@ def test_sales_cycle_comprehensive():
             "data_assinatura_ccv": "2026-01-20T15:30:00Z"  # 10 dias -> bucket 0_30_days
         }
     ]
-    
+
     res = compute_dashboard_aggregates(txs, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
     sc = res["sales_cycle"]
-    
+
     assert sc["period_basis"] == "ccv"
     assert sc["start_field"] == "data_captacao"
     assert sc["end_field"] == "data_assinatura_ccv"
     assert sc["calculation_unit"] == "days"
-    
+
     # Excluded counts assertions
     assert sc["excluded"]["missing_capture_date_count"] == 1
     assert sc["excluded"]["missing_signature_date_count"] == 1
     assert sc["excluded"]["invalid_date_count"] == 1
     assert sc["excluded"]["negative_duration_count"] == 1
-    
+
     # 18 total transactions, 4 excluded -> 14 valid
     assert sc["transaction_count"] == 18
     assert sc["valid_transaction_count"] == 14
-    
+
     # Durations are:
     # 0, 1, 30, 31, 60, 61, 90, 91, 180, 181, 365, 366, 5, 10
     # Sorted: [0, 1, 5, 10, 30, 31, 60, 61, 90, 91, 180, 181, 365, 366]
     # Sum: 0+1+5+10+30+31+60+61+90+91+180+181+365+366 = 1471
     # Average: 1471 / 14 = 105.071... -> 105.1
     assert sc["average_days"] == 105.1
-    
+
     # Mediana (even count N=14): idx = 0.5 * 13 = 6.5 -> low=6 (60), high=7 (61) -> 60.5
     assert sc["median_days"] == 60.5
-    
+
     # p25: idx = 0.25 * 13 = 3.25 -> low=3 (10), high=4 (30) -> 10 + 0.25 * 20 = 15.0
     assert sc["p25_days"] == 15.0
-    
+
     # p75: idx = 0.75 * 13 = 9.75 -> low=9 (91), high=10 (180) -> 91 + 0.75 * 89 = 157.75 -> 157.8
     assert sc["p75_days"] == 157.8
-    
+
     # p90: idx = 0.90 * 13 = 11.7 -> low=11 (181), high=12 (365) -> 181 + 0.7 * 184 = 309.8
     assert sc["p90_days"] == 309.8
-    
+
     assert sc["minimum_days"] == 0
     assert sc["maximum_days"] == 366
-    
+
     # Buckets count:
     # 0_30_days: [0, 1, 5, 10, 30] -> 5
     # 31_60_days: [31, 60] -> 2
@@ -2170,10 +2170,10 @@ def test_sales_cycle_comprehensive():
     assert sc["buckets"][3]["count"] == 2
     assert sc["buckets"][4]["count"] == 2
     assert sc["buckets"][5]["count"] == 1
-    
+
     # valid sum bucket count check
     assert sum(b["count"] for b in sc["buckets"]) == 14
-    
+
     # within counts
     # within 30: 5
     # within 60: 7
@@ -2182,10 +2182,10 @@ def test_sales_cycle_comprehensive():
     assert sc["within_60_days_count"] == 7
     assert sc["within_90_days_count"] == 9
     assert sc["within_90_days_ratio"] == round(9 / 14, 4)
-    
+
     # within 90 counts matches first three buckets sum check
     assert sc["within_90_days_count"] == (sc["buckets"][0]["count"] + sc["buckets"][1]["count"] + sc["buckets"][2]["count"])
-    
+
     # Quantity reconciliations check
     assert (
         sc["valid_transaction_count"] +
@@ -2194,7 +2194,7 @@ def test_sales_cycle_comprehensive():
         sc["excluded"]["invalid_date_count"] +
         sc["excluded"]["negative_duration_count"]
     ) == sc["transaction_count"]
-    
+
     # Check no PII leakage in payload
     keys_allowed = {
         "period_basis", "start_field", "end_field", "calculation_unit",
@@ -2211,7 +2211,7 @@ def test_sales_cycle_comprehensive():
 def test_dashboard_full_endpoint_sales_cycle(mock_load):
     from unittest.mock import patch
     from main import app
-    
+
     # Set mock dataset
     mock_load.return_value = (
         "demo",
@@ -2229,7 +2229,7 @@ def test_dashboard_full_endpoint_sales_cycle(mock_load):
         1,
         "miss"
     )
-    
+
     # Authenticate using mock JWT token
     try:
         test_client = TestClient(app, headers={"Authorization": f"Bearer {mock_token}"})
@@ -2254,7 +2254,7 @@ def test_dashboard_full_endpoint_sales_cycle(mock_load):
 
 def test_sales_cycle_extremes_comprehensive():
     from main import compute_dashboard_aggregates
-    
+
     # Test case 1: general check of fastest and longest sale, days=0, PII sanitization
     txs = [
         # Fastest sale: 0 days
@@ -2290,14 +2290,14 @@ def test_sales_cycle_extremes_comprehensive():
             "transacao_unique_id_pipeimob": "uid-ex"
         }
     ]
-    
+
     res = compute_dashboard_aggregates(txs, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
     sc = res["sales_cycle"]
-    
+
     assert sc["valid_transaction_count"] == 3
     assert sc["minimum_days"] == 0
     assert sc["maximum_days"] == 100
-    
+
     # Verify fastest sale properties
     assert sc["fastest_sale"] is not None
     assert sc["fastest_sale"]["days"] == 0
@@ -2305,7 +2305,7 @@ def test_sales_cycle_extremes_comprehensive():
     assert sc["fastest_sale"]["deal_title"] == "Negócio Alfa"
     assert sc["fastest_sale"]["days"] == sc["minimum_days"]
     assert set(sc["fastest_sale"].keys()) == {"days", "property_code", "deal_title"}
-    
+
     # Verify longest sale properties & sanitization of email/CNPJ
     assert sc["longest_sale"] is not None
     assert sc["longest_sale"]["days"] == 100
@@ -2346,15 +2346,15 @@ def test_sales_cycle_extremes_comprehensive():
             "transacao_unique_id_pipeimob": None
         }
     ]
-    
+
     res_tie = compute_dashboard_aggregates(txs_tie, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
     sc_tie = res_tie["sales_cycle"]
-    
+
     # Fastest tie-breaker:
     assert sc_tie["fastest_sale"]["days"] == 5
     assert sc_tie["fastest_sale"]["property_code"] == "IMO-TIE-C"
     assert sc_tie["fastest_sale"]["deal_title"] == "Negócio C"
-    
+
     # Test case 3: empty strings in code/title
     txs_empty = [
         {
@@ -2369,7 +2369,7 @@ def test_sales_cycle_extremes_comprehensive():
     sc_empty = res_empty["sales_cycle"]
     assert sc_empty["fastest_sale"]["property_code"] is None
     assert sc_empty["fastest_sale"]["deal_title"] is None
-    
+
     # Test case 4: no valid transactions
     res_none = compute_dashboard_aggregates([], data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
     assert res_none["sales_cycle"]["fastest_sale"] is None
@@ -2382,47 +2382,47 @@ def test_parse_official_team_groups_scenarios(monkeypatch):
     status, configured, mapping, teams = parse_official_team_groups()
     assert status == "missing"
     assert not configured
-    
+
     # 2. invalid JSON
     monkeypatch.setenv("PIPEIMOB_OFFICIAL_TEAM_GROUPS_JSON", "not-a-json")
     status, configured, mapping, teams = parse_official_team_groups()
     assert status == "invalid"
-    
+
     # 3. root not a list
     monkeypatch.setenv("PIPEIMOB_OFFICIAL_TEAM_GROUPS_JSON", '{"id": "1"}')
     status, configured, mapping, teams = parse_official_team_groups()
     assert status == "invalid"
-    
+
     # 4. incomplete - empty list
     monkeypatch.setenv("PIPEIMOB_OFFICIAL_TEAM_GROUPS_JSON", "[]")
     status, configured, mapping, teams = parse_official_team_groups()
     assert status == "incomplete"
-    
+
     # 5. incomplete - missing name
     monkeypatch.setenv("PIPEIMOB_OFFICIAL_TEAM_GROUPS_JSON", '[{"id": "1", "type": "team"}]')
     status, configured, mapping, teams = parse_official_team_groups()
     assert status == "incomplete"
-    
+
     # 6. incomplete - invalid type
     monkeypatch.setenv("PIPEIMOB_OFFICIAL_TEAM_GROUPS_JSON", '[{"id": "1", "name": "Equipe A", "type": "invalid_type"}]')
     status, configured, mapping, teams = parse_official_team_groups()
     assert status == "incomplete"
-    
+
     # 7. incomplete - duplicate IDs
     monkeypatch.setenv("PIPEIMOB_OFFICIAL_TEAM_GROUPS_JSON", '[{"id": "1", "name": "Equipe A", "type": "team"}, {"id": "1", "name": "Equipe B", "type": "team"}]')
     status, configured, mapping, teams = parse_official_team_groups()
     assert status == "incomplete"
-    
+
     # 8. incomplete - duplicate team names
     monkeypatch.setenv("PIPEIMOB_OFFICIAL_TEAM_GROUPS_JSON", '[{"id": "1", "name": "Equipe A", "type": "team"}, {"id": "2", "name": "equipe a", "type": "team"}]')
     status, configured, mapping, teams = parse_official_team_groups()
     assert status == "incomplete"
-    
+
     # 9. incomplete - no team type
     monkeypatch.setenv("PIPEIMOB_OFFICIAL_TEAM_GROUPS_JSON", '[{"id": "1", "name": "Filial A", "type": "branch"}]')
     status, configured, mapping, teams = parse_official_team_groups()
     assert status == "incomplete"
-    
+
     # 10. configured
     monkeypatch.setenv("PIPEIMOB_OFFICIAL_TEAM_GROUPS_JSON", '[{"id": "1", "name": "Equipe A", "type": "team"}, {"id": "2", "name": "Filial A", "type": "branch"}]')
     status, configured, mapping, teams = parse_official_team_groups()
@@ -2433,7 +2433,7 @@ def test_parse_official_team_groups_scenarios(monkeypatch):
 
 def test_data_quality_aggregation_scenarios(monkeypatch):
     from main import compute_dashboard_aggregates
-    
+
     config_json = json.dumps([
         {"id": "group_team_1", "name": "Equipe Alpha", "type": "team"},
         {"id": "group_team_2", "name": "Equipe Beta", "type": "team"},
@@ -2441,7 +2441,7 @@ def test_data_quality_aggregation_scenarios(monkeypatch):
         {"id": "group_other_1", "name": "Outro Grupo", "type": "other"}
     ])
     monkeypatch.setenv("PIPEIMOB_OFFICIAL_TEAM_GROUPS_JSON", config_json)
-    
+
     # 1. Configured - groups empty -> missing_team_assignment (high)
     txs = [{
         "transacao_unique_id_pipeimob": "tx1",
@@ -2456,7 +2456,7 @@ def test_data_quality_aggregation_scenarios(monkeypatch):
     assert dq["summary"]["affected_transactions_count"] == 1
     assert dq["summary"]["compliant_transactions_count"] == 0
     assert dq["summary"]["transaction_compliance_ratio"] == 0.0
-    
+
     # 2. Configured - branch group only -> missing_team_assignment (high)
     txs = [{
         "transacao_unique_id_pipeimob": "tx2",
@@ -2467,7 +2467,7 @@ def test_data_quality_aggregation_scenarios(monkeypatch):
     res = compute_dashboard_aggregates(txs)
     dq = res["data_quality"]
     assert dq["summary"]["affected_agents_count"] == 1
-    
+
     # 3. Configured - other group only -> missing_team_assignment (high)
     txs = [{
         "transacao_unique_id_pipeimob": "tx3",
@@ -2478,7 +2478,7 @@ def test_data_quality_aggregation_scenarios(monkeypatch):
     res = compute_dashboard_aggregates(txs)
     dq = res["data_quality"]
     assert dq["summary"]["affected_agents_count"] == 1
-    
+
     # 4. Configured - branch + unknown -> affected
     txs = [{
         "transacao_unique_id_pipeimob": "tx4",
@@ -2490,7 +2490,7 @@ def test_data_quality_aggregation_scenarios(monkeypatch):
     dq = res["data_quality"]
     assert dq["summary"]["affected_agents_count"] == 1
     assert dq["summary"]["review_only_agents_count"] == 0
-    
+
     # 5. Configured - unknown ID only -> review_only
     txs = [{
         "transacao_unique_id_pipeimob": "tx5",
@@ -2515,7 +2515,7 @@ def test_data_quality_aggregation_scenarios(monkeypatch):
     assert dq["summary"]["affected_agents_count"] == 0
     assert dq["summary"]["review_only_agents_count"] == 0
     assert dq["summary"]["compliant_agents_count"] == 1
-    
+
     # 6. Configured - valid team -> compliant
     txs = [{
         "transacao_unique_id_pipeimob": "tx6",
@@ -2526,7 +2526,7 @@ def test_data_quality_aggregation_scenarios(monkeypatch):
     res = compute_dashboard_aggregates(txs)
     dq = res["data_quality"]
     assert dq["summary"]["compliant_agents_count"] == 1
-    
+
     # 7. Unassigned manager transaction
     txs = [{
         "transacao_unique_id_pipeimob": "tx7",
@@ -2540,7 +2540,7 @@ def test_data_quality_aggregation_scenarios(monkeypatch):
     assert dq["summary"]["distinct_agents_count"] == 0
     assert dq["summary"]["affected_transactions_count"] == 1
     assert dq["summary"]["unassigned_manager_transactions_count"] == 1
-    
+
     # 8. Same agent with team and empty -> affected
     txs = [
         {
@@ -2560,7 +2560,7 @@ def test_data_quality_aggregation_scenarios(monkeypatch):
     dq = res["data_quality"]
     assert dq["summary"]["affected_agents_count"] == 1
     assert dq["summary"]["compliant_agents_count"] == 0
-    
+
     # 9. Same agent in different branches (composite key grouping)
     txs = [
         {
@@ -2580,7 +2580,7 @@ def test_data_quality_aggregation_scenarios(monkeypatch):
     dq = res["data_quality"]
     assert dq["summary"]["distinct_agents_count"] == 2
     assert dq["summary"]["compliant_agents_count"] == 2
-    
+
     # 10. Agent with error and review -> affected
     txs = [
         {
@@ -2600,7 +2600,7 @@ def test_data_quality_aggregation_scenarios(monkeypatch):
     dq = res["data_quality"]
     assert dq["summary"]["affected_agents_count"] == 1
     assert dq["summary"]["review_only_agents_count"] == 0
-    
+
     # 11. Inconsistent team assignment
     txs = [
         {
@@ -2620,7 +2620,7 @@ def test_data_quality_aggregation_scenarios(monkeypatch):
     dq = res["data_quality"]
     assert dq["summary"]["affected_agents_count"] == 0
     assert dq["summary"]["review_only_agents_count"] == 1
-    
+
     # 12. Overall statuses
     txs = [{
         "transacao_unique_id_pipeimob": "tx12a",
@@ -2630,7 +2630,7 @@ def test_data_quality_aggregation_scenarios(monkeypatch):
     }]
     res = compute_dashboard_aggregates(txs)
     assert res["data_quality"]["summary"]["status"] == "ok"
-    
+
     txs = [
         {
             "transacao_unique_id_pipeimob": "tx12b_1",
@@ -2647,7 +2647,7 @@ def test_data_quality_aggregation_scenarios(monkeypatch):
     ]
     res = compute_dashboard_aggregates(txs)
     assert res["data_quality"]["summary"]["status"] == "critical"
-    
+
     txs = [
         {
             "transacao_unique_id_pipeimob": "tx12c_1",
@@ -2676,7 +2676,7 @@ def test_data_quality_aggregation_scenarios(monkeypatch):
     ]
     res = compute_dashboard_aggregates(txs)
     assert res["data_quality"]["summary"]["status"] == "attention"
-    
+
     # 13. distinct_agents_count = 0 with unassigned manager transactions
     txs = [{
         "transacao_unique_id_pipeimob": "tx13",
@@ -2686,7 +2686,7 @@ def test_data_quality_aggregation_scenarios(monkeypatch):
     }]
     res = compute_dashboard_aggregates(txs)
     assert res["data_quality"]["summary"]["status"] == "attention"
-    
+
     # 14. zero transactions
     res = compute_dashboard_aggregates([])
     assert res["data_quality"]["summary"]["status"] == "ok"
@@ -2705,7 +2705,7 @@ def test_data_quality_aggregation_scenarios(monkeypatch):
     res = compute_dashboard_aggregates(txs)
     assert res["data_quality"]["summary"]["affected_agents_count"] == 1
     assert res["data_quality"]["summary"]["review_only_agents_count"] == 0
-    
+
     txs = [{
         "transacao_unique_id_pipeimob": "tx15b",
         "agente_gestor": "Corretor A",
@@ -2721,32 +2721,32 @@ def test_data_quality_endpoint_auth_and_schema(monkeypatch):
         {"id": "group_team_1", "name": "Equipe Alpha", "type": "team"}
     ])
     monkeypatch.setenv("PIPEIMOB_OFFICIAL_TEAM_GROUPS_JSON", config_json)
-    
+
     client = TestClient(app)
-    
+
     # 1. 401 without JWT
     res = client.get("/api/dashboard/full")
     assert res.status_code == 401
-    
+
     # 2. 401 with X-Backend-API-Key (legacy bypass)
     res = client.get("/api/dashboard/full", headers={"X-Backend-API-Key": "some-key"})
     assert res.status_code == 401
-    
+
     # 3. 200 with valid JWT
     from main import verify_backend_api_key
     app.dependency_overrides[verify_backend_api_key] = lambda: {"sub": "user-123", "role": "authenticated"}
-    
+
     try:
         res = client.get("/api/dashboard/full?data_inicio=2026-01-01&data_fim=2026-06-30")
         assert res.status_code == 200
-        
+
         data = res.json()
         assert "data_quality" in data
         dq = data["data_quality"]
         assert dq["period_basis"] == "ccv"
         assert "summary" in dq
         assert "teams" in dq
-        
+
         raw_json_str = json.dumps(data)
         assert "group_team_1" not in raw_json_str
         assert "email" not in raw_json_str
@@ -2757,9 +2757,9 @@ def test_data_quality_endpoint_auth_and_schema(monkeypatch):
 
 def test_directed_mandatory_data_quality_missing_config(monkeypatch):
     from main import compute_dashboard_aggregates
-    
+
     monkeypatch.delenv("PIPEIMOB_OFFICIAL_TEAM_GROUPS_JSON", raising=False)
-    
+
     txs = [
         # A. Agente A: grupos empty array -> affected, missing_team_assignment
         {
@@ -2786,15 +2786,15 @@ def test_directed_mandatory_data_quality_missing_config(monkeypatch):
             "agente_gestor_grupos_a_que_pertence3": ""
         }
     ]
-    
+
     res = compute_dashboard_aggregates(txs)
     dq = res["data_quality"]
-    
+
     assert dq["summary"]["compliant_transactions_count"] == 0
     assert dq["summary"]["affected_transactions_count"] == 2
     assert dq["summary"]["review_only_transactions_count"] == 1
     assert dq["teams"]["reconciliation"]["transactions_reconciled"] is True
-    
+
     issues = {iss["id"]: iss for iss in dq["teams"]["issues"]}
     assert "missing_team_assignment" in issues
     assert "configuration_mapping_required" in issues
@@ -2803,9 +2803,9 @@ def test_directed_mandatory_data_quality_missing_config(monkeypatch):
 
 def test_data_quality_agents_count_and_composites(monkeypatch):
     from main import compute_dashboard_aggregates
-    
+
     monkeypatch.delenv("PIPEIMOB_OFFICIAL_TEAM_GROUPS_JSON", raising=False)
-    
+
     txs = []
     for i in range(1, 21):
         name = f"Agente {i}"
@@ -2817,7 +2817,7 @@ def test_data_quality_agents_count_and_composites(monkeypatch):
             "agente_gestor_grupo_filial": branch,
             "agente_gestor_grupos_a_que_pertence": groups
         })
-        
+
     # Same agent same branch -> single key
     txs.append({
         "transacao_unique_id_pipeimob": "tx_same_1",
@@ -2825,7 +2825,7 @@ def test_data_quality_agents_count_and_composites(monkeypatch):
         "agente_gestor_grupo_filial": "Filial 1",
         "agente_gestor_grupos_a_que_pertence": []
     })
-    
+
     # Same agent different branch -> two distinct composite keys
     txs.append({
         "transacao_unique_id_pipeimob": "tx_same_2",
@@ -2833,33 +2833,33 @@ def test_data_quality_agents_count_and_composites(monkeypatch):
         "agente_gestor_grupo_filial": "Filial Diferente",
         "agente_gestor_grupos_a_que_pertence": []
     })
-    
+
     res = compute_dashboard_aggregates(txs)
     dq = res["data_quality"]
-    
+
     assert dq["summary"]["distinct_agents_count"] == 21
     assert dq["teams"]["reconciliation"]["agents_reconciled"] is True
     assert dq["teams"]["reconciliation"]["transactions_reconciled"] is True
 
 def test_dashboard_caching_and_single_flight_scenarios(monkeypatch):
     from main import (
-        dashboard_cache, 
-        load_transactions_dataset, 
+        dashboard_cache,
+        load_transactions_dataset,
         single_flight_registry,
         generate_dashboard_cache_key
     )
     from mock_data import MOCK_TRANSACTIONS
-    
+
     dashboard_cache.clear()
     monkeypatch.setenv("PIPEIMOB_DATA_MODE", "live")
     monkeypatch.setenv("PIPEIMOB_API_KEY", "test")
     monkeypatch.setenv("PIPEIMOB_SECRET_KEY", "test")
-    
+
     patcher = patch("main.fetch_all_pipeimob_transactions", return_value=(MOCK_TRANSACTIONS, 1))
     patcher.start()
     try:
         loop = asyncio.get_event_loop()
-        
+
         # 1. miss
         res1 = loop.run_until_complete(load_transactions_dataset(
             data_inicio_ccv="2026-01-01",
@@ -2868,7 +2868,7 @@ def test_dashboard_caching_and_single_flight_scenarios(monkeypatch):
         ))
         mode1, src1, txs1, pages1, status1 = res1
         assert status1 == "miss"
-        
+
         # 2. fresh
         res2 = loop.run_until_complete(load_transactions_dataset(
             data_inicio_ccv="2026-01-01",
@@ -2877,7 +2877,7 @@ def test_dashboard_caching_and_single_flight_scenarios(monkeypatch):
         ))
         mode2, src2, txs2, pages2, status2 = res2
         assert status2 == "fresh"
-        
+
         # 3. stale state
         key = generate_dashboard_cache_key(
             data_inicio_ccv="2026-01-01",
@@ -2886,7 +2886,7 @@ def test_dashboard_caching_and_single_flight_scenarios(monkeypatch):
         with dashboard_cache.lock:
             val = dashboard_cache.cache[key][0]
             dashboard_cache.cache[key] = (val, time.time() - 10, time.time() + 3000)
-            
+
         res3 = loop.run_until_complete(load_transactions_dataset(
             data_inicio_ccv="2026-01-01",
             data_fim_ccv="2026-06-30",
@@ -2894,7 +2894,7 @@ def test_dashboard_caching_and_single_flight_scenarios(monkeypatch):
         ))
         mode3, src3, txs3, pages3, status3 = res3
         assert status3 == "stale"
-        
+
         # 4. refresh=True
         dashboard_cache.clear()
         loop.run_until_complete(load_transactions_dataset(
@@ -2902,7 +2902,7 @@ def test_dashboard_caching_and_single_flight_scenarios(monkeypatch):
             data_fim_ccv="2026-06-30",
             request_id="test-miss"
         ))
-        
+
         res4 = loop.run_until_complete(load_transactions_dataset(
             data_inicio_ccv="2026-01-01",
             data_fim_ccv="2026-06-30",
@@ -2920,55 +2920,55 @@ def test_single_flight_concurrent_deduplication(monkeypatch):
         load_transactions_dataset
     )
     from mock_data import MOCK_TRANSACTIONS
-    
+
     monkeypatch.setenv("PIPEIMOB_DATA_MODE", "live")
     monkeypatch.setenv("PIPEIMOB_API_KEY", "test")
     monkeypatch.setenv("PIPEIMOB_SECRET_KEY", "test")
-    
+
     patcher = patch("main.fetch_all_pipeimob_transactions", return_value=(MOCK_TRANSACTIONS, 1))
     patcher.start()
     try:
         loop = asyncio.get_event_loop()
-        
+
         async def task_wrapper():
             return await load_transactions_dataset(
                 data_inicio_ccv="2026-07-01",
                 data_fim_ccv="2026-12-31",
                 request_id="concurrent-test"
             )
-            
+
         tasks = [task_wrapper(), task_wrapper(), task_wrapper()]
         results = loop.run_until_complete(asyncio.gather(*tasks))
-        
+
         for res in results:
             mode, src, txs, pages, status = res
             assert mode == "live"
             assert len(txs) > 0
     finally:
         patcher.stop()
-        
+
 def test_warmup_periods_config(monkeypatch):
     from main import warm_up_dashboard_cache, dashboard_cache, generate_dashboard_cache_key
     from mock_data import MOCK_TRANSACTIONS
-    
+
     monkeypatch.setenv("PIPEIMOB_DATA_MODE", "live")
     monkeypatch.setenv("PIPEIMOB_API_KEY", "test")
     monkeypatch.setenv("PIPEIMOB_SECRET_KEY", "test")
     monkeypatch.setenv("DASHBOARD_WARMUP_PERIODS_JSON", '[{"start_date": "2026-01-01", "end_date": "2026-06-30"}]')
-    
+
     patcher = patch("main.fetch_all_pipeimob_transactions", return_value=(MOCK_TRANSACTIONS, 1))
     patcher.start()
     try:
         dashboard_cache.clear()
         warm_up_dashboard_cache()
-        
+
         key = generate_dashboard_cache_key(data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
         for _ in range(30):
             time.sleep(0.1)
             cached = dashboard_cache.get(key)
             if cached is not None:
                 break
-                
+
         assert dashboard_cache.get(key) is not None
     finally:
         patcher.stop()
@@ -2976,7 +2976,7 @@ def test_warmup_periods_config(monkeypatch):
 
 def test_vgc_phase2_accent_and_fallback():
     from main import compute_dashboard_aggregates
-    
+
     # 1. Check comissionado_imobiliária (with accent) and comissionado_filial
     txs = [
         {
@@ -2994,7 +2994,7 @@ def test_vgc_phase2_accent_and_fallback():
     assert comp["gralha"]["amount"] == "5000.00"
     assert comp["demais_participantes"]["amount"] == "5000.00"
     assert comp["data_quality"]["valid_split_count"] == 1
-    
+
     # 2. Check fallback comissionado_imobiliaria (without accent)
     txs_fallback = [
         {
@@ -3010,7 +3010,7 @@ def test_vgc_phase2_accent_and_fallback():
     comp_fb = res_fallback["commission_financials"]["vgc_composition"]
     assert comp_fb["gralha"]["amount"] == "2500.00"
     assert comp_fb["demais_participantes"]["amount"] == "2500.00"
-    
+
     # 3. Check matrix and filial included and multiple valid items summed
     txs_multiple = [
         {
@@ -3035,15 +3035,15 @@ def test_vgc_phase2_accent_and_fallback():
             "total_comissao": 8000.0,
             "comissionados": [
                 {
-                    "comissionado_imobiliária": True, 
+                    "comissionado_imobiliária": True,
                     "comissionado_valor": 4000.0,
-                    "cnpj": "12.345.678/0001-99", 
-                    "nome": "Qualquer Nome", 
+                    "cnpj": "12.345.678/0001-99",
+                    "nome": "Qualquer Nome",
                     "tipo": "Qualquer Tipo",
                     "localizacao": "Qualquer Localizacao"
                 },
                 {
-                    "comissionado_imobiliária": False, 
+                    "comissionado_imobiliária": False,
                     "comissionado_valor": 4000.0
                 }
             ],
@@ -3057,7 +3057,7 @@ def test_vgc_phase2_accent_and_fallback():
 
 def test_vgc_phase2_zero_company_share():
     from main import compute_dashboard_aggregates
-    
+
     # 1. No item matches company/filial -> valid_zero_company_share
     txs = [
         {
@@ -3079,7 +3079,7 @@ def test_vgc_phase2_zero_company_share():
 
 def test_vgc_phase2_array_anomalies():
     from main import compute_dashboard_aggregates
-    
+
     # 1. Missing array (None)
     txs_missing = [
         {
@@ -3094,7 +3094,7 @@ def test_vgc_phase2_array_anomalies():
     assert comp_m["demais_participantes"]["amount"] == "0.00"
     assert comp_m["unclassified"]["amount"] == "10000.00"
     assert comp_m["data_quality"]["missing_array_count"] == 1
-    
+
     # 2. Malformed array (not a list)
     txs_malformed = [
         {
@@ -3150,7 +3150,7 @@ def test_vgc_phase2_array_anomalies():
 def test_vgc_phase2_reconciliation_tolerance_and_categories():
     from main import compute_dashboard_aggregates
     from decimal import Decimal
-    
+
     # 1. Reconciliation mismatch with difference <= 0.01 (reconciled!)
     txs_tol = [
         {
@@ -3198,7 +3198,7 @@ def test_vgc_phase2_reconciliation_tolerance_and_categories():
 
 def test_vgc_phase2_deprecated_alias_corretores_equipe():
     from main import compute_dashboard_aggregates
-    
+
     txs = [
         {
             "total_comissao": 10000.0,
@@ -3219,13 +3219,13 @@ def test_vgc_phase2_payment_receipt_semantic_rules():
     from main import compute_dashboard_aggregates
     from zoneinfo import ZoneInfo
     from datetime import datetime, timedelta
-    
+
     sp_tz = ZoneInfo("America/Sao_Paulo")
     now_sp = datetime.now(sp_tz)
     today_str = now_sp.strftime("%Y-%m-%d")
     yesterday_str = (now_sp - timedelta(days=1)).strftime("%Y-%m-%d")
     tomorrow_str = (now_sp + timedelta(days=1)).strftime("%Y-%m-%d")
-    
+
     txs = [
         # 1. data_pagamento_comissao_prevista valid and past -> received
         {
@@ -3275,33 +3275,33 @@ def test_vgc_phase2_payment_receipt_semantic_rules():
 def test_vgc_phase2_no_float_or_pii():
     from main import compute_dashboard_aggregates, extract_commission_split
     from decimal import Decimal
-    
+
     tx = {
         "total_comissao": 10000.00,
         "comissionados": [
             {
-                "comissionado_imobiliária": True, 
+                "comissionado_imobiliária": True,
                 "comissionado_valor": 4000.00,
                 "nome_colaborador": "Maria Silva",
                 "cnpj_colaborador": "12.345.678/0001-00"
             },
             {
-                "comissionado_imobiliária": False, 
+                "comissionado_imobiliária": False,
                 "comissionado_valor": 6000.00,
                 "nome_colaborador": "João Souza"
             }
         ],
         "data_assinatura_ccv": "2026-03-15"
     }
-    
+
     # Assert extract_commission_split does not use float internally
     ext = extract_commission_split(tx)
     assert isinstance(ext.gralha_amount, Decimal)
     assert isinstance(ext.all_participants_amount, Decimal)
-    
+
     res = compute_dashboard_aggregates([tx], data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
     comp = res["commission_financials"]["vgc_composition"]
-    
+
     # Assert no sensitive personal data (PII) is exposed in contract
     raw_response_str = json.dumps(comp)
     assert "Maria Silva" not in raw_response_str
@@ -3313,20 +3313,20 @@ def test_vgc_phase2_auth_and_other_metrics():
     from main import app, verify_backend_api_key
     from fastapi.testclient import TestClient
     from unittest.mock import patch
-    
+
     client = TestClient(app)
-    
+
     # 1. 401 without JWT
     res = client.get("/api/dashboard/full")
     assert res.status_code == 401
-    
+
     # 2. 401 with legacy headers
     res_legacy = client.get("/api/dashboard/full", headers={"X-Backend-API-Key": "some-key"})
     assert res_legacy.status_code == 401
-    
+
     # Override auth for JWT
     app.dependency_overrides[verify_backend_api_key] = lambda: {"sub": "user-123", "role": "authenticated", "email": "test@test.com"}
-    
+
     try:
         # Mock transactions pagination inside load_transactions_dataset
         with patch("main.fetch_all_pipeimob_transactions") as mock_fetch:
@@ -3341,12 +3341,12 @@ def test_vgc_priority_prevista_wins():
     from main import compute_dashboard_aggregates
     from zoneinfo import ZoneInfo
     from datetime import datetime, timedelta
-    
+
     sp_tz = ZoneInfo("America/Sao_Paulo")
     now_sp = datetime.now(sp_tz)
     yesterday_str = (now_sp - timedelta(days=1)).strftime("%Y-%m-%d")
     tomorrow_str = (now_sp + timedelta(days=1)).strftime("%Y-%m-%d")
-    
+
     txs = [
         {
             "total_comissao": 10000.0,
@@ -3409,21 +3409,21 @@ def test_vgc_receipt_unknown_only_for_invalid_or_future():
 
 def test_vgc_calculation_status_validated_vs_partial():
     from main import compute_dashboard_aggregates
-    
+
     # 1. Fully reconciled -> validated
     txs_valid = [
         {"total_comissao": 1000.0, "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 1000.0}], "data_assinatura_ccv": "2026-03-15"}
     ]
     res1 = compute_dashboard_aggregates(txs_valid, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
     assert res1["commission_financials"]["vgc_composition"]["calculation_status"] == "validated"
-    
+
     # 2. Unclassified > 0 -> partial
     txs_unclassified = [
         {"total_comissao": 1000.0, "comissionados": None, "data_assinatura_ccv": "2026-03-15"}
     ]
     res2 = compute_dashboard_aggregates(txs_unclassified, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
     assert res2["commission_financials"]["vgc_composition"]["calculation_status"] == "partial"
-    
+
     # 3. Mismatch -> partial
     txs_mismatch = [
         {"total_comissao": 1000.0, "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 900.0}], "data_assinatura_ccv": "2026-03-15"}
@@ -3457,7 +3457,7 @@ def test_vgc_sum_and_reconciliation_difference_016():
 
 def test_vgc_receipt_data_quality_comprehensive_closure():
     from main import compute_dashboard_aggregates
-    
+
     txs = [
         # 1. missing key (missing)
         {"total_comissao": 1000.00, "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 1000.00}], "data_assinatura_ccv": "2026-03-15"},
@@ -3480,32 +3480,32 @@ def test_vgc_receipt_data_quality_comprehensive_closure():
         # 10. invalid date format (invalid -> unknown)
         {"total_comissao": 1000.00, "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 1000.00}], "data_pagamento_comissao_prevista": "not-a-date", "data_assinatura_ccv": "2026-03-15"},
     ]
-    
+
     res = compute_dashboard_aggregates(txs, data_inicio_ccv="2026-01-01", data_fim_ccv="2026-06-30")
     financials = res["commission_financials"]
     q = financials["receipt_data_quality"]
-    
+
     # Assert closures
     assert q["missing_date_count"] == 6
     assert q["received_date_count"] == 2
     assert q["future_date_count"] == 1
     assert q["invalid_date_count"] == 1
-    
+
     records_count = len(txs)
     # Closure of quality counts: received + missing + invalid + future == records_count
     assert q["received_date_count"] + q["missing_date_count"] + q["invalid_date_count"] + q["future_date_count"] == records_count
-    
+
     # Closure mapping to transaction counts
     assert financials["received_transactions_count"] == q["received_date_count"]
     assert financials["pending_transactions_count"] == q["missing_date_count"]
     assert financials["unknown_transactions_count"] == q["invalid_date_count"] + q["future_date_count"]
-    
+
     # Assert pending and unknown dictionary structures
     assert "future_date_count" not in financials["pending"]
     assert financials["pending"]["without_date_count"] == q["missing_date_count"]
     assert financials["unknown"]["invalid_date_count"] == q["invalid_date_count"]
     assert financials["unknown"]["future_date_count"] == q["future_date_count"]
-    
+
     # Closure of status counts: received + pending + unknown == records_count
     assert financials["received_transactions_count"] + financials["pending_transactions_count"] + financials["unknown_transactions_count"] == records_count
 
@@ -3516,12 +3516,12 @@ def test_dashboard_full_endpoint_serialization_and_restrictions():
     from unittest.mock import patch
     import os
     import json
-    
+
     client = TestClient(app)
-    
+
     # Bypass auth
     app.dependency_overrides[verify_backend_api_key] = lambda: {"sub": "user-123", "role": "authenticated", "email": "test@test.com"}
-    
+
     try:
         mock_txs = [
             # received
@@ -3533,7 +3533,7 @@ def test_dashboard_full_endpoint_serialization_and_restrictions():
             # invalid (unknown)
             {"total_comissao": 4000.00, "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 4000.00}], "data_pagamento_comissao_prevista": "invalid", "data_assinatura_ccv": "2026-03-15", "valor_contrato": 200000.0, "transacao_unique_id_pipeimob": "tx4", "codigo_contrato": "code4", "agente_gestor": "Manager D"}
         ]
-        
+
         # Test with EXPOSE_RAW_TRANSACTIONS = false (default)
         with patch("main.fetch_all_pipeimob_transactions", return_value=(mock_txs, 1)), \
              patch.dict(os.environ, {
@@ -3542,53 +3542,53 @@ def test_dashboard_full_endpoint_serialization_and_restrictions():
                  "PIPEIMOB_SECRET_KEY": "mock_secret",
                  "EXPOSE_RAW_TRANSACTIONS": "false"
              }):
-             
+
             res = client.get("/api/dashboard/full?data_inicio_ccv=2026-01-01&data_fim_ccv=2026-06-30")
             assert res.status_code == 200
             data = res.json()
-            
+
             # Assert cache version changed check
             assert DASHBOARD_CACHE_VERSION == "sales-cycle-v6-vgc-pending-unknown-fix"
-            
+
             # Assert receipt_data_quality is present and serialized correctly
             financials = data.get("commission_financials")
             assert financials is not None
             q = financials.get("receipt_data_quality")
             assert q is not None
-            
+
             # Check counts
             assert q["received_date_count"] == 1
             assert q["missing_date_count"] == 1
             assert q["future_date_count"] == 1
             assert q["invalid_date_count"] == 1
-            
+
             # Closure of four counts
             assert q["received_date_count"] + q["missing_date_count"] + q["invalid_date_count"] + q["future_date_count"] == 4
-            
+
             # Assert pending dict contains only total, gralha, demais_participantes, transaction_count, without_date_count
             pending_dict = financials.get("pending")
             assert pending_dict is not None
             assert "future_date_count" not in pending_dict
             assert pending_dict["without_date_count"] == q["missing_date_count"]
             assert pending_dict["transaction_count"] == q["missing_date_count"]
-            
+
             # Assert unknown dict contains total, gralha, demais_participantes, transaction_count, invalid_date_count, future_date_count
             unknown_dict = financials.get("unknown")
             assert unknown_dict is not None
             assert unknown_dict["invalid_date_count"] == q["invalid_date_count"]
             assert unknown_dict["future_date_count"] == q["future_date_count"]
             assert unknown_dict["transaction_count"] == unknown_dict["invalid_date_count"] + unknown_dict["future_date_count"]
-            
+
             # Reconciliations with transaction counts
             assert financials["received"]["transaction_count"] == q["received_date_count"]
             assert financials["pending"]["transaction_count"] == q["missing_date_count"]
             assert financials["unknown"]["transaction_count"] == q["invalid_date_count"] + q["future_date_count"]
-            
+
             # Closure of status counts: received + pending + unknown == records_count
             assert financials["received_transactions_count"] == q["received_date_count"]
             assert financials["pending_transactions_count"] == q["missing_date_count"]
             assert financials["unknown_transactions_count"] == q["invalid_date_count"] + q["future_date_count"]
-            
+
             # Check disclaimer text is semantic and updated
             disclaimer = financials.get("disclaimer")
             assert disclaimer is not None
@@ -3597,24 +3597,24 @@ def test_dashboard_full_endpoint_serialization_and_restrictions():
             assert "data futura ou inválida: desconhecido;" in disclaimer
             assert "não comprova a liquidação" in disclaimer
             assert "datas futuras são pendentes" not in disclaimer
-            
+
             # Check that individual transaction records are omitted when EXPOSE_RAW_TRANSACTIONS=false
             commissions_data = data.get("commissions")
             assert commissions_data is not None
             assert commissions_data.get("commissions") == [] # MUST BE EMPTY!
-            
+
             # Ensure no individual transactional fields exist anywhere in the payload
             payload_str = json.dumps(data)
             assert "transaction_id" not in payload_str
             assert "contract_code" not in payload_str
             assert "code1" not in payload_str
             assert "code2" not in payload_str
-            
+
             # Verify no regressions in financial composition values
             assert float(financials["vgc_total"]) == 10000.00
             assert float(financials["vgc_composition"]["gralha"]["amount"]) == 10000.00
             assert float(financials["vgc_composition"]["demais_participantes"]["amount"]) == 0.00
-            
+
         # Test with EXPOSE_RAW_TRANSACTIONS = true (for local controlled environment)
         with patch("main.fetch_all_pipeimob_transactions", return_value=(mock_txs, 1)), \
              patch.dict(os.environ, {
@@ -3623,7 +3623,7 @@ def test_dashboard_full_endpoint_serialization_and_restrictions():
                  "PIPEIMOB_SECRET_KEY": "mock_secret",
                  "EXPOSE_RAW_TRANSACTIONS": "true"
              }):
-             
+
             res_exposed = client.get("/api/dashboard/full?data_inicio_ccv=2026-01-01&data_fim_ccv=2026-06-30")
             assert res_exposed.status_code == 200
             data_exposed = res_exposed.json()
@@ -3631,6 +3631,519 @@ def test_dashboard_full_endpoint_serialization_and_restrictions():
             assert len(comm_list) == 4
             assert comm_list[0]["contract_code"] == "code1"
             assert comm_list[0]["transaction_id"] == "tx1"
-            
+
     finally:
         app.dependency_overrides.clear()
+
+
+# ======================================================================
+# CONTRACTS CONTROL (SECRETARIA DE VENDAS) BI MODULE TESTS
+# ======================================================================
+
+def test_contracts_control_strict_date_parsing():
+    from main import parse_date_to_date_obj
+    from datetime import date
+
+    # Valid YYYY-MM-DD
+    assert parse_date_to_date_obj("2026-05-15") == date(2026, 5, 15)
+    # Valid DD/MM/YYYY
+    assert parse_date_to_date_obj("25/12/2026") == date(2026, 12, 25)
+    # ISO timestamp
+    assert parse_date_to_date_obj("2026-07-24T18:00:00Z") == date(2026, 7, 24)
+    # Empty/Null/Whitespace
+    assert parse_date_to_date_obj(None) is None
+    assert parse_date_to_date_obj("   ") is None
+    assert parse_date_to_date_obj("None") is None
+    assert parse_date_to_date_obj("null") is None
+    # Invalid formats
+    assert parse_date_to_date_obj("2026/05/15") is None
+    assert parse_date_to_date_obj("not-a-date") is None
+    assert parse_date_to_date_obj("31-02-2026") is None
+
+def test_contracts_control_classification_logic():
+    from main import classify_contracts_control_process
+    from datetime import date
+
+    as_of = date(2026, 7, 24)
+    end_date = date(2026, 6, 30)
+
+    # Completed in period
+    tx1 = {"data_inicio_venda": "2026-06-10", "data_contrato": "2026-06-25"}
+    res1 = classify_contracts_control_process(tx1, as_of, end_date)
+    assert res1["current_status"] == "completed"
+    assert res1["status_at_period_end"] == "completed"
+    assert res1["duration_days"] == 15
+    assert res1["current_aging_days"] is None
+    assert res1["aging_days_at_period_end"] is None
+
+    # In progress at period end, completed currently (completed after period end)
+    tx2 = {"data_inicio_venda": "2026-06-10", "data_contrato": "2026-07-15"}
+    res2 = classify_contracts_control_process(tx2, as_of, end_date)
+    assert res2["current_status"] == "completed"
+    assert res2["status_at_period_end"] == "in_progress"
+    assert res2["duration_days"] == 35
+    assert res2["current_aging_days"] is None
+    assert res2["aging_days_at_period_end"] == 20  # 2026-06-30 - 2026-06-10
+
+    # Currently in progress (no contract date)
+    tx3 = {"data_inicio_venda": "2026-06-10", "data_contrato": None}
+    res3 = classify_contracts_control_process(tx3, as_of, end_date)
+    assert res3["current_status"] == "in_progress"
+    assert res3["status_at_period_end"] == "in_progress"
+    assert res3["current_aging_days"] == 44  # 2026-07-24 - 2026-06-10
+    assert res3["aging_days_at_period_end"] == 20
+
+    # Data Issues
+    # Negative duration
+    tx4 = {"data_inicio_venda": "2026-06-10", "data_contrato": "2026-06-05"}
+    res4 = classify_contracts_control_process(tx4, as_of, end_date)
+    assert res4["current_status"] == "data_issue"
+    assert res4["status_at_period_end"] == "data_issue"
+    assert "negative_duration" in res4["data_quality_flags"]
+
+    # Future start date relative to period end
+    tx5 = {"data_inicio_venda": "2026-07-05", "data_contrato": None}
+    res5 = classify_contracts_control_process(tx5, as_of, end_date)
+    assert res5["status_at_period_end"] == "future"
+    # But currently valid in_progress (since start_date <= as_of)
+    assert res5["current_status"] == "in_progress"
+
+    # Missing / Invalid start date
+    tx6 = {"data_inicio_venda": "", "data_contrato": "2026-06-10"}
+    res6 = classify_contracts_control_process(tx6, as_of, end_date)
+    assert res6["current_status"] == "data_issue"
+    assert "missing_start_date" in res6["data_quality_flags"]
+
+def test_contracts_control_deduplication_and_conflicts():
+    from main import deduplicate_contracts_control_dataset
+
+    # No duplicates
+    dataset = [
+        {"transacao_unique_id_pipeimob": "tx1", "codigo_imovel": "123"},
+        {"transacao_unique_id_pipeimob": "tx2", "codigo_imovel": "456"}
+    ]
+    uniq, dups, conflicts = deduplicate_contracts_control_dataset(dataset)
+    assert len(uniq) == 2
+    assert dups == 0
+    assert conflicts == 0
+
+    # Duplicates with same values
+    dataset_dup = [
+        {"transacao_unique_id_pipeimob": "tx1", "codigo_imovel": "123", "data_inicio_venda": "2026-01-01"},
+        {"transacao_unique_id_pipeimob": "tx1", "codigo_imovel": "123", "data_inicio_venda": "2026-01-01"},
+        {"transacao_unique_id_pipeimob": "tx2", "codigo_imovel": "456"}
+    ]
+    uniq_dup, dups_dup, conflicts_dup = deduplicate_contracts_control_dataset(dataset_dup)
+    assert len(uniq_dup) == 2
+    assert dups_dup == 1
+    assert conflicts_dup == 0
+
+    # Duplicates with conflicts
+    dataset_conflict = [
+        {"transacao_unique_id_pipeimob": "tx1", "codigo_imovel": "123", "data_inicio_venda": "2026-01-01"},
+        {"transacao_unique_id_pipeimob": "tx1", "codigo_imovel": "999", "data_inicio_venda": "2026-01-01"},  # different property code
+        {"transacao_unique_id_pipeimob": "tx2", "codigo_imovel": "456"}
+    ]
+    uniq_cf, dups_cf, conflicts_cf = deduplicate_contracts_control_dataset(dataset_conflict)
+    assert len(uniq_cf) == 2
+    assert dups_cf == 1
+    assert conflicts_cf == 1
+
+def test_contracts_control_backlog_math_and_timeline():
+    from main import compute_contracts_control_data
+
+    # Transactions to verify backlog logic
+    # start_date: 2026-06-01, end_date: 2026-06-30
+    dataset = [
+        # 1. Opening backlog: started in May, still open at June start, completed on June 15
+        {"transacao_unique_id_pipeimob": "tx1", "data_inicio_venda": "2026-05-10", "data_contrato": "2026-06-15", "agente_gestor": "Manager A", "financiamento": True, "codigo_imovel": "i1"},
+        # 2. Opening backlog boundary condition: started in May, signed exactly on June 1 (start_date)
+        {"transacao_unique_id_pipeimob": "tx2", "data_inicio_venda": "2026-05-15", "data_contrato": "2026-06-01", "agente_gestor": "Manager A", "financiamento": False, "codigo_imovel": "i2"},
+        # 3. Started in period (June 10), still open at end of June
+        {"transacao_unique_id_pipeimob": "tx3", "data_inicio_venda": "2026-06-10", "data_contrato": None, "agente_gestor": "Manager B", "financiamento": True, "codigo_imovel": "i3"},
+        # 4. Started in period (June 5), completed in period (June 20)
+        {"transacao_unique_id_pipeimob": "tx4", "data_inicio_venda": "2026-06-05", "data_contrato": "2026-06-20", "agente_gestor": "Manager B", "financiamento": False, "codigo_imovel": "i4"},
+        # 5. Excluded data_issue: started in June but negative duration
+        {"transacao_unique_id_pipeimob": "tx5", "data_inicio_venda": "2026-06-15", "data_contrato": "2026-06-01", "agente_gestor": "Manager A", "financiamento": True, "codigo_imovel": "i5"}
+    ]
+
+    aggregates = compute_contracts_control_data(dataset, "2026-06-01", "2026-06-30", "2026-07-24")
+
+    # Cohort checks
+    cohort = aggregates["cohort_summary"]
+    # tx3, tx4, tx5 are in cohort (data_inicio_venda in June) -> records_count = 3
+    assert cohort["records_count"] == 3
+    assert cohort["completed_count"] == 1 # tx4
+    assert cohort["in_progress_count"] == 1 # tx3
+    assert cohort["data_issue_count"] == 1 # tx5
+
+    # Operations checks
+    ops = aggregates["operations_summary"]
+    # Opening backlog: tx1, tx2 -> opening_backlog_count = 2
+    assert ops["opening_backlog_count"] == 2
+    # Started in period (valid): tx3, tx4 -> period_started_count = 2
+    assert ops["period_started_count"] == 2
+    # Completed in period (valid): tx1, tx2, tx4 -> period_completed_count = 3
+    assert ops["period_completed_count"] == 3
+    # Ending backlog: tx3 (started June 10, open at June 30) -> ending_backlog_count = 1
+    assert ops["ending_backlog_count"] == 1
+
+    # Excluded issue: tx5
+    assert ops["excluded_data_issue_count"] == 1
+
+    # Equation validation: ending = opening + started - completed
+    assert ops["ending_backlog_count"] == ops["opening_backlog_count"] + ops["period_started_count"] - ops["period_completed_count"]
+
+    # Timeline monthly check (June 2026)
+    timeline = aggregates["timeline"]
+    assert len(timeline) == 1
+    t = timeline[0]
+    assert t["month"] == "2026-06"
+    assert t["opening_backlog"] == 2
+    assert t["started_count"] == 2
+    assert t["completed_count"] == 3
+    assert t["net_flow"] == -1
+    assert t["ending_backlog"] == 1
+    assert t["excluded_data_issue_count"] == 1  # tx5 start date is June, so its data issue counts towards June timeline
+
+    # Verify no PII inside aggregates
+    payload_str = json.dumps(aggregates, default=str)
+    assert "comprador" not in payload_str.lower()
+    assert "vendedor" not in payload_str.lower()
+    assert "cpf" not in payload_str.lower()
+
+def test_contracts_control_endpoints_summary_and_deals():
+    from fastapi.testclient import TestClient
+    from main import app, verify_backend_api_key
+
+    client = TestClient(app)
+
+    # Bypass auth
+    app.dependency_overrides[verify_backend_api_key] = lambda: {"sub": "user-123", "role": "authenticated"}
+
+    try:
+        # Mock dataset with duplicates and conflicts
+        mock_txs = [
+            {"transacao_unique_id_pipeimob": "tx1", "codigo_imovel": "123", "data_inicio_venda": "2026-06-10", "data_contrato": "2026-06-25", "agente_gestor": "Manager A", "financiamento": True},
+            # duplicate with conflict (different manager)
+            {"transacao_unique_id_pipeimob": "tx1", "codigo_imovel": "123", "data_inicio_venda": "2026-06-10", "data_contrato": "2026-06-25", "agente_gestor": "Manager B", "financiamento": True},
+            # in progress
+            {"transacao_unique_id_pipeimob": "tx2", "codigo_imovel": "456", "data_inicio_venda": "2026-06-15", "data_contrato": None, "agente_gestor": "Manager C", "financiamento": False}
+        ]
+
+        with patch("main.fetch_all_pipeimob_transactions", return_value=(mock_txs, 1)), \
+             patch.dict(os.environ, {"PIPEIMOB_DATA_MODE": "live", "PIPEIMOB_API_KEY": "mock", "PIPEIMOB_SECRET_KEY": "mock"}):
+
+            # Test GET /api/contracts-control/summary
+            res_sum = client.get("/api/contracts-control/summary?start_date=2026-06-01&end_date=2026-06-30")
+            assert res_sum.status_code == 200
+            data_sum = res_sum.json()
+
+            # Extraction quality checks
+            eq = data_sum.get("extraction_quality")
+            assert eq is not None
+            assert eq["raw_records_count"] == 3
+            assert eq["unique_records_count"] == 2
+            assert eq["duplicate_transaction_count"] == 1
+            assert eq["duplicate_conflict_count"] == 1
+            assert eq["duplicate_resolution_policy"] == "first_api_occurrence"
+
+            # Cohort summary checks
+            cohort = data_sum.get("cohort_summary")
+            assert cohort["records_count"] == 2
+            assert cohort["completed_count"] == 1
+            assert cohort["in_progress_count"] == 1
+
+            # Operations summary checks
+            ops = data_sum.get("operations_summary")
+            assert ops["opening_backlog_count"] == 0
+            assert ops["period_started_count"] == 2
+            assert ops["period_completed_count"] == 1
+            assert ops["ending_backlog_count"] == 1
+
+            # Timeline check
+            tl = data_sum.get("timeline")
+            assert len(tl) == 1
+            assert tl[0]["provisional"] is True
+
+            # Extraction checks
+            ext = data_sum.get("extraction")
+            assert ext["coverage_status"] == "unverified"
+            assert ext["coverage_start"] == "2020-01-01"
+
+            # Data quality checks
+            dq = data_sum.get("data_quality")
+            assert dq["scope"] == "cohort"
+            assert dq["records_count"] == 2
+            assert dq["valid_records_count"] == 2
+            assert dq["open_without_contract_date_count"] == 1
+            assert dq["mapping_status"]["modality"] == "partial"
+
+            # Test GET /api/contracts-control/deals with scope=operations (default)
+            res_deals_ops = client.get("/api/contracts-control/deals?start_date=2026-06-01&end_date=2026-06-30")
+            assert res_deals_ops.status_code == 200
+            deals_ops = res_deals_ops.json()
+            assert deals_ops["total_records"] == 2
+
+            # Verify PII allowlist strictly (exact match)
+            allowed_keys = {
+                "transaction_id", "property_code", "property_title", "start_date", "contract_date",
+                "duration_days", "current_aging_days", "aging_days_at_period_end", "manager",
+                "responsible", "modality", "source_type", "current_status", "status_at_period_end",
+                "data_quality_flags", "period_roles"
+            }
+            first_deal = deals_ops["deals"][0]
+            assert set(first_deal.keys()) == allowed_keys
+            assert first_deal["property_title"] is None
+            assert first_deal["responsible"] is None
+            assert first_deal["source_type"] is None
+            assert "period_roles" in first_deal
+
+            # Test GET /api/contracts-control/deals with scope=cohort
+            res_deals_coh = client.get("/api/contracts-control/deals?scope=cohort&start_date=2026-06-01&end_date=2026-06-30")
+            assert res_deals_coh.status_code == 200
+            deals_coh = res_deals_coh.json()
+            assert deals_coh["deals"][0].get("period_roles") is None
+
+            # Test Search query (only manager and property_code allowed)
+            res_search_mgr = client.get("/api/contracts-control/deals?search=Manager%20A&start_date=2026-06-01&end_date=2026-06-30")
+            assert res_search_mgr.status_code == 200
+            search_mgr_deals = res_search_mgr.json()
+            assert search_mgr_deals["total_records"] == 1
+            assert search_mgr_deals["deals"][0]["manager"] == "Manager A"
+
+    finally:
+        app.dependency_overrides.clear()
+
+def test_contracts_control_unauthenticated_requests():
+    from fastapi.testclient import TestClient
+    from main import app
+
+    client = TestClient(app)
+
+    # Endpoint calls without JWT token header must return 401
+    res1 = client.get("/api/contracts-control/summary?start_date=2026-06-01&end_date=2026-06-30")
+    assert res1.status_code == 401
+    assert res1.json()["detail"] == "Authentication required."
+
+    res2 = client.get("/api/contracts-control/deals?start_date=2026-06-01&end_date=2026-06-30")
+    assert res2.status_code == 401
+    assert res2.json()["detail"] == "Authentication required."
+
+def test_contracts_control_cache_behaviors():
+    from fastapi.testclient import TestClient
+    from main import app, verify_backend_api_key, contracts_control_cache
+
+    client = TestClient(app)
+    app.dependency_overrides[verify_backend_api_key] = lambda: {"sub": "user-123", "role": "authenticated"}
+
+    try:
+        # Clear cache first to test MISS
+        contracts_control_cache.clear()
+
+        mock_txs = [
+            {"transacao_unique_id_pipeimob": "tx1", "codigo_imovel": "123", "data_inicio_venda": "2026-06-10", "data_contrato": "2026-06-25", "agente_gestor": "Manager A", "financiamento": True}
+        ]
+
+        with patch("main.fetch_all_pipeimob_transactions", return_value=(mock_txs, 1)) as mock_fetch, \
+             patch.dict(os.environ, {"PIPEIMOB_DATA_MODE": "live", "PIPEIMOB_API_KEY": "mock", "PIPEIMOB_SECRET_KEY": "mock"}):
+
+            # 1. First request -> MISS
+            res1 = client.get("/api/contracts-control/summary?start_date=2026-06-01&end_date=2026-06-30")
+            assert res1.status_code == 200
+            assert res1.headers["X-Cache"] == "miss"
+            assert mock_fetch.call_count == 1
+
+            # 2. Second request -> HIT (fresh)
+            res2 = client.get("/api/contracts-control/summary?start_date=2026-06-01&end_date=2026-06-30")
+            assert res2.status_code == 200
+            assert res2.headers["X-Cache"] == "fresh"
+            assert mock_fetch.call_count == 1  # no new API fetch
+
+            # 3. Request with refresh=true -> MISS (forces refresh)
+            res3 = client.get("/api/contracts-control/summary?start_date=2026-06-01&end_date=2026-06-30&refresh=true")
+            assert res3.status_code == 200
+            assert res3.headers["X-Cache"] == "miss"
+            assert mock_fetch.call_count == 2
+
+    finally:
+        app.dependency_overrides.clear()
+        contracts_control_cache.clear()
+
+def test_contracts_control_detailed_boundary_and_edge_cases():
+    from main import compute_contracts_control_data, parse_date_to_date_obj, classify_contracts_control_process
+    from datetime import date
+    import json
+
+    as_of = "2026-07-24"
+    as_of_date_obj = date(2026, 7, 24)
+
+    # 1. Status Futuro: start_date > end_date, but <= as_of_date
+    # Should not enter cohort, should not enter operational flows, should not be classified as data_issue
+    tx_future = {"transacao_unique_id_pipeimob": "tx_fut", "data_inicio_venda": "2026-07-05", "data_contrato": None, "agente_gestor": "Manager A", "financiamento": True}
+    res_fut = classify_contracts_control_process(tx_future, as_of_date_obj, date(2026, 6, 30))
+    assert res_fut["current_status"] == "in_progress"
+    assert res_fut["status_at_period_end"] == "future"  # not data_issue!
+    assert "future_start_date" not in res_fut["data_quality_flags"]
+
+    # 2. Boundary: signature exactly on start_date (2026-06-01)
+    # 3. Boundary: started before start_date, completed in period
+    # 4. Boundary: started in period, completed after end_date (2026-07-15)
+    # 5. Boundary: date after as_of_date (future_start_date quality issue)
+    # 6. Boundary: data_issue outside timeline distribution (missing start_date)
+    # 7. Boundary: identical duplicates & conflicting duplicates
+    dataset = [
+        # started before (May 10), signed exactly on start_date (June 1) -> opening backlog AND period completed
+        {"transacao_unique_id_pipeimob": "tx1", "data_inicio_venda": "2026-05-10", "data_contrato": "2026-06-01", "agente_gestor": "Manager A", "financiamento": True, "codigo_imovel": "i1"},
+        # started in period, completed after end_date (July 15) -> started, ending backlog, current=completed, end=in_progress
+        {"transacao_unique_id_pipeimob": "tx2", "data_inicio_venda": "2026-06-10", "data_contrato": "2026-07-15", "agente_gestor": "Manager A", "financiamento": True, "codigo_imovel": "i2"},
+        # date after as_of_date (July 30) -> data_issue (future start date quality flag)
+        {"transacao_unique_id_pipeimob": "tx3", "data_inicio_venda": "2026-07-30", "data_contrato": None, "agente_gestor": "Manager B", "financiamento": False, "codigo_imovel": "i3"},
+        # missing start date -> data_issue, not distributed to timeline
+        {"transacao_unique_id_pipeimob": "tx4", "data_inicio_venda": "", "data_contrato": "2026-06-15", "agente_gestor": "Manager B", "financiamento": True, "codigo_imovel": "i4"},
+        # identical duplicates
+        {"transacao_unique_id_pipeimob": "tx5", "data_inicio_venda": "2026-06-05", "data_contrato": "2026-06-20", "agente_gestor": "Manager C", "financiamento": True, "codigo_imovel": "i5"},
+        {"transacao_unique_id_pipeimob": "tx5", "data_inicio_venda": "2026-06-05", "data_contrato": "2026-06-20", "agente_gestor": "Manager C", "financiamento": True, "codigo_imovel": "i5"},
+        # conflicting duplicates (resolved by first occurrence)
+        {"transacao_unique_id_pipeimob": "tx6", "data_inicio_venda": "2026-06-05", "data_contrato": "2026-06-20", "agente_gestor": "Manager X", "financiamento": True, "codigo_imovel": "i6"},
+        {"transacao_unique_id_pipeimob": "tx6", "data_inicio_venda": "2026-06-05", "data_contrato": "2026-06-20", "agente_gestor": "Manager Y", "financiamento": True, "codigo_imovel": "i6"}
+    ]
+
+    aggregates = compute_contracts_control_data(dataset, "2026-06-01", "2026-06-30", as_of)
+
+    # Verify status at period end vs current status difference for tx2
+    tx2_classified = [c for c in aggregates["cohort_txs"] if c["tx"]["transacao_unique_id_pipeimob"] == "tx2"][0]
+    assert tx2_classified["current_status"] == "completed"
+    assert tx2_classified["status_at_period_end"] == "in_progress"
+    assert tx2_classified["aging_days_at_period_end"] == 20  # June 30 - June 10
+
+    # Verify backlog and operational counters
+    ops = aggregates["operations_summary"]
+    # Opening backlog: tx1
+    assert ops["opening_backlog_count"] == 1
+    # Period started: tx2, tx5, tx6 (valid started in June) -> 3
+    assert ops["period_started_count"] == 3
+    # Period completed: tx1, tx5, tx6 (completed in June) -> 3
+    assert ops["period_completed_count"] == 3
+    # Ending backlog: tx2 (started in June, open at June 30) -> 1
+    assert ops["ending_backlog_count"] == 1
+
+    # Equation verification
+    assert ops["ending_backlog_count"] == ops["opening_backlog_count"] + ops["period_started_count"] - ops["period_completed_count"]
+
+    # Verify data issues are counted but not in timeline
+    assert ops["excluded_data_issue_count"] == 2  # tx3 (future start relative to as_of), tx4 (missing start)
+    timeline = aggregates["timeline"]
+    assert len(timeline) == 1
+    assert timeline[0]["excluded_data_issue_count"] == 0  # not distributed to June timeline because tx3 is in July and tx4 has no start month
+
+    # Verify duplicate counts
+    eq = aggregates["extraction_quality"]
+    assert eq["duplicate_transaction_count"] == 2
+    assert eq["duplicate_conflict_count"] == 1
+
+    # PII verification
+    payload_str = json.dumps(aggregates, default=str)
+    assert "comprador" not in payload_str.lower()
+    assert "vendedor" not in payload_str.lower()
+    assert "cpf" not in payload_str.lower()
+
+def test_contracts_control_no_regressions_dashboard_full():
+    from fastapi.testclient import TestClient
+    from main import app, verify_backend_api_key
+
+    client = TestClient(app)
+    app.dependency_overrides[verify_backend_api_key] = lambda: {"sub": "user-123", "role": "authenticated"}
+
+    try:
+        # Mock simple transactions
+        mock_txs = [
+            {"total_comissao": 1000.00, "comissionados": [{"comissionado_imobiliaria": True, "comissionado_valor": 1000.00}], "data_pagamento_comissao_prevista": "2026-03-15", "data_assinatura_ccv": "2026-03-15", "valor_contrato": 50000.0, "transacao_unique_id_pipeimob": "tx1", "codigo_contrato": "code1", "agente_gestor": "Manager A"}
+        ]
+
+        with patch("main.fetch_all_pipeimob_transactions", return_value=(mock_txs, 1)), \
+             patch.dict(os.environ, {"PIPEIMOB_DATA_MODE": "live", "PIPEIMOB_API_KEY": "mock", "PIPEIMOB_SECRET_KEY": "mock", "EXPOSE_RAW_TRANSACTIONS": "false"}):
+
+            # Existing dashboard endpoint must still work fine without regressions
+            res = client.get("/api/dashboard/full?data_inicio_ccv=2026-01-01&data_fim_ccv=2026-06-30")
+            assert res.status_code == 200
+            data = res.json()
+            assert data.get("commission_financials") is not None
+
+    finally:
+        app.dependency_overrides.clear()
+
+def test_contracts_control_additional_coverage_details():
+    from fastapi.testclient import TestClient
+    from main import app, verify_backend_api_key, contracts_control_cache, classify_contracts_control_process
+    from datetime import date
+    import time
+
+    client = TestClient(app)
+    app.dependency_overrides[verify_backend_api_key] = lambda: {"sub": "user-123", "role": "authenticated"}
+
+    try:
+        # 1. Test invalid dates and negative duration branches inside classify_contracts_control_process
+        as_of = date(2026, 7, 24)
+        end_date = date(2026, 6, 30)
+
+        # invalid contract date
+        tx_inv_c = {"data_inicio_venda": "2026-06-10", "data_contrato": "invalid-date"}
+        res_inv_c = classify_contracts_control_process(tx_inv_c, as_of, end_date)
+        assert res_inv_c["status_at_period_end"] == "data_issue"
+        assert "invalid_contract_date" in res_inv_c["data_quality_flags"]
+
+        # invalid start date
+        tx_inv_s = {"data_inicio_venda": "invalid-date", "data_contrato": "2026-06-15"}
+        res_inv_s = classify_contracts_control_process(tx_inv_s, as_of, end_date)
+        assert res_inv_s["status_at_period_end"] == "data_issue"
+        assert "invalid_start_date" in res_inv_s["data_quality_flags"]
+
+        # 2. Test demo mode data loading
+        with patch.dict(os.environ, {"PIPEIMOB_DATA_MODE": "demo", "PIPEIMOB_API_KEY": "mock", "PIPEIMOB_SECRET_KEY": "mock"}):
+            res_demo = client.get("/api/contracts-control/summary?start_date=2026-06-01&end_date=2026-06-30")
+            assert res_demo.status_code == 200
+            assert res_demo.headers["X-Data-Mode"] == "demo"
+
+        # 3. Test STALE cache state background refresh task
+        contracts_control_cache.clear()
+        mock_txs = [
+            {"transacao_unique_id_pipeimob": "tx1", "codigo_imovel": "123", "data_inicio_venda": "2026-06-10", "data_contrato": "2026-06-25", "agente_gestor": "Manager A", "financiamento": True}
+        ]
+
+        # set cache stale but not expired
+        now = time.time()
+        # cached value structure: (val, fresh_until, stale_until)
+        # where val is (live_txs, pages_fetched)
+        cache_key = ("contracts-control-v1-data-inicio-venda", "2020-01-01")
+        contracts_control_cache.cache[cache_key] = ((mock_txs, 1), now - 10, now + 1000)
+
+        with patch("main.fetch_all_pipeimob_transactions", return_value=(mock_txs, 1)) as mock_fetch, \
+             patch.dict(os.environ, {"PIPEIMOB_DATA_MODE": "live", "PIPEIMOB_API_KEY": "mock", "PIPEIMOB_SECRET_KEY": "mock"}):
+
+            # Call should hit stale cache, return stale header, and launch background task
+            res_stale = client.get("/api/contracts-control/summary?start_date=2026-06-01&end_date=2026-06-30")
+            assert res_stale.status_code == 200
+            assert res_stale.headers["X-Cache"] == "stale"
+
+            # Wait briefly to let background task run
+            time.sleep(0.1)
+
+        # 4. Test deals query filters (scope, manager, process_status, modality, aging_bucket, search filtering)
+        with patch("main.fetch_all_pipeimob_transactions", return_value=(mock_txs, 1)), \
+             patch.dict(os.environ, {"PIPEIMOB_DATA_MODE": "live", "PIPEIMOB_API_KEY": "mock", "PIPEIMOB_SECRET_KEY": "mock"}):
+
+            # query with non-matching filter to hit continue/empty results
+            res_no_match = client.get("/api/contracts-control/deals?start_date=2026-06-01&end_date=2026-06-30&manager=NonExistentManager&search=NonExistent&modality=financing&aging_bucket=over_30_days")
+            assert res_no_match.status_code == 200
+            data_no_match = res_no_match.json()
+            assert data_no_match["total_records"] == 0
+
+            # query with page limit larger than 100 to test caps
+            res_cap = client.get("/api/contracts-control/deals?start_date=2026-06-01&end_date=2026-06-30&page_size=101")
+            # should return 422 validation error because page_size is constrained by ge=1, le=100
+            assert res_cap.status_code == 422
+
+    finally:
+        app.dependency_overrides.clear()
+        contracts_control_cache.clear()

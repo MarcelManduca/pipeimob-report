@@ -39,7 +39,7 @@ class DashboardCache:
         from threading import Lock
         self.cache = {}
         self.lock = Lock()
-        
+
     def get_status(self, key):
         with self.lock:
             if key in self.cache:
@@ -52,11 +52,11 @@ class DashboardCache:
                 else:
                     del self.cache[key]
             return None, "miss"
-            
+
     def get(self, key):
         val, status = self.get_status(key)
         return val
-            
+
     def set(self, key, val, ttl=300):
         with self.lock:
             now = time.time()
@@ -75,11 +75,11 @@ class AsyncSingleFlightRegistry:
     def __init__(self):
         self.lock = asyncio.Lock()
         self.in_flight = {} # key -> Future
-        
+
     async def execute(self, key, fetch_coro):
         future = None
         is_leader = False
-        
+
         async with self.lock:
             if key in self.in_flight:
                 future = self.in_flight[key]
@@ -87,7 +87,7 @@ class AsyncSingleFlightRegistry:
                 future = asyncio.get_event_loop().create_future()
                 self.in_flight[key] = future
                 is_leader = True
-                
+
         if is_leader:
             try:
                 # Shield the fetch coroutine from client cancellation
@@ -138,62 +138,62 @@ def parse_official_team_groups() -> tuple[str, bool, dict, list[str]]:
     raw = os.getenv("PIPEIMOB_OFFICIAL_TEAM_GROUPS_JSON")
     if raw is None or raw.strip() == "":
         return "missing", False, {}, []
-    
+
     try:
         data = json.loads(raw)
     except Exception:
         return "invalid", False, {}, []
-        
+
     if not isinstance(data, list):
         return "invalid", False, {}, []
-        
+
     if len(data) == 0:
         return "incomplete", False, {}, []
-        
+
     group_mapping = {}
     team_names = set()
     ids_seen = set()
     has_at_least_one_team = False
-    
+
     for entry in data:
         if not isinstance(entry, dict):
             return "incomplete", False, {}, []
         gid = entry.get("id")
         name = entry.get("name")
         gtype = entry.get("type")
-        
+
         if gid is None or name is None or gtype is None:
             return "incomplete", False, {}, []
-            
+
         gid = str(gid).strip()
         name = str(name).strip()
         gtype = str(gtype).strip()
-        
+
         if gid == "" or name == "" or gtype == "":
             return "incomplete", False, {}, []
-            
+
         if gtype not in ["team", "branch", "other"]:
             return "incomplete", False, {}, []
-            
+
         if gid in ids_seen:
             return "incomplete", False, {}, []
         ids_seen.add(gid)
-        
+
         if gtype == "team":
             has_at_least_one_team = True
             normalized_name = " ".join(name.split()).lower()
             if normalized_name in team_names:
                 return "incomplete", False, {}, []
             team_names.add(normalized_name)
-            
+
         group_mapping[gid] = {
             "name": name,
             "type": gtype
         }
-        
+
     if not has_at_least_one_team:
         return "incomplete", False, {}, []
-        
+
     official_teams = [g["name"] for g in group_mapping.values() if g["type"] == "team"]
     return "configured", True, group_mapping, sorted(official_teams)
 
@@ -314,7 +314,7 @@ def get_auth_token(api_key: str, api_secret: str, force_refresh: bool = False) -
                     )
                 expires_in = data.get("expires_in") or 3600
                 token_type = data.get("token_type") or "Bearer"
-                
+
                 # Cache token - with a margin of 60 seconds
                 token_cache.access_token = token
                 token_cache.token_type = token_type
@@ -367,8 +367,8 @@ def get_auth_token(api_key: str, api_secret: str, force_refresh: bool = False) -
 
 # Live transaction sequential page fetcher
 def fetch_all_pipeimob_transactions(
-    api_key: str, 
-    api_secret: str, 
+    api_key: str,
+    api_secret: str,
     data_inicio_criacao: Optional[str] = None,
     data_fim_criacao: Optional[str] = None,
     data_inicio_ccv: Optional[str] = None,
@@ -388,7 +388,7 @@ def fetch_all_pipeimob_transactions(
             data_mode="live",
             pipeimob_connection="authentication_failed"
         )
-        
+
     query_parts = []
     if data_inicio_criacao: query_parts.append(f"data_inicio_criacao={data_inicio_criacao}")
     if data_fim_criacao: query_parts.append(f"data_fim_criacao={data_fim_criacao}")
@@ -399,10 +399,10 @@ def fetch_all_pipeimob_transactions(
     if codigo_imovel: query_parts.append(f"codigo_imovel={codigo_imovel}")
     if codigo_contrato: query_parts.append(f"codigo_contrato={codigo_contrato}")
     if transacao_unique_id: query_parts.append(f"transacao_unique_id={transacao_unique_id}")
-    
+
     query_str = "&".join(query_parts)
     prefix = f"&{query_str}" if query_str else ""
-    
+
     def request_with_retry(url: str, retry_allowed: bool = True) -> dict:
         nonlocal token
         req = urllib.request.Request(
@@ -456,17 +456,17 @@ def fetch_all_pipeimob_transactions(
     seen_ids = set()
     current_page = 1
     pages_fetched = 0
-    
+
     while True:
         if current_page > 100:  # Infinite loop protection
             break
-            
+
         url = f"{BASE_URL}/negocios/transacoes?pagina={current_page}{prefix}"
         res_body = request_with_retry(url)
         pages_fetched += 1
-        
+
         txs = res_body.get("data", {}).get("transacoes", []) if isinstance(res_body.get("data"), dict) else []
-        
+
         for tx in txs:
             tx_id = tx.get("transacao_unique_id_pipeimob")
             if tx_id:
@@ -475,13 +475,13 @@ def fetch_all_pipeimob_transactions(
                     all_transactions.append(tx)
             else:
                 all_transactions.append(tx)
-                
+
         meta_p = None
         if "meta" in res_body and isinstance(res_body["meta"], dict) and "pagination" in res_body["meta"]:
             meta_p = res_body["meta"]["pagination"]
         elif "data" in res_body and isinstance(res_body["data"], dict) and "meta" in res_body["data"] and isinstance(res_body["data"]["meta"], dict) and "pagination" in res_body["data"]["meta"]:
             meta_p = res_body["data"]["meta"]["pagination"]
-            
+
         if meta_p is None:
             raise IntegrationUnavailableError(
                 status_code=503,
@@ -490,24 +490,24 @@ def fetch_all_pipeimob_transactions(
                 data_mode="live",
                 pipeimob_connection="unavailable"
             )
-            
+
         last_page = meta_p.get("total_pages") or 1
-        
+
         if current_page >= last_page:
             break
-            
+
         current_page += 1
-        
+
     return all_transactions, pages_fetched
 
 def get_current_data_mode_and_connection() -> tuple:
     data_mode_env = os.getenv("PIPEIMOB_DATA_MODE")
     app_env = os.getenv("APP_ENV", "production").lower()
-    
+
     api_key = os.getenv("PIPEIMOB_API_KEY")
     api_secret = os.getenv("PIPEIMOB_SECRET_KEY")
     has_credentials = bool(api_key and api_secret)
-    
+
     if data_mode_env == "demo":
         return "demo", "not_tested"
     elif data_mode_env == "live":
@@ -526,7 +526,7 @@ def get_current_data_mode_and_connection() -> tuple:
 def validate_dataset_origin(mode: str, source: str, dataset: list):
     app_env = os.getenv("APP_ENV", "production").lower()
     data_mode_env = os.getenv("PIPEIMOB_DATA_MODE")
-    
+
     # 1. Production + Live check
     if app_env == "production" and data_mode_env == "live":
         if mode != "live" or source != "pipeimob_api_v2":
@@ -534,7 +534,7 @@ def validate_dataset_origin(mode: str, source: str, dataset: list):
                 status_code=500,
                 detail="Critical failure: Live mode in production cannot use mock data or non-live source."
             )
-            
+
     # 2. Strict matching rules
     if mode == "live":
         if source != "pipeimob_api_v2":
@@ -566,11 +566,11 @@ def get_receipt_date(tx: dict) -> tuple[Optional[str], Optional[str]]:
     d_prev = tx.get("data_pagamento_comissao_prevista")
     if d_prev is not None and str(d_prev).strip() != "":
         return str(d_prev).strip(), "data_pagamento_comissao_prevista"
-        
+
     d_rec = tx.get("data_recebimento_comissao")
     if d_rec is not None and str(d_rec).strip() != "":
         return str(d_rec).strip(), "data_recebimento_comissao"
-        
+
     return None, None
 
 def parse_explicit_date(date_str: str):
@@ -580,21 +580,21 @@ def parse_explicit_date(date_str: str):
     from datetime import datetime
     from zoneinfo import ZoneInfo
     date_str = date_str.strip()
-    
+
     # 1. DD/MM/YYYY
     if re.match(r"^\d{2}/\d{2}/\d{4}$", date_str):
         try:
             return datetime.strptime(date_str, "%d/%m/%Y").date()
         except ValueError:
             return None
-            
+
     # 2. YYYY-MM-DD
     if re.match(r"^\d{4}-\d{2}-\d{2}$", date_str):
         try:
             return datetime.strptime(date_str, "%Y-%m-%d").date()
         except ValueError:
             return None
-            
+
     # 3. ISO 8601 with date and time
     if "T" in date_str or (" " in date_str and len(date_str) > 10):
         iso_str = date_str.replace("Z", "+00:00")
@@ -610,7 +610,7 @@ def parse_explicit_date(date_str: str):
             return dt.date()
         except ValueError:
             return None
-            
+
     return None
 
 def calculate_percentile(sorted_values: list, percentile: float) -> float:
@@ -627,13 +627,13 @@ def calculate_percentile(sorted_values: list, percentile: float) -> float:
     n = len(sorted_values)
     if n == 1:
         return float(sorted_values[0])
-    
+
     idx = percentile * (n - 1)
     low = int(idx)
     high = low + 1
     if high >= n:
         return float(sorted_values[low])
-    
+
     d = idx - low
     val = sorted_values[low] + d * (sorted_values[high] - sorted_values[low])
     return round(val, 1)
@@ -671,7 +671,7 @@ class CommissionSplitExtraction:
 
 def extract_commission_split(tx: dict) -> CommissionSplitExtraction:
     comissionados = tx.get("comissionados")
-    
+
     total_comm_raw = tx.get("total_comissao")
     if total_comm_raw is None or str(total_comm_raw).strip() == "":
         total_comissao = Decimal("0")
@@ -689,7 +689,7 @@ def extract_commission_split(tx: dict) -> CommissionSplitExtraction:
             matching_company_items_count=0,
             items_count=0
         )
-        
+
     if not isinstance(comissionados, list):
         return CommissionSplitExtraction(
             gralha_amount=None,
@@ -698,12 +698,12 @@ def extract_commission_split(tx: dict) -> CommissionSplitExtraction:
             matching_company_items_count=0,
             items_count=0
         )
-        
+
     gralha_amount = Decimal("0")
     all_participants_amount = Decimal("0")
     matching_company_items_count = 0
     items_count = len(comissionados)
-    
+
     for item in comissionados:
         if not isinstance(item, dict):
             return CommissionSplitExtraction(
@@ -713,7 +713,7 @@ def extract_commission_split(tx: dict) -> CommissionSplitExtraction:
                 matching_company_items_count=0,
                 items_count=items_count
             )
-            
+
         val_raw = item.get("comissionado_valor")
         if val_raw is None or str(val_raw).strip() == "":
             return CommissionSplitExtraction(
@@ -723,7 +723,7 @@ def extract_commission_split(tx: dict) -> CommissionSplitExtraction:
                 matching_company_items_count=0,
                 items_count=items_count
             )
-            
+
         try:
             val = to_decimal(val_raw)
             if val < 0:
@@ -742,22 +742,22 @@ def extract_commission_split(tx: dict) -> CommissionSplitExtraction:
                 matching_company_items_count=0,
                 items_count=items_count
             )
-            
+
         all_participants_amount += val
-        
+
         is_imob = item.get("comissionado_imobiliária")
         if is_imob is None:
             is_imob = item.get("comissionado_imobiliaria")
-            
+
         is_filial = item.get("comissionado_filial")
-        
+
         is_imob_bool = is_imob is True or str(is_imob).lower() in ["true", "1"]
         is_filial_bool = is_filial is True or str(is_filial).lower() in ["true", "1"]
-        
+
         if is_imob_bool or is_filial_bool:
             gralha_amount += val
             matching_company_items_count += 1
-            
+
     diff = abs(all_participants_amount - total_comissao)
     if diff > Decimal("0.01"):
         return CommissionSplitExtraction(
@@ -767,7 +767,7 @@ def extract_commission_split(tx: dict) -> CommissionSplitExtraction:
             matching_company_items_count=matching_company_items_count,
             items_count=items_count
         )
-        
+
     return CommissionSplitExtraction(
         gralha_amount=gralha_amount,
         all_participants_amount=all_participants_amount,
@@ -785,7 +785,7 @@ def calculate_vgc_split(tx: dict) -> tuple[Decimal, Decimal, Decimal]:
             vgc_total = to_decimal(total_comm_raw)
         except Exception:
             vgc_total = Decimal("0")
-            
+
     ext = extract_commission_split(tx)
     if ext.status == "valid":
         vgc_gralha = ext.gralha_amount
@@ -793,7 +793,7 @@ def calculate_vgc_split(tx: dict) -> tuple[Decimal, Decimal, Decimal]:
     else:
         vgc_gralha = Decimal("0")
         vgc_demais_participantes = Decimal("0")
-        
+
     return vgc_total, vgc_gralha, vgc_demais_participantes
 
 async def load_transactions_dataset(
@@ -813,7 +813,7 @@ async def load_transactions_dataset(
     import time
     start_time = time.perf_counter()
     data_mode, conn_status = get_current_data_mode_and_connection()
-    
+
     if data_mode == "unconfigured":
         raise IntegrationUnavailableError(
             status_code=503,
@@ -822,11 +822,11 @@ async def load_transactions_dataset(
             data_mode="unconfigured",
             pipeimob_connection="pending_configuration"
         )
-        
+
     if data_mode == "demo":
         from mock_data import MOCK_TRANSACTIONS
         dataset = MOCK_TRANSACTIONS
-        
+
         duration_ms = (time.perf_counter() - start_time) * 1000
         log_msg = {
             "event": "performance_metric",
@@ -845,7 +845,7 @@ async def load_transactions_dataset(
         }
         print(f"SECURE_LOG: {json.dumps(log_msg)}")
         return "demo", "synthetic_mock", dataset, 1, "miss"
-        
+
     # Live mode: validate that at least one direct filter is present.
     has_direct_filter = any([
         data_inicio_criacao,
@@ -858,13 +858,13 @@ async def load_transactions_dataset(
         codigo_contrato,
         transacao_unique_id
     ])
-    
+
     if not has_direct_filter:
         raise HTTPException(
             status_code=400,
             detail="At least one direct filter parameter is required in Live mode: data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id."
         )
-        
+
     if conn_status == "missing_credentials":
         raise IntegrationUnavailableError(
             status_code=503,
@@ -873,7 +873,7 @@ async def load_transactions_dataset(
             data_mode="live",
             pipeimob_connection="missing_credentials"
         )
-        
+
     cache_key = generate_dashboard_cache_key(
         data_inicio_criacao, data_fim_criacao,
         data_inicio_ccv, data_fim_ccv,
@@ -884,7 +884,7 @@ async def load_transactions_dataset(
     def sync_fetch():
         api_key = os.getenv("PIPEIMOB_API_KEY").strip()
         api_secret = os.getenv("PIPEIMOB_SECRET_KEY").strip()
-        
+
         txs, pages = fetch_all_pipeimob_transactions(
             api_key=api_key,
             api_secret=api_secret,
@@ -898,7 +898,7 @@ async def load_transactions_dataset(
             codigo_contrato=codigo_contrato,
             transacao_unique_id=transacao_unique_id
         )
-        
+
         if not txs:
             raise IntegrationUnavailableError(
                 status_code=503,
@@ -907,13 +907,13 @@ async def load_transactions_dataset(
                 data_mode="live",
                 pipeimob_connection="unavailable"
             )
-            
+
         for tx in txs:
             _, vgc_gralha, _ = calculate_vgc_split(tx)
             tx["comissao_imobiliaria"] = float(vgc_gralha)
             if "data_recebimento_comissao" not in tx or tx.get("data_recebimento_comissao") is None:
                 tx["data_recebimento_comissao"] = tx.get("data_pagamento_comissao")
-                
+
         dashboard_cache.set(cache_key, (txs, pages))
         return txs, pages
 
@@ -948,7 +948,7 @@ async def load_transactions_dataset(
         start_idx = (pagina - 1) * 25
         end_idx = start_idx + 25
         txs_to_return = live_txs[start_idx:end_idx]
-        
+
     duration_ms = (time.perf_counter() - start_time) * 1000
     log_msg = {
         "event": "performance_metric",
@@ -994,20 +994,20 @@ def get_filtered_transactions(
                 continue
             if data_fim_criacao and tx_date_str and tx_date_str > data_fim_criacao:
                 continue
-                
+
             tx_ccv = tx.get("data_contrato") or ""
             if data_inicio_ccv and tx_ccv and tx_ccv < data_inicio_ccv:
                 continue
             if data_fim_ccv and tx_ccv and tx_ccv > data_fim_ccv:
                 continue
-                
+
             if tx.get("etapa_atual") == "Arquivado":
                 tx_archived = tx.get("data_contrato") or ""
                 if data_arquivamento_inicio and tx_archived and tx_archived < data_arquivamento_inicio:
                     continue
                 if data_arquivamento_fim and tx_archived and tx_archived > data_arquivamento_fim:
                     continue
-                    
+
             if codigo_imovel:
                 tx_imovel = tx.get("codigo_imovel") or ""
                 if codigo_imovel.lower() not in tx_imovel.lower():
@@ -1020,7 +1020,7 @@ def get_filtered_transactions(
                 tx_unique = tx.get("transacao_unique_id_pipeimob") or ""
                 if transacao_unique_id.lower() not in tx_unique.lower():
                     continue
-                    
+
         # Local backend-only filters (always applied)
         if agent:
             tx_agent = tx.get("agente_gestor") or ""
@@ -1038,7 +1038,7 @@ def get_filtered_transactions(
             tx_etapa = tx.get("etapa_atual") or ""
             if etapa_atual.lower() not in tx_etapa.lower():
                 continue
-                
+
         filtered.append(tx)
     return filtered
 
@@ -1096,28 +1096,28 @@ def compute_dashboard_aggregates(
     data_fim_criacao: Optional[str] = None
 ) -> dict:
     from decimal import Decimal
-    
+
     months_pt = {
         "01": "Jan", "02": "Fev", "03": "Mar", "04": "Abr", "05": "Mai", "06": "Jun",
         "07": "Jul", "08": "Ago", "09": "Set", "10": "Out", "11": "Nov", "12": "Dez"
     }
-    
+
     # 1. Summary
     total_sales = Decimal("0.0")
     total_commissions = Decimal("0.0")
     for tx in filtered:
         total_sales += Decimal(str(tx.get("valor_contrato") or "0.0"))
         total_commissions += Decimal(str(tx.get("total_comissao") or "0.0"))
-    
+
     avg_rate = float(round((total_commissions / total_sales) * 100, 2)) if total_sales > 0 else 0.0
-    
+
     summary = {
         "total_sales": float(round(total_sales, 2)),
         "total_commissions": float(round(total_commissions, 2)),
         "avg_commission_rate": avg_rate,
         "transaction_count": len(filtered)
     }
-    
+
     # 2. Origins
     origin_groups = {}
     for tx in filtered:
@@ -1132,7 +1132,7 @@ def compute_dashboard_aggregates(
         for o, stats in origin_groups.items()
     ]
     origins.sort(key=lambda x: x["volume"], reverse=True)
-    
+
     # 3. Stages
     stage_groups = {}
     for tx in filtered:
@@ -1147,7 +1147,7 @@ def compute_dashboard_aggregates(
         for s, stats in stage_groups.items()
     ]
     stages.sort(key=lambda x: x["volume"], reverse=True)
-    
+
     # 4. Managers
     mgr_groups = {}
     for tx in filtered:
@@ -1167,7 +1167,7 @@ def compute_dashboard_aggregates(
             "ticket_medio": ticket
         })
     managers.sort(key=lambda x: x["volume"], reverse=True)
-    
+
     # 5. Payments
     financed_count = 0
     cash_count = 0
@@ -1185,12 +1185,12 @@ def compute_dashboard_aggregates(
             bank_groups[bank]["count"] += 1
         else:
             cash_count += 1
-            
+
         for fp in tx.get("forma_pagamento", []):
             m_name = fp.get("nome") or "Outros"
             m_val = Decimal(str(fp.get("valor") or "0.0"))
             method_groups[m_name] = method_groups.get(m_name, Decimal("0.0")) + m_val
-            
+
     total_deals = financed_count + cash_count
     ratio = float(round((financed_count / total_deals) * 100, 2)) if total_deals > 0 else 0.0
     banks = [
@@ -1210,7 +1210,7 @@ def compute_dashboard_aggregates(
         "banks": banks,
         "methods": methods
     }
-    
+
     # 6. Commissions
     commissions = []
     total_comm = Decimal("0.0")
@@ -1236,14 +1236,14 @@ def compute_dashboard_aggregates(
         "avg_commission_rate": avg_rate_comm,
         "commissions": commissions if expose_raw else []
     }
-    
+
     # 7. Timeline
     start_str = data_inicio_ccv or data_inicio_criacao
     end_str = data_fim_ccv or data_fim_criacao
-    
+
     start_ym = parse_date_to_year_month(start_str) if start_str else None
     end_ym = parse_date_to_year_month(end_str) if end_str else None
-    
+
     if not start_ym or not end_ym:
         dataset_yms = []
         for tx in filtered:
@@ -1262,13 +1262,13 @@ def compute_dashboard_aggregates(
                 start_ym = (now.year, now.month)
             if not end_ym:
                 end_ym = (now.year, now.month)
-                
+
     start_year, start_month = start_ym
     end_year, end_month = end_ym
-    
+
     if (start_year, start_month) > (end_year, end_month):
         start_year, start_month, end_year, end_month = end_year, end_month, start_year, start_month
-        
+
     months_range = []
     curr_year, curr_month = start_year, start_month
     while (curr_year, curr_month) <= (end_year, end_month):
@@ -1278,7 +1278,7 @@ def compute_dashboard_aggregates(
             curr_year += 1
         else:
             curr_month += 1
-            
+
     timeline_groups = {}
     for y, m in months_range:
         key = f"{y}-{m:02d}"
@@ -1287,12 +1287,12 @@ def compute_dashboard_aggregates(
             "sales": Decimal("0.0"),
             "commissions": Decimal("0.0")
         }
-        
+
     registros_com_data = 0
     registros_sem_data = 0
     datas_invalidas = 0
     found_fields = set()
-    
+
     unclassified_groups = {
         "count": 0,
         "sales": Decimal("0.0"),
@@ -1301,13 +1301,13 @@ def compute_dashboard_aggregates(
         "invalid_date_count": 0,
         "out_of_range_count": 0
     }
-    
+
     for tx in filtered:
         dt_str = extract_transaction_date(tx)
         ym = None
         is_missing = False
         is_invalid = False
-        
+
         if dt_str:
             ym = parse_date_to_year_month(dt_str)
             if not ym:
@@ -1316,7 +1316,7 @@ def compute_dashboard_aggregates(
         else:
             registros_sem_data += 1
             is_missing = True
-            
+
         priority_keys = [
             "data_assinatura_ccv",
             "data_ccv",
@@ -1331,15 +1331,15 @@ def compute_dashboard_aggregates(
                 found_key = pk
                 break
         found_fields.add(found_key)
-        
+
         val_sales = Decimal(str(tx.get("valor_contrato") or "0.0"))
         val_comm = Decimal(str(tx.get("total_comissao") or "0.0"))
-        
+
         if ym:
             registros_com_data += 1
             y, m = ym
             key = f"{y}-{m:02d}"
-            
+
             if key in timeline_groups:
                 timeline_groups[key]["count"] += 1
                 timeline_groups[key]["sales"] += val_sales
@@ -1368,7 +1368,7 @@ def compute_dashboard_aggregates(
         "quantidade_nao_classificada": unclassified_groups["count"]
     }
     print(f"SECURE_LOG: {json.dumps(log_data)}")
-    
+
     timeline = []
     for key in sorted(timeline_groups.keys()):
         parts = key.split("-")
@@ -1383,27 +1383,27 @@ def compute_dashboard_aggregates(
             "total_sales": f"{stats['sales']:.2f}",
             "total_commissions": f"{stats['commissions']:.2f}"
         })
-        
+
     timeline_count_sum = sum(t["transaction_count"] for t in timeline)
     timeline_sales_sum = sum(Decimal(t["total_sales"]) for t in timeline)
     timeline_comm_sum = sum(Decimal(t["total_commissions"]) for t in timeline)
-    
+
     unclassified_count = unclassified_groups["count"]
     unclassified_sales = unclassified_groups["sales"]
     unclassified_comm = unclassified_groups["commissions"]
-    
+
     reconciled_count = (timeline_count_sum + unclassified_count) == summary["transaction_count"]
     reconciled_sales = (timeline_sales_sum + unclassified_sales) == total_sales
     reconciled_comm = (timeline_comm_sum + unclassified_comm) == total_commissions
     is_reconciled = reconciled_count and reconciled_sales and reconciled_comm
-    
+
     reconciliation = {
         "summary_transaction_count": summary["transaction_count"],
         "timeline_transaction_count": timeline_count_sum,
         "unclassified_transaction_count": unclassified_count,
         "is_reconciled": is_reconciled
     }
-    
+
     unclassified_payload = {
         "transaction_count": unclassified_count,
         "total_sales": f"{unclassified_sales:.2f}",
@@ -1412,19 +1412,19 @@ def compute_dashboard_aggregates(
         "invalid_date_count": unclassified_groups["invalid_date_count"],
         "out_of_range_count": unclassified_groups["out_of_range_count"]
     }
-    
+
     # === VGC Commission Financials Analysis ===
     sp_tz = ZoneInfo("America/Sao_Paulo")
     as_of_datetime = datetime.now(sp_tz)
     as_of_date_obj = as_of_datetime.date()
     as_of_date_str = as_of_date_obj.strftime("%Y-%m-%d")
-    
+
     # Initialize totals
     tot_vgc_total = Decimal("0.0")
     tot_gralha = Decimal("0.0")
     tot_demais = Decimal("0.0")
     tot_unclassified = Decimal("0.0")
-    
+
     # Source counters
     receipt_date_sources = {
         "data_recebimento_comissao": 0,
@@ -1432,7 +1432,7 @@ def compute_dashboard_aggregates(
         "data_pagamento_comissao_prevista": 0,
         "missing": 0
     }
-    
+
     # Data Quality counters
     valid_split_count = 0
     valid_zero_company_share_count = 0
@@ -1441,20 +1441,20 @@ def compute_dashboard_aggregates(
     invalid_item_value_count = 0
     reconciliation_mismatch_count = 0
     reconciliation_diff_sum = Decimal("0")
-    
+
     # Classification sums by state
     received_total = Decimal("0.0")
     received_gralha = Decimal("0.0")
     received_demais = Decimal("0.0")
     received_unclassified = Decimal("0.0")
     received_count = 0
-    
+
     pending_total = Decimal("0.0")
     pending_gralha = Decimal("0.0")
     pending_demais = Decimal("0.0")
     pending_unclassified = Decimal("0.0")
     pending_count = 0
-    
+
     unknown_total = Decimal("0.0")
     unknown_gralha = Decimal("0.0")
     unknown_demais = Decimal("0.0")
@@ -1465,7 +1465,7 @@ def compute_dashboard_aggregates(
     missing_date_count = 0
     invalid_date_count = 0
     future_date_count = 0
-    
+
     for tx in filtered:
         # 1. Total Commission
         total_comm_raw = tx.get("total_comissao")
@@ -1476,10 +1476,10 @@ def compute_dashboard_aggregates(
                 vgc_total = to_decimal(total_comm_raw)
             except Exception:
                 vgc_total = Decimal("0")
-                
+
         # 2. Extract split
         ext = extract_commission_split(tx)
-        
+
         # Track data quality
         if ext.status == "valid":
             if ext.matching_company_items_count > 0:
@@ -1494,13 +1494,13 @@ def compute_dashboard_aggregates(
             invalid_item_value_count += 1
         elif ext.status == "reconciliation_mismatch":
             reconciliation_mismatch_count += 1
-            
+
         # Track reconciliation difference
         if ext.all_participants_amount is not None:
             reconciliation_diff_sum += abs(ext.all_participants_amount - vgc_total)
         else:
             reconciliation_diff_sum += vgc_total
-            
+
         # 3. Categorize split
         if ext.status == "valid":
             vgc_gralha = ext.gralha_amount
@@ -1510,7 +1510,7 @@ def compute_dashboard_aggregates(
             vgc_gralha = Decimal("0")
             vgc_demais = Decimal("0")
             vgc_unclassified = vgc_total
-            
+
         # 4. Get receipt date and source
         date_str, source = get_receipt_date(tx)
         if source == "data_pagamento_comissao_prevista":
@@ -1519,7 +1519,7 @@ def compute_dashboard_aggregates(
             receipt_date_sources["data_recebimento_comissao"] += 1
         else:
             receipt_date_sources["missing"] += 1
-            
+
         # 5. Classify by receipt status
         if date_str is None or str(date_str).strip() == "" or str(date_str).strip().lower() in ["none", "null"]:
             status = "missing"
@@ -1554,19 +1554,19 @@ def compute_dashboard_aggregates(
             received_demais += vgc_demais
             received_unclassified += vgc_unclassified
             received_count += 1
-                
+
         tot_vgc_total += vgc_total
         tot_gralha += vgc_gralha
         tot_demais += vgc_demais
         tot_unclassified += vgc_unclassified
-        
+
     # Reconciliations (for validation / dashboard_cache)
     diff1 = abs((tot_gralha + tot_demais + tot_unclassified) - tot_vgc_total)
     diff2 = abs((received_total + pending_total + unknown_total) - tot_vgc_total)
     diff3 = abs((received_gralha + pending_gralha + unknown_gralha) - tot_gralha)
     diff4 = abs((received_demais + pending_demais + unknown_demais) - tot_demais)
     diff5 = abs((received_unclassified + pending_unclassified + unknown_unclassified) - tot_unclassified)
-    
+
     reconciliation_difference_internal = diff1 + diff2 + diff3 + diff4 + diff5
     reconciled = (
         reconciliation_difference_internal == Decimal("0.0") and
@@ -1575,17 +1575,17 @@ def compute_dashboard_aggregates(
         malformed_array_count == 0 and
         missing_array_count == 0
     )
-    
+
     # Audit quantity reconciliations
     quantity_reconciled = (received_count + pending_count + unknown_count == len(filtered))
     if not quantity_reconciled or tot_gralha < 0 or tot_demais < 0 or tot_unclassified < 0:
         reconciled = False
-        
+
     received_ratio = float(received_total / tot_vgc_total) if tot_vgc_total > 0 else 0.0
     gralha_ratio = float(tot_gralha / tot_vgc_total) if tot_vgc_total > 0 else 0.0
     demais_ratio = float(tot_demais / tot_vgc_total) if tot_vgc_total > 0 else 0.0
     unclassified_ratio = float(tot_unclassified / tot_vgc_total) if tot_vgc_total > 0 else 0.0
-    
+
     # 6. Contract build
     has_issues = (
         tot_unclassified > Decimal("0") or
@@ -1643,7 +1643,7 @@ def compute_dashboard_aggregates(
             "reconciliation_difference": f"{reconciliation_diff_sum:.2f}"
         }
     }
-    
+
     commission_financials = {
         "period_basis": "ccv",
         "as_of_date": as_of_date_str,
@@ -1697,16 +1697,16 @@ def compute_dashboard_aggregates(
             "não comprova a liquidação de todas as parcelas financeiras."
         )
     }
-    
+
     # === Sales Cycle (Velocidade de Venda) Analysis ===
     missing_signature_date_count = 0
     missing_capture_date_count = 0
     invalid_date_count = 0
     negative_duration_count = 0
-    
+
     valid_durations = []
     valid_records = []
-    
+
     # Timeline initialization: reuse months_range
     sales_cycle_timeline_groups = {}
     for y, m in months_range:
@@ -1720,48 +1720,48 @@ def compute_dashboard_aggregates(
             "durations": [],
             "within_90_days_count": 0
         }
-        
+
     for tx in filtered:
         # 1. signature date
         dt_sig_str = extract_transaction_date(tx)
         if dt_sig_str is None or str(dt_sig_str).strip() == "":
             missing_signature_date_count += 1
             continue
-            
+
         # 2. capture date
         dt_cap_str = tx.get("data_captacao")
         if dt_cap_str is None or str(dt_cap_str).strip() == "":
             missing_capture_date_count += 1
             continue
-            
+
         # 3. parse dates
         dt_sig = parse_explicit_date(dt_sig_str)
         dt_cap = parse_explicit_date(dt_cap_str)
         if dt_sig is None or dt_cap is None:
             invalid_date_count += 1
             continue
-            
+
         # 4. negative duration
         if dt_cap > dt_sig:
             negative_duration_count += 1
             continue
-            
+
         # 5. valid record
         sales_cycle_days = (dt_sig - dt_cap).days
         valid_durations.append(sales_cycle_days)
-        
+
         # Prepare helper metadata for extremes
         raw_code = tx.get("codigo_imovel")
         raw_title = tx.get("titulo_nome_negocio")
-        
+
         clean_code = str(raw_code).strip() if raw_code is not None else None
         if clean_code == "":
             clean_code = None
-            
+
         clean_title = str(raw_title).strip() if raw_title is not None else None
         if clean_title == "":
             clean_title = None
-            
+
         # Privacy & Security: Sanitization of deal title if it contains sensitive info
         if clean_title is not None:
             import re
@@ -1776,7 +1776,7 @@ def compute_dashboard_aggregates(
                 has_sensitive = True
             if has_sensitive:
                 clean_title = None
-                
+
         valid_records.append({
             "days": sales_cycle_days,
             "dt_sig": dt_sig,
@@ -1784,7 +1784,7 @@ def compute_dashboard_aggregates(
             "uid": tx.get("transacao_unique_id_pipeimob"),
             "title": clean_title
         })
-        
+
         # Add to timeline group if matched
         ym_sig = parse_date_to_year_month(dt_sig_str)
         if ym_sig:
@@ -1795,31 +1795,31 @@ def compute_dashboard_aggregates(
                 if sales_cycle_days <= 90:
                     sales_cycle_timeline_groups[ym_key]["within_90_days_count"] += 1
                 sales_cycle_timeline_groups[ym_key]["transaction_count"] += 1
-                
+
     # Sort durations for percentiles
     valid_durations.sort()
     valid_count = len(valid_durations)
     total_count = len(filtered)
-    
+
     # Selection of Extremes (Fastest and Longest Sale)
     fastest_sale = None
     longest_sale = None
-    
+
     if valid_records:
         def make_tiebreaker_key(record, is_longest=False):
             days_key = -record["days"] if is_longest else record["days"]
             dt_sig_key = record["dt_sig"]
-            
+
             code_none = record["code"] is None
             code_val = record["code"] if not code_none else ""
             code_key = (code_none, code_val)
-            
+
             uid_none = record["uid"] is None
             uid_val = record["uid"] if not uid_none else ""
             uid_key = (uid_none, uid_val)
-            
+
             return (days_key, dt_sig_key, code_key, uid_key)
-            
+
         # 1. Fastest sale
         valid_records.sort(key=lambda r: make_tiebreaker_key(r, is_longest=False))
         fastest_rec = valid_records[0]
@@ -1828,7 +1828,7 @@ def compute_dashboard_aggregates(
             "property_code": fastest_rec["code"],
             "deal_title": fastest_rec["title"]
         }
-        
+
         # 2. Longest sale
         valid_records.sort(key=lambda r: make_tiebreaker_key(r, is_longest=True))
         longest_rec = valid_records[0]
@@ -1837,7 +1837,7 @@ def compute_dashboard_aggregates(
             "property_code": longest_rec["code"],
             "deal_title": longest_rec["title"]
         }
-        
+
     # Initialize faixas / buckets
     bucket_counts = {
         "0_30_days": 0,
@@ -1847,11 +1847,11 @@ def compute_dashboard_aggregates(
         "181_365_days": 0,
         "over_365_days": 0
     }
-    
+
     within_30_days_count = 0
     within_60_days_count = 0
     within_90_days_count = 0
-    
+
     for days in valid_durations:
         if days <= 30:
             bucket_counts["0_30_days"] += 1
@@ -1871,7 +1871,7 @@ def compute_dashboard_aggregates(
             bucket_counts["181_365_days"] += 1
         else:
             bucket_counts["over_365_days"] += 1
-            
+
     # Calculate stats
     if valid_count > 0:
         avg_days = round(sum(valid_durations) / valid_count, 1)
@@ -1891,7 +1891,7 @@ def compute_dashboard_aggregates(
         min_days = 0
         max_days = 0
         w90_ratio = 0.0
-        
+
     # Buckets output construction
     buckets_list = [
         {"key": "0_30_days", "label": "Até 30 dias", "min_days": 0, "max_days": 30, "count": bucket_counts["0_30_days"], "ratio": round(bucket_counts["0_30_days"] / valid_count, 4) if valid_count > 0 else 0.0},
@@ -1901,20 +1901,20 @@ def compute_dashboard_aggregates(
         {"key": "181_365_days", "label": "6 a 12 meses", "min_days": 181, "max_days": 365, "count": bucket_counts["181_365_days"], "ratio": round(bucket_counts["181_365_days"] / valid_count, 4) if valid_count > 0 else 0.0},
         {"key": "over_365_days", "label": "Mais de 12 meses", "min_days": 366, "max_days": None, "count": bucket_counts["over_365_days"], "ratio": round(bucket_counts["over_365_days"] / valid_count, 4) if valid_count > 0 else 0.0}
     ]
-    
+
     # Timeline output construction
     timeline_list = []
     for k_ym in sorted(sales_cycle_timeline_groups.keys()):
         g = sales_cycle_timeline_groups[k_ym]
         durs = sorted(g["durations"])
         cnt = g["transaction_count"]
-        
+
         t_avg = round(sum(durs) / cnt, 1) if cnt > 0 else 0.0
         t_med = calculate_percentile(durs, 0.50) if cnt > 0 else 0.0
         t_p75 = calculate_percentile(durs, 0.75) if cnt > 0 else 0.0
         t_w90_count = g["within_90_days_count"]
         t_w90_ratio = round(t_w90_count / cnt, 4) if cnt > 0 else 0.0
-        
+
         timeline_list.append({
             "month": k_ym,
             "label": g["label"],
@@ -1925,7 +1925,7 @@ def compute_dashboard_aggregates(
             "within_90_days_count": t_w90_count,
             "within_90_days_ratio": t_w90_ratio
         })
-        
+
     # Reconciliations assertions (Quantity audit)
     buckets_sum = sum(b["count"] for b in buckets_list)
     reconciled_valid = (buckets_sum == valid_count)
@@ -1942,9 +1942,9 @@ def compute_dashboard_aggregates(
         bucket_counts["31_60_days"] +
         bucket_counts["61_90_days"]
     )
-    
+
     sales_cycle_reconciled = (reconciled_valid and reconciled_total_count and reconciled_w90)
-    
+
     sales_cycle = {
         "period_basis": "ccv",
         "start_field": "data_captacao",
@@ -1974,7 +1974,7 @@ def compute_dashboard_aggregates(
         "fastest_sale": fastest_sale,
         "longest_sale": longest_sale
     }
-    
+
     # Secure diagnostic logging for sales_cycle
     sales_cycle_log = {
         "event": "sales_cycle_analysis_completed",
@@ -1989,7 +1989,7 @@ def compute_dashboard_aggregates(
         "reconciled": sales_cycle_reconciled
     }
     print(f"SECURE_LOG: {json.dumps(sales_cycle_log)}")
-    
+
     # Secure diagnostic logging
     vgc_log = {
         "event": "vgc_analysis_completed_v1",
@@ -2006,19 +2006,19 @@ def compute_dashboard_aggregates(
     # === Data Quality (Qualidade dos Dados) Analysis ===
     import collections
     config_status, config_configured, group_mapping, config_official_teams = parse_official_team_groups()
-    
+
     distinct_agents = {} # key -> {"name": display_name, "branch": display_branch, "tx_count": 0, "teams": set(), "groups_seen": set()}
     unassigned_manager_transactions_count = 0
-    
+
     tx_evals = []
-    
+
     for tx in filtered:
         tx_id = tx.get("transacao_unique_id_pipeimob")
         manager_name = tx.get("agente_gestor")
-        
+
         # Check source field rules
         groups = tx.get("agente_gestor_grupos_a_que_pertence")
-        
+
         if groups is None:
             legacy_vals = []
             for lf in ["agente_gestor_grupos_a_que_pertence1", "agente_gestor_grupos_a_que_pertence2", "agente_gestor_grupos_a_que_pertence3"]:
@@ -2036,7 +2036,7 @@ def compute_dashboard_aggregates(
                     groups.append(matched_id)
                 else:
                     groups.append(name)
-        
+
         if not manager_name or manager_name.strip() == "":
             unassigned_manager_transactions_count += 1
             tx_evals.append({
@@ -2048,13 +2048,13 @@ def compute_dashboard_aggregates(
                 "branch": None
             })
             continue
-            
+
         manager_name = manager_name.strip()
         branch_val = tx.get("agente_gestor_grupo_filial")
         normalized_name = " ".join(manager_name.split()).lower()
         normalized_branch = " ".join(branch_val.strip().split()).lower() if branch_val else ""
         agent_key = normalized_name + "__" + normalized_branch
-        
+
         if agent_key not in distinct_agents:
             distinct_agents[agent_key] = {
                 "name": manager_name,
@@ -2063,9 +2063,9 @@ def compute_dashboard_aggregates(
                 "teams": set(),
                 "groups_seen": set()
             }
-            
+
         distinct_agents[agent_key]["tx_count"] += 1
-        
+
         tx_evals.append({
             "tx_id": tx_id,
             "agent_key": agent_key,
@@ -2074,31 +2074,31 @@ def compute_dashboard_aggregates(
             "groups": groups,
             "branch": branch_val
         })
-        
+
     for eval_item in tx_evals:
         if "missing_manager_assignment" in eval_item["confirmed"]:
             continue
-            
+
         groups = eval_item["groups"]
         agent_key = eval_item["agent_key"]
-        
+
         if config_status == "configured":
             if not groups:
                 eval_item["confirmed"].add("missing_team_assignment")
             else:
                 mapped = [group_mapping[gid] for gid in groups if gid in group_mapping]
                 unmapped = [gid for gid in groups if gid not in group_mapping]
-                
+
                 has_team = any(g["type"] == "team" for g in mapped)
                 has_branch_or_other = any(g["type"] in ["branch", "other"] for g in mapped)
-                
+
                 if not has_team:
                     if has_branch_or_other or not unmapped:
                         eval_item["confirmed"].add("missing_team_assignment")
-                        
+
                 if unmapped and not has_team:
                     eval_item["review"].add("configuration_mapping_required")
-                    
+
                 for g in mapped:
                     if g["type"] == "team":
                         distinct_agents[agent_key]["teams"].add(g["name"])
@@ -2112,46 +2112,46 @@ def compute_dashboard_aggregates(
                 eval_item["review"].add("configuration_mapping_required")
                 for gid in groups:
                     distinct_agents[agent_key]["groups_seen"].add(gid)
-                    
+
     for agent_key, info in distinct_agents.items():
         if len(info["teams"]) > 1:
             for eval_item in tx_evals:
                 if eval_item["agent_key"] == agent_key:
                     eval_item["review"].add("inconsistent_team_assignment")
-                    
+
     affected_transactions_count = 0
     review_only_transactions_count = 0
     compliant_transactions_count = 0
-    
+
     agent_status_map = {}
     agent_confirmed_issues = collections.defaultdict(set)
     agent_review_issues = collections.defaultdict(set)
     agent_affected_tx_count = collections.defaultdict(int)
-    
+
     for eval_item in tx_evals:
         agent_key = eval_item["agent_key"]
-        
+
         if eval_item["confirmed"]:
             affected_transactions_count += 1
         elif eval_item["review"]:
             review_only_transactions_count += 1
         else:
             compliant_transactions_count += 1
-            
+
         if agent_key:
             agent_confirmed_issues[agent_key].update(eval_item["confirmed"])
             agent_review_issues[agent_key].update(eval_item["review"])
             if eval_item["confirmed"] or eval_item["review"]:
                 agent_affected_tx_count[agent_key] += 1
-                
+
     affected_agents_count = 0
     review_only_agents_count = 0
     compliant_agents_count = 0
-    
+
     for agent_key in distinct_agents.keys():
         confirmed = agent_confirmed_issues[agent_key]
         review = agent_review_issues[agent_key]
-        
+
         if confirmed:
             agent_status_map[agent_key] = "affected"
             affected_agents_count += 1
@@ -2161,7 +2161,7 @@ def compute_dashboard_aggregates(
         else:
             agent_status_map[agent_key] = "compliant"
             compliant_agents_count += 1
-            
+
     issue_template = {
         "missing_team_assignment": {
             "id": "missing_team_assignment",
@@ -2209,7 +2209,7 @@ def compute_dashboard_aggregates(
             ]
         }
     }
-    
+
     issue_counts = collections.defaultdict(lambda: {"agents": set(), "tx_count": 0})
     for eval_item in tx_evals:
         agent_key = eval_item["agent_key"]
@@ -2217,7 +2217,7 @@ def compute_dashboard_aggregates(
             if agent_key:
                 issue_counts[issue_id]["agents"].add(agent_key)
             issue_counts[issue_id]["tx_count"] += 1
-            
+
     issues_list = []
     for issue_id, counts in issue_counts.items():
         if issue_id in issue_template:
@@ -2225,15 +2225,15 @@ def compute_dashboard_aggregates(
             tpl["affected_agents_count"] = len(counts["agents"])
             tpl["affected_transactions_count"] = counts["tx_count"]
             issues_list.append(tpl)
-            
+
     affected_agents_list = []
     review_agents_list = []
-    
+
     for agent_key, info in distinct_agents.items():
         state = agent_status_map[agent_key]
         confirmed = sorted(list(agent_confirmed_issues[agent_key]))
         review = sorted(list(agent_review_issues[agent_key]))
-        
+
         detail = {
             "agent_name": info["name"],
             "confirmed_issue_ids": confirmed,
@@ -2241,26 +2241,26 @@ def compute_dashboard_aggregates(
             "branch_value": info["branch"],
             "affected_transactions_count": agent_affected_tx_count[agent_key]
         }
-        
+
         resolved_group_names = []
         for gval in info["groups_seen"]:
             if gval in group_mapping:
                 resolved_group_names.append(group_mapping[gval]["name"])
             else:
                 resolved_group_names.append("Grupo Não Classificado")
-                
+
         detail["current_team_values"] = sorted(list(set(resolved_group_names)))
-        
+
         if state == "affected":
             affected_agents_list.append(detail)
         elif state == "review_only":
             review_agents_list.append(detail)
-            
+
     affected_agents_list.sort(key=lambda x: x["agent_name"])
     review_agents_list.sort(key=lambda x: x["agent_name"])
-    
+
     distinct_agents_count = len(distinct_agents)
-    
+
     agent_compliance_ratio = (
         round(compliant_agents_count / distinct_agents_count, 4)
         if distinct_agents_count > 0 else 0.0
@@ -2269,7 +2269,7 @@ def compute_dashboard_aggregates(
         round(compliant_transactions_count / len(filtered), 4)
         if len(filtered) > 0 else 0.0
     )
-    
+
     if affected_agents_count == 0 and review_only_agents_count == 0 and unassigned_manager_transactions_count == 0 and review_only_transactions_count == 0:
         overall_status = "ok"
     else:
@@ -2277,10 +2277,10 @@ def compute_dashboard_aggregates(
             overall_status = "critical"
         else:
             overall_status = "attention"
-            
+
     agents_reconciled = (compliant_agents_count + affected_agents_count + review_only_agents_count == distinct_agents_count)
     transactions_reconciled = (compliant_transactions_count + affected_transactions_count + review_only_transactions_count == len(filtered))
-    
+
     dq_summary = {
         "status": overall_status,
         "distinct_agents_count": distinct_agents_count,
@@ -2294,7 +2294,7 @@ def compute_dashboard_aggregates(
         "agent_compliance_ratio": agent_compliance_ratio,
         "transaction_compliance_ratio": transaction_compliance_ratio
     }
-    
+
     dq_teams = {
         "source_fields": {
             "primary": "agente_gestor_grupos_a_que_pertence",
@@ -2316,9 +2316,9 @@ def compute_dashboard_aggregates(
             "transactions_reconciled": transactions_reconciled
         }
     }
-    
+
     timestamp_utc = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-    
+
     data_quality = {
         "period_basis": "ccv",
         "generated_at": timestamp_utc,
@@ -2353,7 +2353,7 @@ def sanitize_transaction(tx: dict) -> dict:
         compradores_count = sum(1 for c in clientes if isinstance(c, dict) and c.get("papel") == "Comprador")
     else:
         compradores_count = len(compradores_raw) if isinstance(compradores_raw, list) else int(compradores_raw or 0)
-    
+
     # 2. vendedores count
     vendedores_raw = tx.get("vendedores")
     if vendedores_raw is None:
@@ -2362,7 +2362,7 @@ def sanitize_transaction(tx: dict) -> dict:
         vendedores_count = sum(1 for c in clientes if isinstance(c, dict) and c.get("papel") == "Vendedor")
     else:
         vendedores_count = len(vendedores_raw) if isinstance(vendedores_raw, list) else int(vendedores_raw or 0)
-    
+
     # 3. forma_pagamento summarized (natureza/nome e valor)
     forma_pagamento_raw = tx.get("forma_pagamento") or []
     forma_pagamento_clean = []
@@ -2376,7 +2376,7 @@ def sanitize_transaction(tx: dict) -> dict:
                 except ValueError:
                     fp_val = 0.0
                 forma_pagamento_clean.append({"nome": nome, "valor": fp_val})
-                
+
     # 4. comissionados sanitizados (apenas nome, tipo e valor)
     comissionados_raw = tx.get("comissionados") or []
     comissionados_clean = []
@@ -3351,7 +3351,7 @@ def get_metadata_wrapper(data_mode: str, source: str):
 async def get_health():
     timestamp_utc = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     data_mode, conn_status = get_current_data_mode_and_connection()
-    
+
     return HealthResponse(
         status="ok",
         service="pipeimob-report",
@@ -3431,7 +3431,7 @@ async def get_catalog():
             "agrupamentos por etapa exigem normalização local"
         ]
     )
-    
+
     return CatalogResponse(
         api_version="v2",
         resources=[transactions_resource]
@@ -3458,27 +3458,27 @@ async def verify_backend_api_key(
             detail="Authentication required.",
             error_code="authentication_required"
         )
-        
+
     if not authorization.startswith("Bearer "):
         raise AuthException(
             status_code=401,
             detail="Invalid or expired access token.",
             error_code="invalid_access_token"
         )
-        
+
     token = authorization.split(" ")[1]
-    
+
     try:
         app_env = os.getenv("APP_ENV", "production").lower()
         jwks_url = os.getenv("SUPABASE_JWKS_URL")
-        
+
         if not jwks_url and app_env == "production":
             raise AuthException(
                 status_code=401,
                 detail="Invalid or expired access token.",
                 error_code="invalid_access_token"
             )
-            
+
         if jwks_url:
             # 1. Pre-verify token structure and kid header if JWKS is used
             try:
@@ -3495,7 +3495,7 @@ async def verify_backend_api_key(
                     detail="Invalid or expired access token.",
                     error_code="invalid_access_token"
                 )
-                
+
             from jwt.exceptions import PyJWKClientConnectionError
             client = get_jwk_client()
             try:
@@ -3512,14 +3512,14 @@ async def verify_backend_api_key(
                     detail="Supabase project does not expose asymmetric JWT signing keys.",
                     error_code="supabase_jwks_unavailable"
                 )
-                
+
             if not jwk_set.keys:
                 raise AuthException(
                     status_code=503,
                     detail="Supabase project does not expose asymmetric JWT signing keys.",
                     error_code="supabase_jwks_unavailable"
                 )
-                
+
             try:
                 signing_key = client.get_signing_key_from_jwt(token)
             except Exception:
@@ -3528,10 +3528,10 @@ async def verify_backend_api_key(
                     detail="Invalid or expired access token.",
                     error_code="invalid_access_token"
                 )
-            
+
             aud = os.getenv("SUPABASE_JWT_AUDIENCE", "authenticated")
             iss = os.getenv("SUPABASE_ISSUER")
-            
+
             payload = jwt.decode(
                 token,
                 signing_key.key,
@@ -3547,7 +3547,7 @@ async def verify_backend_api_key(
                 token,
                 options={"verify_signature": False}
             )
-            
+
             # Explicit exp check
             if "exp" in payload:
                 import time
@@ -3555,12 +3555,12 @@ async def verify_backend_api_key(
                     raise jwt.ExpiredSignatureError("Token has expired")
             else:
                 raise jwt.MissingRequiredClaimError("exp")
-                
+
             # Explicit iss check
             expected_iss = os.getenv("SUPABASE_ISSUER")
             if expected_iss and payload.get("iss") != expected_iss:
                 raise jwt.InvalidIssuerError("Invalid issuer")
-                
+
             # Explicit aud check
             expected_aud = os.getenv("SUPABASE_JWT_AUDIENCE", "authenticated")
             if payload.get("aud") != expected_aud:
@@ -3578,7 +3578,7 @@ async def verify_backend_api_key(
                 detail="Invalid or expired access token.",
                 error_code="invalid_access_token"
             )
-            
+
         # 2. email must be present
         if not payload.get("email") or not isinstance(payload.get("email"), str):
             raise AuthException(
@@ -3586,7 +3586,7 @@ async def verify_backend_api_key(
                 detail="Invalid or expired access token.",
                 error_code="invalid_access_token"
             )
-            
+
     except AuthException:
         raise
     except jwt.ExpiredSignatureError:
@@ -3613,31 +3613,31 @@ async def verify_backend_api_key(
             detail="Invalid or expired access token.",
             error_code="invalid_access_token"
         )
-        
+
     user_email = payload.get("email")
     user_email = user_email.lower().strip()
     allowed_emails_env = os.getenv("ALLOWED_USER_EMAILS", "")
     allowed_domains_env = os.getenv("ALLOWED_EMAIL_DOMAINS", "gralhaimoveis.com.br")
-    
+
     allowed_emails = [e.strip().lower() for e in allowed_emails_env.split(",") if e.strip()]
     allowed_domains = [d.strip().lower() for d in allowed_domains_env.split(",") if d.strip()]
-    
+
     email_parts = user_email.split("@")
     user_domain = email_parts[1] if len(email_parts) > 1 else ""
-    
+
     is_authorized = False
     if user_email in allowed_emails:
         is_authorized = True
     elif user_domain in allowed_domains:
         is_authorized = True
-        
+
     if not is_authorized:
         raise AuthException(
             status_code=403,
             detail="User is not authorized to access this resource.",
             error_code="forbidden"
         )
-        
+
     return payload
 
 @app.get(
@@ -3678,9 +3678,9 @@ async def get_transactions(
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
         agent, category, financing, etapa_atual
     )
-    
+
     exposed_txs = process_transactions_exposure(filtered)
-    
+
     response.headers["X-Data-Mode"] = mode
     meta = get_metadata_wrapper(mode, src)
     meta["data"] = TransactionsDataPayload(count=len(exposed_txs), transactions=exposed_txs)
@@ -3703,13 +3703,13 @@ async def get_transaction_by_id(
     # In live mode we must pass at least one direct filter, so we pass both or try to load by transacao_unique_id or codigo_contrato
     mode, src, dataset, pages_fetched, cache_status = await load_transactions_dataset(transacao_unique_id=id, request_id=req_id)
     validate_dataset_origin(mode, src, dataset)
-    
+
     target_tx = None
     for tx in dataset:
         if tx.get("transacao_unique_id_pipeimob") == id or tx.get("codigo_contrato") == id:
             target_tx = tx
             break
-            
+
     if not target_tx:
         try:
             mode, src, dataset, pages_fetched, cache_status = await load_transactions_dataset(codigo_contrato=id, request_id=req_id)
@@ -3720,13 +3720,13 @@ async def get_transaction_by_id(
                     break
         except Exception:
             pass
-            
+
     if not target_tx:
         raise HTTPException(status_code=404, detail="Transaction not found")
-        
+
     expose_raw = os.getenv("EXPOSE_RAW_TRANSACTIONS", "false").strip().lower() == "true"
     exposed_tx = target_tx if expose_raw else sanitize_transaction(target_tx)
-        
+
     response.headers["X-Data-Mode"] = mode
     meta = get_metadata_wrapper(mode, src)
     meta["data"] = exposed_tx
@@ -3770,9 +3770,9 @@ async def get_dashboard_summary(
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
         agent, category, financing, etapa_atual
     )
-    
+
     aggregates = compute_dashboard_aggregates(filtered, data_inicio_ccv, data_fim_ccv, data_inicio_criacao, data_fim_criacao)
-    
+
     response.headers["X-Data-Mode"] = mode
     meta = get_metadata_wrapper(mode, src)
     meta["data"] = SummaryDataPayload(**aggregates["summary"])
@@ -3816,9 +3816,9 @@ async def get_dashboard_origins(
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
         agent, category, financing, etapa_atual
     )
-    
+
     aggregates = compute_dashboard_aggregates(filtered, data_inicio_ccv, data_fim_ccv, data_inicio_criacao, data_fim_criacao)
-    
+
     response.headers["X-Data-Mode"] = mode
     meta = get_metadata_wrapper(mode, src)
     meta["data"] = OriginsDataPayload(origins=[OriginMetric(**o) for o in aggregates["origins"]])
@@ -3862,9 +3862,9 @@ async def get_dashboard_stages(
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
         agent, category, financing, etapa_atual
     )
-    
+
     aggregates = compute_dashboard_aggregates(filtered, data_inicio_ccv, data_fim_ccv, data_inicio_criacao, data_fim_criacao)
-    
+
     response.headers["X-Data-Mode"] = mode
     meta = get_metadata_wrapper(mode, src)
     meta["data"] = StagesDataPayload(stages=[StageMetric(**s) for s in aggregates["stages"]])
@@ -3908,9 +3908,9 @@ async def get_dashboard_managers(
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
         agent, category, financing, etapa_atual
     )
-    
+
     aggregates = compute_dashboard_aggregates(filtered, data_inicio_ccv, data_fim_ccv, data_inicio_criacao, data_fim_criacao)
-    
+
     response.headers["X-Data-Mode"] = mode
     meta = get_metadata_wrapper(mode, src)
     meta["data"] = ManagersDataPayload(managers=[ManagerMetric(**m) for m in aggregates["managers"]])
@@ -3954,9 +3954,9 @@ async def get_dashboard_payments(
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
         agent, category, financing, etapa_atual
     )
-    
+
     aggregates = compute_dashboard_aggregates(filtered, data_inicio_ccv, data_fim_ccv, data_inicio_criacao, data_fim_criacao)
-    
+
     response.headers["X-Data-Mode"] = mode
     meta = get_metadata_wrapper(mode, src)
     meta["data"] = PaymentsDataPayload(
@@ -4006,9 +4006,9 @@ async def get_dashboard_commissions(
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
         agent, category, financing, etapa_atual
     )
-    
+
     aggregates = compute_dashboard_aggregates(filtered, data_inicio_ccv, data_fim_ccv, data_inicio_criacao, data_fim_criacao)
-    
+
     response.headers["X-Data-Mode"] = mode
     meta = get_metadata_wrapper(mode, src)
     meta["data"] = CommissionsDataPayload(
@@ -4061,9 +4061,9 @@ async def get_dashboard_timeline(
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
         agent, category, financing, etapa_atual
     )
-    
+
     aggregates = compute_dashboard_aggregates(filtered, data_inicio_ccv, data_fim_ccv, data_inicio_criacao, data_fim_criacao)
-    
+
     response.headers["X-Data-Mode"] = mode
     meta = get_metadata_wrapper(mode, src)
     meta["data"] = TimelineDataPayload(
@@ -4077,7 +4077,7 @@ def warm_up_dashboard_cache():
     raw = os.getenv("DASHBOARD_WARMUP_PERIODS_JSON")
     if not raw or not raw.strip():
         return
-        
+
     try:
         import json
         periods = json.loads(raw)
@@ -4086,18 +4086,18 @@ def warm_up_dashboard_cache():
     except Exception as e:
         print(f"WARMUP_ERROR: Failed to parse DASHBOARD_WARMUP_PERIODS_JSON: {e}")
         return
-        
+
     import threading
     threading.Thread(target=_sequential_warmup, args=(periods,), daemon=True).start()
 
 def _sequential_warmup(periods):
     import time
     time.sleep(2)
-    
+
     data_mode, conn_status = get_current_data_mode_and_connection()
     if data_mode == "live" and conn_status == "missing_credentials":
         return
-        
+
     for idx, period in enumerate(periods):
         if not isinstance(period, dict):
             continue
@@ -4105,13 +4105,13 @@ def _sequential_warmup(periods):
         end_date = period.get("end_date")
         if not start_date or not end_date:
             continue
-            
+
         import re
         date_pattern = re.compile(r"^\d{4}-\d{2}-\d{2}$")
         if not date_pattern.match(start_date) or not date_pattern.match(end_date):
             print(f"WARMUP_ERROR: Invalid date format: start_date={start_date}, end_date={end_date}")
             continue
-            
+
         cache_key = generate_dashboard_cache_key(
             data_inicio_ccv=start_date,
             data_fim_ccv=end_date
@@ -4119,7 +4119,7 @@ def _sequential_warmup(periods):
         cached_val, cache_status = dashboard_cache.get_status(cache_key)
         if cache_status in ["fresh", "stale"]:
             continue
-            
+
         try:
             loop = asyncio.new_event_loop()
             loop.run_until_complete(load_transactions_dataset(
@@ -4130,7 +4130,7 @@ def _sequential_warmup(periods):
             loop.close()
         except Exception as e:
             print(f"WARMUP_ERROR: Failed to warm up cache for {start_date} to {end_date}: {e}")
-            
+
         time.sleep(1)
 
 @app.on_event("startup")
@@ -4164,7 +4164,7 @@ async def get_dashboard_full(
     refresh: Optional[bool] = Query(None)
 ):
     req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
-    
+
     try:
         mode, src, dataset, pages_fetched, cache_status = await load_transactions_dataset(
             data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
@@ -4181,14 +4181,14 @@ async def get_dashboard_full(
             data_mode="live",
             pipeimob_connection="unavailable"
         )
-        
+
     validate_dataset_origin(mode, src, dataset)
     filtered = get_filtered_transactions(
         dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
         data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
         agent, category, financing, etapa_atual
     )
-    
+
     try:
         aggregates = compute_dashboard_aggregates(filtered, data_inicio_ccv, data_fim_ccv, data_inicio_criacao, data_fim_criacao)
     except Exception as e:
@@ -4199,23 +4199,23 @@ async def get_dashboard_full(
             data_mode=mode,
             pipeimob_connection="internal_error"
         )
-    
+
     response.headers["X-Data-Mode"] = mode
     response.headers["X-Cache"] = cache_status
-    
+
     enable_debug = os.getenv("ENABLE_SAFE_DEBUG_METRICS", "false").strip().lower() == "true"
     debug_metrics = None
     if enable_debug and dataset:
         debug_metrics = {}
         debug_metrics["transaction_count"] = len(dataset)
-        
+
         # 1. Top-level keys presence counts
         top_keys_counts = {}
         for tx in dataset:
             for k in tx.keys():
                 top_keys_counts[k] = top_keys_counts.get(k, 0) + 1
         debug_metrics["top_level_keys_counts"] = top_keys_counts
-        
+
         # 2. Priority keys presence, types and validity counts
         priority_keys = [
             "data_assinatura_ccv",
@@ -4225,13 +4225,13 @@ async def get_dashboard_full(
             "data_criacao",
             "created_at"
         ]
-        
+
         presence_counts = {}
         type_counts = {}
         parsed_successfully = 0
         missing_count = 0
         invalid_count = 0
-        
+
         # Recurse checking
         nested_paths_counts = {}
         def check_nested(node, prefix_path=""):
@@ -4245,10 +4245,10 @@ async def get_dashboard_full(
             elif isinstance(node, list):
                 for idx, item in enumerate(node):
                     check_nested(item, f"{prefix_path}[{idx}]")
-                    
+
         for tx in dataset:
             check_nested(tx)
-            
+
             for pk in priority_keys:
                 val = tx.get(pk)
                 if val is not None and val != "":
@@ -4257,7 +4257,7 @@ async def get_dashboard_full(
                     if pk not in type_counts:
                         type_counts[pk] = {}
                     type_counts[pk][tname] = type_counts[pk].get(tname, 0) + 1
-            
+
             dt_str = extract_transaction_date(tx)
             if dt_str:
                 ym = parse_date_to_year_month(dt_str)
@@ -4267,14 +4267,14 @@ async def get_dashboard_full(
                     invalid_count += 1
             else:
                 missing_count += 1
-                
+
         debug_metrics["priority_keys_presence"] = presence_counts
         debug_metrics["priority_keys_types"] = type_counts
         debug_metrics["nested_paths_counts"] = nested_paths_counts
         debug_metrics["parsed_successfully"] = parsed_successfully
         debug_metrics["missing_count"] = missing_count
         debug_metrics["invalid_count"] = invalid_count
-        
+
         # 3. Stage counts validation
         debug_metrics["stages_validation"] = {
             "raw_count": len(dataset),
@@ -4284,7 +4284,7 @@ async def get_dashboard_full(
         }
 
     generated_at_utc = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-    
+
     filters_map = {
         "data_inicio_ccv": data_inicio_ccv,
         "data_fim_ccv": data_fim_ccv,
@@ -4322,4 +4322,1018 @@ async def get_dashboard_full(
         commission_financials=CommissionFinancials(**aggregates["commission_financials"]),
         debug_metrics=debug_metrics,
         data_quality=DataQualityPayload(**aggregates["data_quality"]) if aggregates.get("data_quality") is not None else None
+    )
+
+
+# ======================================================================
+# CONTRACTS CONTROL (SECRETARIA DE VENDAS) BI MODULE
+# ======================================================================
+
+from pydantic import BaseModel
+from typing import List, Optional, Dict, Any
+from datetime import date, datetime
+import math
+
+class ContractsControlPeriod(BaseModel):
+    start: Optional[str] = None
+    end: Optional[str] = None
+    basis: str = "data_inicio_venda"
+    as_of_date: str
+
+class ContractsControlExtraction(BaseModel):
+    upstream_endpoint: str
+    upstream_filter_field: str
+    coverage_start: str
+    coverage_end: str
+    pages_fetched: int
+    raw_records_fetched: int
+    coverage_status: str
+
+class ContractsControlCohortSummary(BaseModel):
+    records_count: int
+    completed_count: int
+    in_progress_count: int
+    data_issue_count: int
+    cancelled_count: int
+    average_duration_days: float
+    median_duration_days: float
+    p75_duration_days: float
+    p90_duration_days: float
+    average_open_aging_days: float
+    median_open_aging_days: float
+    without_manager_count: int
+    unknown_modality_count: int
+
+class ContractsControlOperationsSummary(BaseModel):
+    scope: str = "operations"
+    opening_backlog_count: int
+    period_started_count: int
+    period_completed_count: int
+    ending_backlog_count: int
+    excluded_data_issue_count: int
+    provisional: bool = True
+
+class ContractsControlBucket(BaseModel):
+    scope: str = "cohort"
+    key: str
+    label: str
+    count: int
+    ratio: float
+
+class ContractsControlResponsibleMetric(BaseModel):
+    scope: str = "cohort"
+    responsible: Optional[str] = None
+    records_count: int
+    completed_count: int
+    in_progress_count: int
+    data_issue_count: int
+    average_duration_days: float
+    median_duration_days: float
+    p75_duration_days: float
+    average_open_aging_days: float
+    median_open_aging_days: float
+    completion_ratio: float
+    unknown_modality_count: int
+
+class ContractsControlManagerMetric(BaseModel):
+    scope: str = "cohort"
+    manager: Optional[str] = None
+    records_count: int
+    completed_count: int
+    in_progress_count: int
+    data_issue_count: int
+    average_duration_days: float
+    median_duration_days: float
+    p75_duration_days: float
+    average_open_aging_days: float
+    median_open_aging_days: float
+    completion_ratio: float
+
+class ContractsControlModalityMetric(BaseModel):
+    scope: str = "cohort"
+    modality: str
+    label: str
+    count: int
+    ratio: float
+
+class ContractsControlSourceTypeMetric(BaseModel):
+    scope: str = "cohort"
+    source_type: Optional[str] = None
+    label: str
+    count: int
+    ratio: float
+
+class ContractsControlTimelineMetric(BaseModel):
+    scope: str = "operations"
+    month: str
+    label: str
+    opening_backlog: int
+    started_count: int
+    completed_count: int
+    net_flow: int
+    ending_backlog: int
+    excluded_data_issue_count: int
+    average_duration_days: float
+    median_duration_days: float
+    provisional: bool = True
+
+class ContractsControlDataQuality(BaseModel):
+    scope: str = "cohort"
+    records_count: int
+    valid_records_count: int
+    missing_start_date_count: int
+    invalid_start_date_count: int
+    open_without_contract_date_count: int
+    invalid_contract_date_count: int
+    negative_duration_count: int
+    future_start_date_count: int
+    missing_manager_count: int
+    missing_financing_field_count: int
+    mapping_status: Dict[str, str]
+
+class ContractsControlExtractionQuality(BaseModel):
+    raw_records_count: int
+    unique_records_count: int
+    duplicate_transaction_count: int
+    duplicate_conflict_count: int
+    duplicate_resolution_policy: str = "first_api_occurrence"
+
+class ContractsControlSummaryResponse(BaseModel):
+    period: ContractsControlPeriod
+    extraction: ContractsControlExtraction
+    extraction_quality: ContractsControlExtractionQuality
+    cohort_summary: ContractsControlCohortSummary
+    operations_summary: ContractsControlOperationsSummary
+    aging_buckets: List[ContractsControlBucket]
+    duration_buckets: List[ContractsControlBucket]
+    by_responsible: List[ContractsControlResponsibleMetric]
+    by_manager: List[ContractsControlManagerMetric]
+    by_modality: List[ContractsControlModalityMetric]
+    by_source_type: List[ContractsControlSourceTypeMetric]
+    timeline: List[ContractsControlTimelineMetric]
+    data_quality: ContractsControlDataQuality
+
+class ContractsControlDeal(BaseModel):
+    transaction_id: str
+    property_code: str
+    property_title: Optional[str] = None
+    start_date: Optional[str] = None
+    contract_date: Optional[str] = None
+    duration_days: Optional[int] = None
+    current_aging_days: Optional[int] = None
+    aging_days_at_period_end: Optional[int] = None
+    manager: Optional[str] = None
+    responsible: Optional[str] = None
+    modality: str
+    source_type: Optional[str] = None
+    current_status: str
+    status_at_period_end: str
+    data_quality_flags: List[str]
+    period_roles: Optional[List[str]] = None
+
+class ContractsControlDealsResponse(BaseModel):
+    page: int
+    page_size: int
+    total_records: int
+    total_pages: int
+    deals: List[ContractsControlDeal]
+
+# Cache and settings
+CONTRACTS_CONTROL_CACHE_VERSION = "contracts-control-v1-data-inicio-venda"
+
+class ContractsControlCache:
+    def __init__(self):
+        from threading import Lock
+        self.cache = {}
+        self.lock = Lock()
+
+    def get_status(self, key):
+        with self.lock:
+            if key in self.cache:
+                val, fresh_until, stale_until = self.cache[key]
+                now = time.time()
+                if now <= fresh_until:
+                    return val, "fresh"
+                elif now <= stale_until:
+                    return val, "stale"
+                else:
+                    del self.cache[key]
+            return None, "miss"
+
+    def get(self, key):
+        val, status = self.get_status(key)
+        return val
+
+    def set(self, key, val, ttl=300):
+        with self.lock:
+            now = time.time()
+            self.cache[key] = (val, now + ttl, now + ttl + DASHBOARD_STALE_TTL_SECONDS)
+
+    def clear(self):
+        with self.lock:
+            self.cache.clear()
+
+contracts_control_cache = ContractsControlCache()
+
+def generate_contracts_control_cache_key(coverage_start: str) -> tuple:
+    return (CONTRACTS_CONTROL_CACHE_VERSION, coverage_start)
+
+# Strict date parsing and stats helpers
+def parse_date_to_date_obj(val: Any) -> Optional[date]:
+    if val is None:
+        return None
+    val_str = str(val).strip()
+    if val_str == "" or val_str.lower() in ("none", "null"):
+        return None
+    try:
+        return datetime.strptime(val_str, "%Y-%m-%d").date()
+    except ValueError:
+        pass
+    try:
+        return datetime.strptime(val_str, "%d/%m/%Y").date()
+    except ValueError:
+        pass
+    try:
+        return datetime.fromisoformat(val_str.replace("Z", "+00:00")).date()
+    except ValueError:
+        pass
+    return None
+
+def contracts_control_calculate_percentile(values: List[float], percentile: float) -> float:
+    if not values:
+        return 0.0
+    return calculate_percentile(sorted(values), percentile / 100.0)
+
+def contracts_control_calculate_median(values: List[float]) -> float:
+    return contracts_control_calculate_percentile(values, 50.0)
+
+def calculate_average(values: List[float]) -> float:
+    if not values:
+        return 0.0
+    return float(sum(values) / len(values))
+
+def deduplicate_contracts_control_dataset(dataset: list) -> tuple[list, int, int]:
+    seen = {}
+    unique_list = []
+    duplicate_count = 0
+    conflict_count = 0
+
+    for tx in dataset:
+        tx_id = tx.get("transacao_unique_id_pipeimob")
+        if not tx_id:
+            unique_list.append(tx)
+            continue
+
+        if tx_id not in seen:
+            seen[tx_id] = tx
+            unique_list.append(tx)
+        else:
+            duplicate_count += 1
+            first_tx = seen[tx_id]
+            diverged = (
+                first_tx.get("codigo_imovel") != tx.get("codigo_imovel") or
+                first_tx.get("data_inicio_venda") != tx.get("data_inicio_venda") or
+                first_tx.get("data_contrato") != tx.get("data_contrato") or
+                first_tx.get("agente_gestor") != tx.get("agente_gestor") or
+                first_tx.get("financiamento") != tx.get("financiamento")
+            )
+            if diverged:
+                conflict_count += 1
+
+    return unique_list, duplicate_count, conflict_count
+
+def classify_contracts_control_process(tx: dict, as_of_date_obj: date, end_date_obj: date) -> dict:
+    start_str = tx.get("data_inicio_venda")
+    contract_str = tx.get("data_contrato")
+
+    start_date_obj = parse_date_to_date_obj(start_str)
+    start_has_raw = start_str is not None and str(start_str).strip() != ""
+    start_is_invalid = start_has_raw and start_date_obj is None
+
+    contract_date_obj = parse_date_to_date_obj(contract_str)
+    contract_has_raw = contract_str is not None and str(contract_str).strip() != ""
+    contract_is_invalid = contract_has_raw and contract_date_obj is None
+
+    def get_status_at(ref_date: date):
+        if not start_has_raw:
+            return "data_issue"
+        if start_is_invalid:
+            return "data_issue"
+        if contract_is_invalid:
+            return "data_issue"
+        if start_date_obj and start_date_obj > ref_date:
+            if start_date_obj > as_of_date_obj:
+                return "data_issue"
+            return "future"
+        if contract_date_obj and contract_date_obj < start_date_obj:
+            return "data_issue"
+
+        if contract_date_obj is None or contract_date_obj > ref_date:
+            return "in_progress"
+        else:
+            return "completed"
+
+    status_at_period_end = get_status_at(end_date_obj)
+    current_status = get_status_at(as_of_date_obj)
+
+    data_quality_flags = set()
+    if not start_has_raw:
+        data_quality_flags.add("missing_start_date")
+    if start_is_invalid:
+        data_quality_flags.add("invalid_start_date")
+    if contract_is_invalid:
+        data_quality_flags.add("invalid_contract_date")
+    if start_date_obj and start_date_obj > as_of_date_obj:
+        data_quality_flags.add("future_start_date")
+    if start_date_obj and contract_date_obj and contract_date_obj < start_date_obj:
+        data_quality_flags.add("negative_duration")
+
+    financiamento = tx.get("financiamento")
+    if financiamento is None:
+        data_quality_flags.add("missing_financing_field")
+
+    manager = tx.get("agente_gestor")
+    if manager is None or str(manager).strip() == "":
+        data_quality_flags.add("missing_manager")
+
+    duration_days = None
+    if start_date_obj and contract_date_obj and contract_date_obj >= start_date_obj and not contract_is_invalid and not start_is_invalid:
+        duration_days = (contract_date_obj - start_date_obj).days
+
+    current_aging_days = None
+    if current_status == "in_progress" and start_date_obj:
+        current_aging_days = (as_of_date_obj - start_date_obj).days
+
+    aging_days_at_period_end = None
+    if status_at_period_end == "in_progress" and start_date_obj:
+        aging_days_at_period_end = (end_date_obj - start_date_obj).days
+
+    return {
+        "start_date_obj": start_date_obj,
+        "contract_date_obj": contract_date_obj,
+        "current_status": current_status,
+        "status_at_period_end": status_at_period_end,
+        "duration_days": duration_days,
+        "current_aging_days": current_aging_days,
+        "aging_days_at_period_end": aging_days_at_period_end,
+        "data_quality_flags": sorted(list(data_quality_flags))
+    }
+
+async def load_contracts_control_dataset(
+    request_id: Optional[str] = None,
+    refresh: bool = False
+) -> tuple:
+    import time
+    start_time = time.perf_counter()
+    data_mode, conn_status = get_current_data_mode_and_connection()
+
+    if data_mode == "unconfigured":
+        raise IntegrationUnavailableError(
+            status_code=503,
+            detail="Configuration pending. Please set PIPEIMOB_DATA_MODE environment variable.",
+            error_code="integration_unconfigured",
+            data_mode="unconfigured",
+            pipeimob_connection="pending_configuration"
+        )
+
+    if data_mode == "demo":
+        from mock_data import MOCK_TRANSACTIONS
+        dataset = MOCK_TRANSACTIONS
+        return "demo", "synthetic_mock", dataset, 1, "miss"
+
+    if conn_status == "missing_credentials":
+        raise IntegrationUnavailableError(
+            status_code=503,
+            detail="Pipeimob credentials are not configured on the server.",
+            error_code="missing_credentials",
+            data_mode="live",
+            pipeimob_connection="missing_credentials"
+        )
+
+    coverage_start = "2020-01-01"
+    cache_key = generate_contracts_control_cache_key(coverage_start)
+
+    def sync_fetch():
+        api_key = os.getenv("PIPEIMOB_API_KEY").strip()
+        api_secret = os.getenv("PIPEIMOB_SECRET_KEY").strip()
+
+        txs, pages = fetch_all_pipeimob_transactions(
+            api_key=api_key,
+            api_secret=api_secret,
+            data_inicio_criacao=coverage_start
+        )
+
+        if not txs:
+            raise IntegrationUnavailableError(
+                status_code=503,
+                detail="Pipeimob CRM API returned empty transactions dataset.",
+                error_code="invalid_pipeimob_response",
+                data_mode="live",
+                pipeimob_connection="unavailable"
+            )
+
+        contracts_control_cache.set(cache_key, (txs, pages))
+        return txs, pages
+
+    if refresh:
+        coro = lambda: asyncio.get_event_loop().run_in_executor(None, sync_fetch)
+        live_txs, pages_fetched = await single_flight_registry.execute(cache_key, coro)
+        cache_status = "miss"
+    else:
+        cached_val, status = contracts_control_cache.get_status(cache_key)
+        if status == "fresh":
+            live_txs, pages_fetched = cached_val
+            cache_status = "fresh"
+        elif status == "stale":
+            live_txs, pages_fetched = cached_val
+            cache_status = "stale"
+            if not await single_flight_registry.is_running(cache_key):
+                async def run_bg_refresh():
+                    try:
+                        c = lambda: asyncio.get_event_loop().run_in_executor(None, sync_fetch)
+                        await single_flight_registry.execute(cache_key, c)
+                    except Exception:
+                        pass
+                asyncio.create_task(run_bg_refresh())
+        else:
+            coro = lambda: asyncio.get_event_loop().run_in_executor(None, sync_fetch)
+            live_txs, pages_fetched = await single_flight_registry.execute(cache_key, coro)
+            cache_status = "miss"
+
+    return "live", "pipeimob_api_v2", live_txs, pages_fetched, cache_status
+
+def generate_months_between(start_date_obj: date, end_date_obj: date) -> list[str]:
+    months = []
+    curr = start_date_obj.replace(day=1)
+    end_limit = end_date_obj.replace(day=1)
+    while curr <= end_limit:
+        months.append(curr.strftime("%Y-%m"))
+        if curr.month == 12:
+            curr = curr.replace(year=curr.year + 1, month=1)
+        else:
+            curr = curr.replace(month=curr.month + 1)
+    return months
+
+def get_duration_bucket(days: int) -> str:
+    if days <= 3: return "0_3_days"
+    if days <= 7: return "4_7_days"
+    if days <= 15: return "8_15_days"
+    if days <= 30: return "16_30_days"
+    if days <= 60: return "31_60_days"
+    return "over_60_days"
+
+def get_aging_bucket(days: int) -> str:
+    if days <= 3: return "0_3_days"
+    if days <= 7: return "4_7_days"
+    if days <= 15: return "8_15_days"
+    if days <= 30: return "16_30_days"
+    return "over_30_days"
+
+# Main Core Aggregator
+def compute_contracts_control_data(dataset: list, start_date_str: str, end_date_str: str, as_of_date_str: str) -> dict:
+    start_date_obj = parse_date_to_date_obj(start_date_str)
+    end_date_obj = parse_date_to_date_obj(end_date_str)
+    as_of_date_obj = parse_date_to_date_obj(as_of_date_str)
+
+    # 1. Deduplicate
+    unique_list, duplicate_count, conflict_count = deduplicate_contracts_control_dataset(dataset)
+    raw_records_count = len(dataset)
+    unique_records_count = len(unique_list)
+
+    # 2. Classify
+    classified_txs = []
+    for tx in unique_list:
+        res = classify_contracts_control_process(tx, as_of_date_obj, end_date_obj)
+        res["tx"] = tx
+        classified_txs.append(res)
+
+    # 3. Categorize Universes
+    cohort_txs = []
+    operations_txs = []
+    opening_backlog_txs = []
+    period_started_txs = []
+    period_completed_txs = []
+    ending_backlog_txs = []
+    excluded_data_issue_txs = []
+
+    for c in classified_txs:
+        # Cohort Universe: start_date <= start_date_obj <= end_date
+        if c["start_date_obj"] and start_date_obj <= c["start_date_obj"] <= end_date_obj:
+            cohort_txs.append(c)
+
+        # Operations Universe (exclude overall data issues)
+        if c["status_at_period_end"] == "data_issue" or c["current_status"] == "data_issue":
+            excluded_data_issue_txs.append(c)
+            continue
+
+        is_opening = False
+        is_started = False
+        is_completed = False
+        is_ending = False
+
+        # Opening Backlog: start < start_date and (contract is None or contract >= start_date)
+        if c["start_date_obj"] and c["start_date_obj"] < start_date_obj:
+            if c["contract_date_obj"] is None or c["contract_date_obj"] >= start_date_obj:
+                is_opening = True
+                opening_backlog_txs.append(c)
+
+        # Started: start between start_date and end_date
+        if c["start_date_obj"] and start_date_obj <= c["start_date_obj"] <= end_date_obj:
+            is_started = True
+            period_started_txs.append(c)
+
+        # Completed: contract between start_date and end_date
+        if c["contract_date_obj"] and start_date_obj <= c["contract_date_obj"] <= end_date_obj:
+            is_completed = True
+            period_completed_txs.append(c)
+
+        # Ending Backlog: start <= end_date and (contract is None or contract > end_date)
+        if c["start_date_obj"] and c["start_date_obj"] <= end_date_obj:
+            if c["contract_date_obj"] is None or c["contract_date_obj"] > end_date_obj:
+                is_ending = True
+                ending_backlog_txs.append(c)
+
+        if is_opening or is_started or is_completed or is_ending:
+            roles = []
+            if is_opening: roles.append("opening_backlog")
+            if is_started: roles.append("started_in_period")
+            if is_completed: roles.append("completed_in_period")
+            if is_ending: roles.append("ending_backlog")
+            c["period_roles"] = roles
+            operations_txs.append(c)
+
+    # Cohort calculations
+    records_count_cohort = len(cohort_txs)
+    completed_cohort = [c for c in cohort_txs if c["status_at_period_end"] == "completed"]
+    in_progress_cohort = [c for c in cohort_txs if c["status_at_period_end"] == "in_progress"]
+    data_issue_cohort = [c for c in cohort_txs if c["status_at_period_end"] == "data_issue"]
+    cancelled_cohort_count = 0
+
+    completed_durations = [c["duration_days"] for c in completed_cohort if c["duration_days"] is not None]
+    in_progress_agings = [c["aging_days_at_period_end"] for c in in_progress_cohort if c["aging_days_at_period_end"] is not None]
+
+    without_manager_cohort_count = len([c for c in cohort_txs if c["tx"].get("agente_gestor") is None or str(c["tx"].get("agente_gestor")).strip() == ""])
+    unknown_modality_cohort_count = len([c for c in cohort_txs if not c["tx"].get("financiamento")])
+
+    # Operations calculations
+    opening_backlog_count = len(opening_backlog_txs)
+    period_started_count = len(period_started_txs)
+    period_completed_count = len(period_completed_txs)
+    ending_backlog_count = len(ending_backlog_txs)
+    excluded_data_issue_count = len(excluded_data_issue_txs)
+
+    # Aging and duration buckets (cohort completed/in_progress)
+    duration_counts = {}
+    for d in completed_durations:
+        bucket = get_duration_bucket(d)
+        duration_counts[bucket] = duration_counts.get(bucket, 0) + 1
+
+    duration_labels = {
+        "0_3_days": "0 a 3 dias",
+        "4_7_days": "4 a 7 dias",
+        "8_15_days": "8 a 15 dias",
+        "16_30_days": "16 a 30 dias",
+        "31_60_days": "31 a 60 dias",
+        "over_60_days": "Acima de 60 dias"
+    }
+    duration_buckets = []
+    tot_d = sum(duration_counts.values())
+    for k in ["0_3_days", "4_7_days", "8_15_days", "16_30_days", "31_60_days", "over_60_days"]:
+        cnt = duration_counts.get(k, 0)
+        ratio = float(cnt / tot_d) if tot_d > 0 else 0.0
+        duration_buckets.append({
+            "key": k,
+            "label": duration_labels[k],
+            "count": cnt,
+            "ratio": ratio
+        })
+
+    aging_counts = {}
+    for a in in_progress_agings:
+        bucket = get_aging_bucket(a)
+        aging_counts[bucket] = aging_counts.get(bucket, 0) + 1
+
+    aging_labels = {
+        "0_3_days": "0 a 3 dias",
+        "4_7_days": "4 a 7 dias",
+        "8_15_days": "8 a 15 dias",
+        "16_30_days": "16 a 30 dias",
+        "over_30_days": "Acima de 30 dias"
+    }
+    aging_buckets = []
+    tot_a = sum(aging_counts.values())
+    for k in ["0_3_days", "4_7_days", "8_15_days", "16_30_days", "over_30_days"]:
+        cnt = aging_counts.get(k, 0)
+        ratio = float(cnt / tot_a) if tot_a > 0 else 0.0
+        aging_buckets.append({
+            "key": k,
+            "label": aging_labels[k],
+            "count": cnt,
+            "ratio": ratio
+        })
+
+    # Group by manager (cohort)
+    by_manager_dict = {}
+    for c in cohort_txs:
+        mgr = c["tx"].get("agente_gestor")
+        if not mgr:
+            mgr = None
+        if mgr not in by_manager_dict:
+            by_manager_dict[mgr] = []
+        by_manager_dict[mgr].append(c)
+
+    by_manager_metrics = []
+    for mgr, tx_list in by_manager_dict.items():
+        recs = len(tx_list)
+        comps = [t for t in tx_list if t["status_at_period_end"] == "completed"]
+        comps_count = len(comps)
+        in_progs = [t for t in tx_list if t["status_at_period_end"] == "in_progress"]
+        in_progs_count = len(in_progs)
+        issues = len([t for t in tx_list if t["status_at_period_end"] == "data_issue"])
+
+        comp_durs = [t["duration_days"] for t in comps if t["duration_days"] is not None]
+        ip_agings = [t["aging_days_at_period_end"] for t in in_progs if t["aging_days_at_period_end"] is not None]
+
+        by_manager_metrics.append({
+            "manager": mgr,
+            "records_count": recs,
+            "completed_count": comps_count,
+            "in_progress_count": in_progs_count,
+            "data_issue_count": issues,
+            "average_duration_days": calculate_average(comp_durs),
+            "median_duration_days": contracts_control_calculate_median(comp_durs),
+            "p75_duration_days": contracts_control_calculate_percentile(comp_durs, 75.0),
+            "average_open_aging_days": calculate_average(ip_agings),
+            "median_open_aging_days": contracts_control_calculate_median(ip_agings),
+            "completion_ratio": float(comps_count / recs) if recs > 0 else 0.0
+        })
+
+    # Group by modality (cohort)
+    fin_count = len([c for c in cohort_txs if c["tx"].get("financiamento") is True])
+    unk_count = len(cohort_txs) - fin_count
+    tot_mod = len(cohort_txs)
+    by_modality_metrics = [
+        {
+            "modality": "financing",
+            "label": "Financiamento",
+            "count": fin_count,
+            "ratio": float(fin_count / tot_mod) if tot_mod > 0 else 0.0
+        },
+        {
+            "modality": "unknown",
+            "label": "Não classificado",
+            "count": unk_count,
+            "ratio": float(unk_count / tot_mod) if tot_mod > 0 else 0.0
+        }
+    ]
+
+    # Timeline calculations (operations)
+    timeline_months = generate_months_between(start_date_obj, end_date_obj)
+    timeline_metrics = []
+
+    curr_backlog = opening_backlog_count
+    for m in timeline_months:
+        started_m = [c for c in operations_txs if c["start_date_obj"] and c["start_date_obj"].strftime("%Y-%m") == m]
+        completed_m = [c for c in operations_txs if c["contract_date_obj"] and c["contract_date_obj"].strftime("%Y-%m") == m]
+
+        started_cnt = len(started_m)
+        completed_cnt = len(completed_m)
+        net_flow = started_cnt - completed_cnt
+        ending_backlog = curr_backlog + net_flow
+
+        comp_durs = [c["duration_days"] for c in completed_m if c["duration_days"] is not None]
+
+        issue_m_cnt = len([
+            c for c in excluded_data_issue_txs
+            if c["start_date_obj"] and c["start_date_obj"].strftime("%Y-%m") == m
+        ])
+
+        dt_month = datetime.strptime(m, "%Y-%m")
+        month_names = {
+            1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril", 5: "Maio", 6: "Junho",
+            7: "Julho", 8: "Agosto", 9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro"
+        }
+        label = f"{month_names[dt_month.month]} {dt_month.year}"
+
+        timeline_metrics.append({
+            "month": m,
+            "label": label,
+            "opening_backlog": curr_backlog,
+            "started_count": started_cnt,
+            "completed_count": completed_cnt,
+            "net_flow": net_flow,
+            "ending_backlog": ending_backlog,
+            "excluded_data_issue_count": issue_m_cnt,
+            "average_duration_days": calculate_average(comp_durs),
+            "median_duration_days": contracts_control_calculate_median(comp_durs),
+            "provisional": True
+        })
+        curr_backlog = ending_backlog
+
+    # Data Quality calculations (cohort)
+    dq_records_count = len(cohort_txs)
+    dq_completed = len(completed_cohort)
+    dq_in_progress = len(in_progress_cohort)
+    dq_valid_records_count = dq_completed + dq_in_progress
+
+    missing_start = len([c for c in cohort_txs if not c["tx"].get("data_inicio_venda")])
+    invalid_start = len([c for c in cohort_txs if c["tx"].get("data_inicio_venda") and parse_date_to_date_obj(c["tx"].get("data_inicio_venda")) is None])
+
+    open_without_contract_date = dq_in_progress
+
+    invalid_contract = len([
+        c for c in cohort_txs
+        if c["tx"].get("data_contrato") and parse_date_to_date_obj(c["tx"].get("data_contrato")) is None
+    ])
+    neg_duration = len([
+        c for c in cohort_txs
+        if c["start_date_obj"] and c["contract_date_obj"] and c["contract_date_obj"] < c["start_date_obj"]
+    ])
+    future_start = len([
+        c for c in cohort_txs
+        if c["start_date_obj"] and c["start_date_obj"] > as_of_date_obj
+    ])
+    missing_mgr = len([
+        c for c in cohort_txs
+        if c["tx"].get("agente_gestor") is None or str(c["tx"].get("agente_gestor")).strip() == ""
+    ])
+    missing_fin = len([
+        c for c in cohort_txs
+        if c["tx"].get("financiamento") is None
+    ])
+
+    mapping_status = {
+        "property_title": "unresolved",
+        "responsible": "unresolved",
+        "modality": "partial",
+        "source_type": "unresolved",
+        "cancellation": "unresolved"
+    }
+
+    return {
+        "extraction_quality": {
+            "raw_records_count": raw_records_count,
+            "unique_records_count": unique_records_count,
+            "duplicate_transaction_count": duplicate_count,
+            "duplicate_conflict_count": conflict_count,
+            "duplicate_resolution_policy": "first_api_occurrence"
+        },
+        "cohort_summary": {
+            "records_count": records_count_cohort,
+            "completed_count": len(completed_cohort),
+            "in_progress_count": len(in_progress_cohort),
+            "data_issue_count": len(data_issue_cohort),
+            "cancelled_count": cancelled_cohort_count,
+            "average_duration_days": calculate_average(completed_durations),
+            "median_duration_days": contracts_control_calculate_median(completed_durations),
+            "p75_duration_days": contracts_control_calculate_percentile(completed_durations, 75.0),
+            "p90_duration_days": contracts_control_calculate_percentile(completed_durations, 90.0),
+            "average_open_aging_days": calculate_average(in_progress_agings),
+            "median_open_aging_days": contracts_control_calculate_median(in_progress_agings),
+            "without_manager_count": without_manager_cohort_count,
+            "unknown_modality_count": unknown_modality_cohort_count
+        },
+        "operations_summary": {
+            "opening_backlog_count": opening_backlog_count,
+            "period_started_count": period_started_count,
+            "period_completed_count": period_completed_count,
+            "ending_backlog_count": ending_backlog_count,
+            "excluded_data_issue_count": excluded_data_issue_count
+        },
+        "aging_buckets": aging_buckets,
+        "duration_buckets": duration_buckets,
+        "by_responsible": [],
+        "by_manager": by_manager_metrics,
+        "by_modality": by_modality_metrics,
+        "by_source_type": [],
+        "timeline": timeline_metrics,
+        "data_quality": {
+            "scope": "cohort",
+            "records_count": dq_records_count,
+            "valid_records_count": dq_valid_records_count,
+            "missing_start_date_count": missing_start,
+            "invalid_start_date_count": invalid_start,
+            "open_without_contract_date_count": open_without_contract_date,
+            "invalid_contract_date_count": invalid_contract,
+            "negative_duration_count": neg_duration,
+            "future_start_date_count": future_start,
+            "missing_manager_count": missing_mgr,
+            "missing_financing_field_count": missing_fin,
+            "mapping_status": mapping_status
+        },
+        "cohort_txs": cohort_txs,
+        "operations_txs": operations_txs
+    }
+
+# FastAPI Endpoints
+
+@app.get(
+    "/api/contracts-control/summary",
+    response_model=ContractsControlSummaryResponse,
+    responses={**RESPONSES_503, **RESPONSES_AUTH},
+    summary="Get Contracts Control BI aggregates",
+    description="Loads all transactions and returns cohort summary, operations summary, aging/duration buckets, manager metrics, modality metrics, and timeline aggregates.",
+    dependencies=[Depends(verify_backend_api_key)]
+)
+async def get_contracts_control_summary(
+    response: Response,
+    request: Request,
+    start_date: Optional[str] = Query(None),
+    end_date: Optional[str] = Query(None),
+    manager: Optional[str] = Query(None),
+    responsible: Optional[str] = Query(None),
+    process_status: Optional[str] = Query(None),
+    modality: Optional[str] = Query(None),
+    source_type: Optional[str] = Query(None),
+    refresh: Optional[bool] = Query(None)
+):
+    req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
+
+    sp_tz = ZoneInfo("America/Sao_Paulo")
+    now_sp = datetime.now(sp_tz)
+    as_of_date_str = now_sp.strftime("%Y-%m-%d")
+
+    if not start_date:
+        start_date = f"{now_sp.year}-01-01"
+    if not end_date:
+        end_date = as_of_date_str
+
+    try:
+        mode, src, dataset, pages_fetched, cache_status = await load_contracts_control_dataset(
+            request_id=req_id, refresh=bool(refresh)
+        )
+    except Exception as e:
+        if isinstance(e, IntegrationUnavailableError) or isinstance(e, HTTPException):
+            raise e
+        raise IntegrationUnavailableError(
+            status_code=503,
+            detail=f"Failed to load transactions: {e}",
+            error_code="invalid_pipeimob_response",
+            data_mode="live",
+            pipeimob_connection="unavailable"
+        )
+
+    validate_dataset_origin(mode, src, dataset)
+
+    try:
+        aggregates = compute_contracts_control_data(dataset, start_date, end_date, as_of_date_str)
+    except Exception as e:
+        raise IntegrationUnavailableError(
+            status_code=503,
+            detail=f"Failed to compute contracts control aggregates: {e}",
+            error_code="aggregation_failed",
+            data_mode=mode,
+            pipeimob_connection="internal_error"
+        )
+
+    response.headers["X-Data-Mode"] = mode
+    response.headers["X-Cache"] = cache_status
+
+    resp_period = ContractsControlPeriod(
+        start=start_date,
+        end=end_date,
+        basis="data_inicio_venda",
+        as_of_date=as_of_date_str
+    )
+
+    # "A data de 2020 é uma baseline histórica presumida para a primeira versão e ainda não foi comprovada como início absoluto dos registros do CRM."
+    resp_extraction = ContractsControlExtraction(
+        upstream_endpoint="/api/v2/negocios/transacoes",
+        upstream_filter_field="data_inicio_criacao",
+        coverage_start="2020-01-01",
+        coverage_end=as_of_date_str,
+        pages_fetched=pages_fetched,
+        raw_records_fetched=len(dataset),
+        coverage_status="unverified"
+    )
+
+    return ContractsControlSummaryResponse(
+        period=resp_period,
+        extraction=resp_extraction,
+        extraction_quality=ContractsControlExtractionQuality(**aggregates["extraction_quality"]),
+        cohort_summary=ContractsControlCohortSummary(**aggregates["cohort_summary"]),
+        operations_summary=ContractsControlOperationsSummary(**aggregates["operations_summary"]),
+        aging_buckets=[ContractsControlBucket(**b) for b in aggregates["aging_buckets"]],
+        duration_buckets=[ContractsControlBucket(**b) for b in aggregates["duration_buckets"]],
+        by_responsible=[],
+        by_manager=[ContractsControlManagerMetric(**m) for m in aggregates["by_manager"]],
+        by_modality=[ContractsControlModalityMetric(**mod) for mod in aggregates["by_modality"]],
+        by_source_type=[],
+        timeline=[ContractsControlTimelineMetric(**t) for t in aggregates["timeline"]],
+        data_quality=ContractsControlDataQuality(**aggregates["data_quality"])
+    )
+
+@app.get(
+    "/api/contracts-control/deals",
+    response_model=ContractsControlDealsResponse,
+    responses={**RESPONSES_503, **RESPONSES_AUTH},
+    summary="Get paginated list of Contracts Control deals",
+    description="Returns a paginated list of operational deals matching filters. PII is strictly stripped.",
+    dependencies=[Depends(verify_backend_api_key)]
+)
+async def get_contracts_control_deals(
+    request: Request,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    scope: str = Query("operations"),
+    start_date: Optional[str] = Query(None),
+    end_date: Optional[str] = Query(None),
+    manager: Optional[str] = Query(None),
+    responsible: Optional[str] = Query(None),
+    process_status: Optional[str] = Query(None),
+    modality: Optional[str] = Query(None),
+    source_type: Optional[str] = Query(None),
+    aging_bucket: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    refresh: Optional[bool] = Query(None)
+):
+    req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
+
+    sp_tz = ZoneInfo("America/Sao_Paulo")
+    now_sp = datetime.now(sp_tz)
+    as_of_date_str = now_sp.strftime("%Y-%m-%d")
+
+    if not start_date:
+        start_date = f"{now_sp.year}-01-01"
+    if not end_date:
+        end_date = as_of_date_str
+
+    mode, src, dataset, pages_fetched, cache_status = await load_contracts_control_dataset(
+        request_id=req_id, refresh=bool(refresh)
+    )
+    validate_dataset_origin(mode, src, dataset)
+
+    aggregates = compute_contracts_control_data(dataset, start_date, end_date, as_of_date_str)
+
+    if scope == "cohort":
+        deals_source = aggregates["cohort_txs"]
+    else:
+        deals_source = aggregates["operations_txs"]
+
+    filtered_deals = []
+    for c in deals_source:
+        tx = c["tx"]
+
+        if manager and tx.get("agente_gestor") != manager:
+            continue
+
+        if process_status and c["status_at_period_end"] != process_status:
+            continue
+
+        tx_modality = "financing" if tx.get("financiamento") is True else "unknown"
+        if modality and tx_modality != modality:
+            continue
+
+        if aging_bucket and c["aging_days_at_period_end"] is not None:
+            tx_aging_bucket = get_aging_bucket(c["aging_days_at_period_end"])
+            if tx_aging_bucket != aging_bucket:
+                continue
+        elif aging_bucket:
+            continue
+
+        if search:
+            search_lower = search.lower()
+            prop_code = tx.get("codigo_imovel") or ""
+            mgr = tx.get("agente_gestor") or ""
+            if search_lower not in prop_code.lower() and search_lower not in mgr.lower():
+                continue
+
+        mod_val = "financing" if tx.get("financiamento") is True else "unknown"
+
+        deal_item = {
+            "transaction_id": tx.get("transacao_unique_id_pipeimob"),
+            "property_code": tx.get("codigo_imovel") or "",
+            "property_title": None,
+            "start_date": tx.get("data_inicio_venda"),
+            "contract_date": tx.get("data_contrato"),
+            "duration_days": c["duration_days"],
+            "current_aging_days": c["current_aging_days"],
+            "aging_days_at_period_end": c["aging_days_at_period_end"],
+            "manager": tx.get("agente_gestor"),
+            "responsible": None,
+            "modality": mod_val,
+            "source_type": None,
+            "current_status": c["current_status"],
+            "status_at_period_end": c["status_at_period_end"],
+            "data_quality_flags": c["data_quality_flags"]
+        }
+        if scope == "operations":
+            deal_item["period_roles"] = c.get("period_roles", [])
+
+        filtered_deals.append(deal_item)
+
+    total_records = len(filtered_deals)
+    total_pages = max(1, math.ceil(total_records / page_size))
+    page = min(page, total_pages)
+
+    start_idx = (page - 1) * page_size
+    end_idx = start_idx + page_size
+    paginated_deals = filtered_deals[start_idx:end_idx]
+
+    return ContractsControlDealsResponse(
+        page=page,
+        page_size=page_size,
+        total_records=total_records,
+        total_pages=total_pages,
+        deals=[ContractsControlDeal(**d) for d in paginated_deals]
     )
