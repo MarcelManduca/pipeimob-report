@@ -4408,13 +4408,20 @@ class ContractsControlManagerMetric(BaseModel):
     average_open_aging_days: float
     median_open_aging_days: float
     completion_ratio: float
+    unknown_modality_count: int
 
-class ContractsControlModalityMetric(BaseModel):
+class ContractsControlModalitySummary(BaseModel):
     scope: str = "cohort"
-    modality: str
-    label: str
-    count: int
-    ratio: float
+    financing_count: int
+    deed_count: int
+    developer_payment_count: int
+    unknown_modality_count: int
+    conflict_count: int
+    financing_amount_known_count: int
+    financing_amount_unknown_count: int
+    financing_ratio_known_count: int
+    financing_total_amount: Optional[float] = None
+    average_financing_ratio: Optional[float] = None
 
 class ContractsControlSourceTypeMetric(BaseModel):
     scope: str = "cohort"
@@ -4468,7 +4475,7 @@ class ContractsControlSummaryResponse(BaseModel):
     duration_buckets: List[ContractsControlBucket]
     by_responsible: List[ContractsControlResponsibleMetric]
     by_manager: List[ContractsControlManagerMetric]
-    by_modality: List[ContractsControlModalityMetric]
+    by_modality: ContractsControlModalitySummary
     by_source_type: List[ContractsControlSourceTypeMetric]
     timeline: List[ContractsControlTimelineMetric]
     data_quality: ContractsControlDataQuality
@@ -4485,7 +4492,15 @@ class ContractsControlDeal(BaseModel):
     manager: Optional[str] = None
     responsible: Optional[str] = None
     modality: str
-    source_type: Optional[str] = None
+    modality_label: str
+    modality_source: str
+    modality_confidence: str
+    financing_bank: Optional[str] = None
+    financing_amount: Optional[float] = None
+    financing_ratio: Optional[float] = None
+    modality_flags: List[str]
+    source_type: str
+    source_type_label: str
     current_status: str
     status_at_period_end: str
     data_quality_flags: List[str]
@@ -4602,6 +4617,162 @@ def deduplicate_contracts_control_dataset(dataset: list) -> tuple[list, int, int
 
     return unique_list, duplicate_count, conflict_count
 
+def normalize_text(text: Any) -> str:
+    import unicodedata
+    if text is None:
+        return ""
+    s = str(text).strip().lower()
+    s = "".join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
+    return s
+
+def classify_contract_modality(tx: dict) -> dict:
+    midia_raw = tx.get("midia_origem_vendedores")
+    midia_norm = normalize_text(midia_raw)
+
+    if midia_norm in ("terceiros prontos", "terceiros obras"):
+        source_type = "third_party"
+        source_type_label = "Terceiros"
+    elif midia_norm == "construtora obra":
+        source_type = "launch"
+        source_type_label = "Lançamento"
+    else:
+        source_type = "unknown"
+        source_type_label = "Não classificado"
+
+    fin_field = tx.get("financiamento")
+    if isinstance(fin_field, str):
+        if fin_field.lower() == "true":
+            is_fin_true = True
+            is_fin_false = False
+            is_fin_none = False
+        elif fin_field.lower() == "false":
+            is_fin_true = False
+            is_fin_false = True
+            is_fin_none = False
+        else:
+            is_fin_true = False
+            is_fin_false = False
+            is_fin_none = True
+    else:
+        is_fin_true = fin_field is True
+        is_fin_false = fin_field is False
+        is_fin_none = fin_field is None
+
+    bank_raw = tx.get("financiamento_banco")
+    has_bank = False
+    financing_bank = None
+    if bank_raw is not None:
+        bank_str = str(bank_raw).strip()
+        if bank_str != "" and bank_str.lower() not in ("false", "none", "null"):
+            has_bank = True
+            financing_bank = bank_str
+
+    has_financing_payment = False
+    financing_payment_amount = 0.0
+    has_deed_payment = False
+
+    forma_pagto = tx.get("forma_pagamento") or []
+    if isinstance(forma_pagto, list):
+        for fp in forma_pagto:
+            if not isinstance(fp, dict):
+                continue
+            fp_nome = normalize_text(fp.get("forma_pagamento_nome"))
+            try:
+                val_raw = fp.get("forma_pagamento_valor")
+                fp_valor = float(val_raw) if val_raw is not None else 0.0
+            except (ValueError, TypeError):
+                fp_valor = 0.0
+
+            if fp_valor > 0:
+                if ("financiamento" in fp_nome or
+                    "alienacao fiduciaria" in fp_nome or
+                    "credito do financiamento" in fp_nome or
+                    "contrato bancario" in fp_nome):
+                    has_financing_payment = True
+                    financing_payment_amount += fp_valor
+                if "escritura" in fp_nome:
+                    has_deed_payment = True
+
+    contract_val_raw = tx.get("valor_contrato")
+    try:
+        valor_contrato = float(contract_val_raw) if contract_val_raw is not None else 0.0
+    except (ValueError, TypeError):
+        valor_contrato = 0.0
+
+    financing_amount = None
+    financing_ratio = None
+    if has_financing_payment:
+        financing_amount = financing_payment_amount
+        if valor_contrato > 0:
+            financing_ratio = float(financing_amount / valor_contrato)
+
+    modality_flags = []
+    is_conflict = False
+
+    if is_fin_false and has_bank:
+        is_conflict = True
+        modality_flags.append("conflict_financing_false_with_bank")
+    if is_fin_false and has_financing_payment:
+        is_conflict = True
+        modality_flags.append("conflict_financing_false_with_payment")
+
+    if is_fin_true:
+        modality = "financing"
+        modality_label = "Financiamento"
+        modality_confidence = "confirmed"
+        modality_source = "api_field"
+        if not has_bank and not has_financing_payment:
+            modality_flags.append("financing_details_incomplete")
+
+    elif is_conflict:
+        modality = "financing"
+        modality_label = "Financiamento"
+        modality_confidence = "conflict"
+        modality_source = "conflict"
+
+    elif is_fin_none and (has_bank or has_financing_payment):
+        modality = "financing"
+        modality_label = "Financiamento"
+        modality_confidence = "inferred"
+        modality_source = "api_field" if has_bank else "payment_terms"
+
+    elif source_type == "launch":
+        modality = "developer_payment"
+        modality_label = "Pagamento Direto Construtora"
+        modality_confidence = "inferred"
+        modality_source = "source_type_launch"
+        if is_fin_false:
+            modality_flags.append("launch_without_bank_financing")
+
+    elif is_fin_false or has_deed_payment:
+        modality = "deed"
+        modality_label = "Escritura"
+        if has_deed_payment:
+            modality_confidence = "confirmed"
+            modality_source = "payment_terms"
+        else:
+            modality_confidence = "inferred"
+            modality_source = "inferred"
+
+    else:
+        modality = "unknown"
+        modality_label = "Não classificado"
+        modality_confidence = "inferred"
+        modality_source = "none"
+
+    return {
+        "modality": modality,
+        "modality_label": modality_label,
+        "modality_source": modality_source,
+        "modality_confidence": modality_confidence,
+        "financing_bank": financing_bank,
+        "financing_amount": financing_amount,
+        "financing_ratio": financing_ratio,
+        "modality_flags": modality_flags,
+        "source_type": source_type,
+        "source_type_label": source_type_label
+    }
+
 def classify_contracts_control_process(tx: dict, as_of_date_obj: date, end_date_obj: date) -> dict:
     start_str = tx.get("data_inicio_venda")
     contract_str = tx.get("data_contrato")
@@ -4668,7 +4839,9 @@ def classify_contracts_control_process(tx: dict, as_of_date_obj: date, end_date_
     if status_at_period_end == "in_progress" and start_date_obj:
         aging_days_at_period_end = (end_date_obj - start_date_obj).days
 
-    return {
+    modality_info = classify_contract_modality(tx)
+
+    res_dict = {
         "start_date_obj": start_date_obj,
         "contract_date_obj": contract_date_obj,
         "current_status": current_status,
@@ -4678,6 +4851,8 @@ def classify_contracts_control_process(tx: dict, as_of_date_obj: date, end_date_
         "aging_days_at_period_end": aging_days_at_period_end,
         "data_quality_flags": sorted(list(data_quality_flags))
     }
+    res_dict.update(modality_info)
+    return res_dict
 
 async def load_contracts_control_dataset(
     request_id: Optional[str] = None,
@@ -4954,7 +5129,10 @@ def compute_contracts_control_data(dataset: list, start_date_str: str, end_date_
         comp_durs = [t["duration_days"] for t in comps if t["duration_days"] is not None]
         ip_agings = [t["aging_days_at_period_end"] for t in in_progs if t["aging_days_at_period_end"] is not None]
 
+        unk_mod_count = len([t for t in tx_list if t.get("modality") == "unknown"])
+
         by_manager_metrics.append({
+            "scope": "cohort",
             "manager": mgr,
             "records_count": recs,
             "completed_count": comps_count,
@@ -4965,27 +5143,62 @@ def compute_contracts_control_data(dataset: list, start_date_str: str, end_date_
             "p75_duration_days": contracts_control_calculate_percentile(comp_durs, 75.0),
             "average_open_aging_days": calculate_average(ip_agings),
             "median_open_aging_days": contracts_control_calculate_median(ip_agings),
-            "completion_ratio": float(comps_count / recs) if recs > 0 else 0.0
+            "completion_ratio": float(comps_count / recs) if recs > 0 else 0.0,
+            "unknown_modality_count": unk_mod_count
         })
 
     # Group by modality (cohort)
-    fin_count = len([c for c in cohort_txs if c["tx"].get("financiamento") is True])
-    unk_count = len(cohort_txs) - fin_count
-    tot_mod = len(cohort_txs)
-    by_modality_metrics = [
-        {
-            "modality": "financing",
-            "label": "Financiamento",
-            "count": fin_count,
-            "ratio": float(fin_count / tot_mod) if tot_mod > 0 else 0.0
-        },
-        {
-            "modality": "unknown",
-            "label": "Não classificado",
-            "count": unk_count,
-            "ratio": float(unk_count / tot_mod) if tot_mod > 0 else 0.0
-        }
-    ]
+    financing_count = 0
+    deed_count = 0
+    developer_payment_count = 0
+    unknown_modality_count = 0
+    modality_conflict_count = 0
+    financing_amount_known_count = 0
+    financing_amount_unknown_count = 0
+    financing_ratio_known_count = 0
+
+    financing_amounts_list = []
+    financing_ratios_list = []
+
+    for c in cohort_txs:
+        if c["modality_confidence"] == "conflict":
+            modality_conflict_count += 1
+
+        mod = c["modality"]
+        if mod == "financing":
+            financing_count += 1
+            if c["financing_amount"] is not None:
+                financing_amount_known_count += 1
+                financing_amounts_list.append(c["financing_amount"])
+            else:
+                financing_amount_unknown_count += 1
+
+            if c["financing_ratio"] is not None:
+                financing_ratio_known_count += 1
+                financing_ratios_list.append(c["financing_ratio"])
+        elif mod == "deed":
+            deed_count += 1
+        elif mod == "developer_payment":
+            developer_payment_count += 1
+        else:
+            unknown_modality_count += 1
+
+    financing_total_amount = float(sum(financing_amounts_list)) if financing_amounts_list else None
+    average_financing_ratio = float(sum(financing_ratios_list) / len(financing_ratios_list)) if financing_ratios_list else None
+
+    by_modality_data = {
+        "scope": "cohort",
+        "financing_count": financing_count,
+        "deed_count": deed_count,
+        "developer_payment_count": developer_payment_count,
+        "unknown_modality_count": unknown_modality_count,
+        "conflict_count": modality_conflict_count,
+        "financing_amount_known_count": financing_amount_known_count,
+        "financing_amount_unknown_count": financing_amount_unknown_count,
+        "financing_ratio_known_count": financing_ratio_known_count,
+        "financing_total_amount": financing_total_amount,
+        "average_financing_ratio": average_financing_ratio
+    }
 
     # Timeline calculations (operations)
     timeline_months = generate_months_between(start_date_obj, end_date_obj)
@@ -5064,9 +5277,10 @@ def compute_contracts_control_data(dataset: list, start_date_str: str, end_date_
 
     mapping_status = {
         "property_title": "unresolved",
-        "responsible": "unresolved",
-        "modality": "partial",
-        "source_type": "unresolved",
+        "responsible": "manual_bi",
+        "financing_classification": "resolved_api",
+        "modality_detail": "partial",
+        "source_type": "resolved_api",
         "cancellation": "unresolved"
     }
 
@@ -5104,7 +5318,7 @@ def compute_contracts_control_data(dataset: list, start_date_str: str, end_date_
         "duration_buckets": duration_buckets,
         "by_responsible": [],
         "by_manager": by_manager_metrics,
-        "by_modality": by_modality_metrics,
+        "by_modality": by_modality_data,
         "by_source_type": [],
         "timeline": timeline_metrics,
         "data_quality": {
@@ -5217,7 +5431,7 @@ async def get_contracts_control_summary(
         duration_buckets=[ContractsControlBucket(**b) for b in aggregates["duration_buckets"]],
         by_responsible=[],
         by_manager=[ContractsControlManagerMetric(**m) for m in aggregates["by_manager"]],
-        by_modality=[ContractsControlModalityMetric(**mod) for mod in aggregates["by_modality"]],
+        by_modality=ContractsControlModalitySummary(**aggregates["by_modality"]),
         by_source_type=[],
         timeline=[ContractsControlTimelineMetric(**t) for t in aggregates["timeline"]],
         data_quality=ContractsControlDataQuality(**aggregates["data_quality"])
@@ -5280,7 +5494,7 @@ async def get_contracts_control_deals(
         if process_status and c["status_at_period_end"] != process_status:
             continue
 
-        tx_modality = "financing" if tx.get("financiamento") is True else "unknown"
+        tx_modality = c["modality"]
         if modality and tx_modality != modality:
             continue
 
@@ -5298,8 +5512,6 @@ async def get_contracts_control_deals(
             if search_lower not in prop_code.lower() and search_lower not in mgr.lower():
                 continue
 
-        mod_val = "financing" if tx.get("financiamento") is True else "unknown"
-
         deal_item = {
             "transaction_id": tx.get("transacao_unique_id_pipeimob"),
             "property_code": tx.get("codigo_imovel") or "",
@@ -5310,9 +5522,17 @@ async def get_contracts_control_deals(
             "current_aging_days": c["current_aging_days"],
             "aging_days_at_period_end": c["aging_days_at_period_end"],
             "manager": tx.get("agente_gestor"),
-            "responsible": None,
-            "modality": mod_val,
-            "source_type": None,
+            "responsible": "manual_bi",
+            "modality": c["modality"],
+            "modality_label": c["modality_label"],
+            "modality_source": c["modality_source"],
+            "modality_confidence": c["modality_confidence"],
+            "financing_bank": c["financing_bank"],
+            "financing_amount": c["financing_amount"],
+            "financing_ratio": c["financing_ratio"],
+            "modality_flags": c["modality_flags"],
+            "source_type": c["source_type"],
+            "source_type_label": c["source_type_label"],
             "current_status": c["current_status"],
             "status_at_period_end": c["status_at_period_end"],
             "data_quality_flags": c["data_quality_flags"]

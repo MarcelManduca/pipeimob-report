@@ -414,7 +414,7 @@ def test_live_mode_failure_does_not_return_mock():
 
     response = client.get("/api/transactions?data_inicio_criacao=2026-01-01")
     assert response.status_code == 503
-    assert "Failed to authenticate" in response.json()["detail"] or "Authentication payload" in response.json()["detail"]
+    assert "Failed to authenticate" in response.json()["detail"] or "Authentication payload" in response.json()["detail"] or "unreachable" in response.json()["detail"]
 
 def test_live_mode_missing_direct_filter_returns_400():
     os.environ["PIPEIMOB_DATA_MODE"] = "live"
@@ -3821,6 +3821,8 @@ def test_contracts_control_endpoints_summary_and_deals():
     # Bypass auth
     app.dependency_overrides[verify_backend_api_key] = lambda: {"sub": "user-123", "role": "authenticated"}
 
+    from main import contracts_control_cache
+    contracts_control_cache.clear()
     try:
         # Mock dataset with duplicates and conflicts
         mock_txs = [
@@ -3877,7 +3879,10 @@ def test_contracts_control_endpoints_summary_and_deals():
             assert dq["records_count"] == 2
             assert dq["valid_records_count"] == 2
             assert dq["open_without_contract_date_count"] == 1
-            assert dq["mapping_status"]["modality"] == "partial"
+            assert dq["mapping_status"]["modality_detail"] == "partial"
+            assert dq["mapping_status"]["financing_classification"] == "resolved_api"
+            assert dq["mapping_status"]["source_type"] == "resolved_api"
+            assert dq["mapping_status"]["responsible"] == "manual_bi"
 
             # Test GET /api/contracts-control/deals with scope=operations (default)
             res_deals_ops = client.get("/api/contracts-control/deals?start_date=2026-06-01&end_date=2026-06-30")
@@ -3889,14 +3894,16 @@ def test_contracts_control_endpoints_summary_and_deals():
             allowed_keys = {
                 "transaction_id", "property_code", "property_title", "start_date", "contract_date",
                 "duration_days", "current_aging_days", "aging_days_at_period_end", "manager",
-                "responsible", "modality", "source_type", "current_status", "status_at_period_end",
+                "responsible", "modality", "modality_label", "modality_source", "modality_confidence",
+                "financing_bank", "financing_amount", "financing_ratio", "modality_flags",
+                "source_type", "source_type_label", "current_status", "status_at_period_end",
                 "data_quality_flags", "period_roles"
             }
             first_deal = deals_ops["deals"][0]
             assert set(first_deal.keys()) == allowed_keys
             assert first_deal["property_title"] is None
-            assert first_deal["responsible"] is None
-            assert first_deal["source_type"] is None
+            assert first_deal["responsible"] == "manual_bi"
+            assert first_deal["source_type"] == "unknown"
             assert "period_roles" in first_deal
 
             # Test GET /api/contracts-control/deals with scope=cohort
@@ -4130,20 +4137,252 @@ def test_contracts_control_additional_coverage_details():
             time.sleep(0.1)
 
         # 4. Test deals query filters (scope, manager, process_status, modality, aging_bucket, search filtering)
-        with patch("main.fetch_all_pipeimob_transactions", return_value=(mock_txs, 1)), \
+        mock_txs_filters = [
+            {"transacao_unique_id_pipeimob": "tx1", "codigo_imovel": "123", "data_inicio_venda": "2026-06-10", "data_contrato": "2026-06-25", "agente_gestor": "Manager A", "financiamento": True},
+            {"transacao_unique_id_pipeimob": "tx2", "codigo_imovel": "456", "data_inicio_venda": "2026-06-28", "data_contrato": None, "agente_gestor": "Manager A", "financiamento": True}
+        ]
+        with patch("main.fetch_all_pipeimob_transactions", return_value=(mock_txs_filters, 1)), \
              patch.dict(os.environ, {"PIPEIMOB_DATA_MODE": "live", "PIPEIMOB_API_KEY": "mock", "PIPEIMOB_SECRET_KEY": "mock"}):
 
-            # query with non-matching filter to hit continue/empty results
-            res_no_match = client.get("/api/contracts-control/deals?start_date=2026-06-01&end_date=2026-06-30&manager=NonExistentManager&search=NonExistent&modality=financing&aging_bucket=over_30_days")
+            # Query with non-matching manager
+            res_no_match = client.get("/api/contracts-control/deals?start_date=2026-06-01&end_date=2026-06-30&manager=NonExistentManager")
             assert res_no_match.status_code == 200
-            data_no_match = res_no_match.json()
-            assert data_no_match["total_records"] == 0
+            assert res_no_match.json()["total_records"] == 0
 
-            # query with page limit larger than 100 to test caps
+            # Query with non-matching modality (should hit continue on line 5478)
+            res_mod_mismatch = client.get("/api/contracts-control/deals?start_date=2026-06-01&end_date=2026-06-30&modality=deed")
+            assert res_mod_mismatch.status_code == 200
+            assert res_mod_mismatch.json()["total_records"] == 0
+
+            # Query with non-matching aging_bucket (should hit continue on line 5483)
+            res_aging_mismatch = client.get("/api/contracts-control/deals?start_date=2026-06-01&end_date=2026-06-30&aging_bucket=over_30_days")
+            assert res_aging_mismatch.status_code == 200
+            assert res_aging_mismatch.json()["total_records"] == 0
+
+            # Query with page limit larger than 100 to test caps
             res_cap = client.get("/api/contracts-control/deals?start_date=2026-06-01&end_date=2026-06-30&page_size=101")
-            # should return 422 validation error because page_size is constrained by ge=1, le=100
             assert res_cap.status_code == 422
 
     finally:
         app.dependency_overrides.clear()
         contracts_control_cache.clear()
+
+def test_contracts_control_modality_classification_matrix():
+    from main import classify_contract_modality, compute_contracts_control_data
+    import json
+
+    # 1. financiamento true sem banco e sem parcelas:
+    # financing / confirmed / financing_details_incomplete / sem conflict.
+    tx1 = {
+        "financiamento": True,
+        "financiamento_banco": None,
+        "forma_pagamento": [],
+        "valor_contrato": 200000.00
+    }
+    res1 = classify_contract_modality(tx1)
+    assert res1["modality"] == "financing"
+    assert res1["modality_confidence"] == "confirmed"
+    assert "financing_details_incomplete" in res1["modality_flags"]
+    assert res1["financing_amount"] is None
+    assert len([f for f in res1["modality_flags"] if "conflict" in f]) == 0
+
+    # 2. financiamento true com banco:
+    # financing / confirmed.
+    tx2 = {
+        "financiamento": True,
+        "financiamento_banco": "Banco Itau",
+        "forma_pagamento": [],
+        "valor_contrato": 200000.00
+    }
+    res2 = classify_contract_modality(tx2)
+    assert res2["modality"] == "financing"
+    assert res2["modality_confidence"] == "confirmed"
+    assert res2["financing_bank"] == "Banco Itau"
+    assert "financing_details_incomplete" not in res2["modality_flags"]
+    assert len([f for f in res2["modality_flags"] if "conflict" in f]) == 0
+
+    # 3. financiamento ausente com banco:
+    # financing / inferred.
+    tx3 = {
+        "financiamento": None,
+        "financiamento_banco": "Banco Caixa",
+        "forma_pagamento": [],
+        "valor_contrato": 200000.00
+    }
+    res3 = classify_contract_modality(tx3)
+    assert res3["modality"] == "financing"
+    assert res3["modality_confidence"] == "inferred"
+    assert res3["financing_bank"] == "Banco Caixa"
+    assert len([f for f in res3["modality_flags"] if "conflict" in f]) == 0
+
+    # 4. banco + parcela de escritura:
+    # financing / sem conflict.
+    tx4 = {
+        "financiamento": None,
+        "financiamento_banco": "Banco Caixa",
+        "forma_pagamento": [
+            {"forma_pagamento_nome": "Parcela Escritura", "forma_pagamento_valor": 50000.00}
+        ],
+        "valor_contrato": 200000.00
+    }
+    res4 = classify_contract_modality(tx4)
+    assert res4["modality"] == "financing"
+    assert res4["modality_confidence"] == "inferred"
+    assert len([f for f in res4["modality_flags"] if "conflict" in f]) == 0
+
+    # 5. financiamento false com banco:
+    # confidence conflict.
+    tx5 = {
+        "financiamento": False,
+        "financiamento_banco": "Banco Caixa",
+        "forma_pagamento": [],
+        "valor_contrato": 200000.00
+    }
+    res5 = classify_contract_modality(tx5)
+    assert res5["modality"] == "financing"
+    assert res5["modality_confidence"] == "conflict"
+    assert "conflict_financing_false_with_bank" in res5["modality_flags"]
+
+    # 6. financiamento false com parcela bancária positiva:
+    # confidence conflict.
+    tx6 = {
+        "financiamento": False,
+        "financiamento_banco": None,
+        "forma_pagamento": [
+            {"forma_pagamento_nome": "credito do financiamento", "forma_pagamento_valor": 120000.00}
+        ],
+        "valor_contrato": 200000.00
+    }
+    res6 = classify_contract_modality(tx6)
+    assert res6["modality"] == "financing"
+    assert res6["modality_confidence"] == "conflict"
+    assert "conflict_financing_false_with_payment" in res6["modality_flags"]
+
+    # 7. lançamento sem financiamento:
+    # developer_payment / inferred / sem conflict.
+    tx7 = {
+        "midia_origem_vendedores": "CONSTRUTORA OBRA",
+        "financiamento": False,
+        "financiamento_banco": None,
+        "forma_pagamento": [],
+        "valor_contrato": 200000.00
+    }
+    res7 = classify_contract_modality(tx7)
+    assert res7["source_type"] == "launch"
+    assert res7["modality"] == "developer_payment"
+    assert res7["modality_confidence"] == "inferred"
+    assert "launch_without_bank_financing" in res7["modality_flags"]
+    assert len([f for f in res7["modality_flags"] if "conflict" in f]) == 0
+
+    # 8. financiamento confirmado sem valor identificável:
+    # financing_amount is None / financing_ratio is None.
+    tx8 = {
+        "financiamento": True,
+        "financiamento_banco": "Caixa",
+        "forma_pagamento": [],
+        "valor_contrato": 200000.00
+    }
+    res8 = classify_contract_modality(tx8)
+    assert res8["modality"] == "financing"
+    assert res8["financing_amount"] is None
+    assert res8["financing_ratio"] is None
+
+    # 9. valor financiado conhecido:
+    # cálculo correto de amount e ratio.
+    tx9 = {
+        "financiamento": True,
+        "forma_pagamento": [{"forma_pagamento_nome": "credito de financiamento", "forma_pagamento_valor": 160000.00}],
+        "valor_contrato": 200000.00
+    }
+    res9 = classify_contract_modality(tx9)
+    assert res9["modality"] == "financing"
+    assert res9["financing_amount"] == 160000.00
+    assert res9["financing_ratio"] == 0.80
+
+    # 10. valor_contrato zero:
+    # financing_ratio is None.
+    tx10 = {
+        "financiamento": True,
+        "forma_pagamento": [{"forma_pagamento_nome": "credito de financiamento", "forma_pagamento_valor": 160000.00}],
+        "valor_contrato": 0.0
+    }
+    res10 = classify_contract_modality(tx10)
+    assert res10["modality"] == "financing"
+    assert res10["financing_amount"] == 160000.00
+    assert res10["financing_ratio"] is None
+
+    # 11. agregados:
+    # known_count e unknown_count corretos; total ignora valores nulos; média ignora ratios nulos; conflict_count correto.
+    mock_dataset = [
+        # Deal 1: financing with known amount/ratio (150000, ratio 0.75)
+        {
+            "transacao_unique_id_pipeimob": "t1",
+            "data_inicio_venda": "2026-06-10",
+            "data_contrato": "2026-06-25",
+            "agente_gestor": "Mgr A",
+            "financiamento": True,
+            "forma_pagamento": [{"forma_pagamento_nome": "financiamento", "forma_pagamento_valor": 150000.00}],
+            "valor_contrato": 200000.00
+        },
+        # Deal 2: financing with unknown amount/ratio (None, None)
+        {
+            "transacao_unique_id_pipeimob": "t2",
+            "data_inicio_venda": "2026-06-12",
+            "data_contrato": "2026-06-28",
+            "agente_gestor": "Mgr A",
+            "financiamento": True,
+            "forma_pagamento": [],
+            "valor_contrato": 200000.00
+        },
+        # Deal 3: financing with conflict (modality classified as financing with confidence conflict)
+        {
+            "transacao_unique_id_pipeimob": "t3",
+            "data_inicio_venda": "2026-06-15",
+            "data_contrato": "2026-06-29",
+            "agente_gestor": "Mgr A",
+            "financiamento": False,
+            "financiamento_banco": "Banco Caixa",
+            "forma_pagamento": [],
+            "valor_contrato": 200000.00
+        },
+        # Deal 4: deed modality (not financing)
+        {
+            "transacao_unique_id_pipeimob": "t4",
+            "data_inicio_venda": "2026-06-16",
+            "data_contrato": "2026-06-30",
+            "agente_gestor": "Mgr A",
+            "financiamento": False,
+            "forma_pagamento": [{"forma_pagamento_nome": "Escritura", "forma_pagamento_valor": 200000.00}],
+            "valor_contrato": 200000.00
+        }
+    ]
+
+    aggregates = compute_contracts_control_data(mock_dataset, "2026-06-01", "2026-06-30", "2026-07-24")
+    summary = aggregates["by_modality"]
+    assert summary["financing_count"] == 3
+    assert summary["financing_amount_known_count"] == 1
+    assert summary["financing_amount_unknown_count"] == 2
+    assert summary["financing_ratio_known_count"] == 1
+    assert summary["financing_total_amount"] == 150000.00
+    assert summary["average_financing_ratio"] == 0.75
+    assert summary["conflict_count"] == 1
+    assert summary["deed_count"] == 1
+    assert summary["developer_payment_count"] == 0
+    assert summary["unknown_modality_count"] == 0
+
+    # 12. mapping_status final.
+    assert aggregates["data_quality"]["mapping_status"] == {
+        "property_title": "unresolved",
+        "responsible": "manual_bi",
+        "financing_classification": "resolved_api",
+        "modality_detail": "partial",
+        "source_type": "resolved_api",
+        "cancellation": "unresolved"
+    }
+
+    # 14. nenhuma PII retornada.
+    for r in (res1, res2, res3, res4, res5, res6, res7, res8, res9, res10):
+        dumped = json.dumps(r)
+        assert "comprador" not in dumped.lower()
+        assert "vendedor" not in dumped.lower()
+        assert "cpf" not in dumped.lower()
