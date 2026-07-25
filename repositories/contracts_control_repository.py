@@ -16,8 +16,26 @@ class ContractsControlRepository:
         stmt = select(ContractsControlResponsible)
         if not include_inactive:
             stmt = stmt.where(ContractsControlResponsible.active == True)
-        stmt = stmt.order_by(ContractsControlResponsible.name)
+        stmt = stmt.order_by(ContractsControlResponsible.normalized_name)
         return list(db.scalars(stmt).all())
+
+    @staticmethod
+    def update_responsible(
+        db: Session,
+        resp_id: uuid.UUID,
+        name: Optional[str] = None,
+        active: Optional[bool] = None
+    ) -> Optional[ContractsControlResponsible]:
+        resp = db.get(ContractsControlResponsible, resp_id)
+        if not resp:
+            return None
+        if name is not None:
+            resp.name = name
+            resp.normalized_name = normalize_responsible_name(name)
+        if active is not None:
+            resp.active = active
+        db.flush()
+        return resp
 
     @staticmethod
     def get_responsible_by_id(db: Session, resp_id: uuid.UUID) -> Optional[ContractsControlResponsible]:

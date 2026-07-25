@@ -3897,7 +3897,7 @@ def test_contracts_control_endpoints_summary_and_deals():
                 "responsible", "modality", "modality_label", "modality_source", "modality_confidence",
                 "financing_bank", "financing_amount", "financing_ratio", "modality_flags",
                 "source_type", "source_type_label", "current_status", "status_at_period_end",
-                "data_quality_flags", "period_roles"
+                "data_quality_flags", "period_roles", "manual_data_version"
             }
             first_deal = deals_ops["deals"][0]
             assert set(first_deal.keys()) == allowed_keys
@@ -4395,7 +4395,9 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.exc import IntegrityError
 from database import Base
+import models.contracts_control
 from main import app, get_db_session, verify_backend_api_key
+import main
 from repositories.contracts_control_repository import ContractsControlRepository
 from services.contracts_control_manual_service import ContractsControlManualService
 
@@ -4438,9 +4440,9 @@ def client_with_db_fixture():
         finally:
             pass
 
-    app.dependency_overrides[get_db_session] = override_get_db_session
+    main.app.dependency_overrides[main.get_db_session] = override_get_db_session
     yield db
-    app.dependency_overrides.clear()
+    main.app.dependency_overrides.clear()
     db.close()
     Base.metadata.drop_all(test_engine)
     test_engine.dispose()
@@ -4675,13 +4677,17 @@ def test_contracts_control_deals_endpoint_401_unauthorized():
     assert "detail" in response.json()
 
 def test_contracts_control_no_write_endpoints_activated():
-    # PATCH /api/contracts-control/deals/{id}/manual-data and POST /api/contracts-control/manual-data/bulk
-    # must return 404 since authorization_role_status == "unresolved" and endpoints are not registered
-    res_patch = client.patch("/api/contracts-control/deals/tx_123/manual-data", json={"responsible_id": "none", "version": 1})
-    assert res_patch.status_code == 404
+    import main
+    main.CONTRACTS_CONTROL_WRITES_ENABLED = False
+    main.app.dependency_overrides[main.verify_backend_api_key] = lambda: {"sub": "user-123", "role": "authenticated"}
+    try:
+        res_patch = client.patch("/api/contracts-control/deals/tx_123/manual-data", json={"responsible_id": None, "version": 1})
+        assert res_patch.status_code == 403
 
-    res_post_bulk = client.post("/api/contracts-control/manual-data/bulk", json={"transaction_ids": ["tx_123"], "responsible_id": "none"})
-    assert res_post_bulk.status_code == 404
+        res_post_bulk = client.post("/api/contracts-control/manual-data/bulk", json={"items": [], "responsible_id": None})
+        assert res_post_bulk.status_code == 403
+    finally:
+        main.app.dependency_overrides.clear()
 
 # ======================================================================
 # AUDITORIA FINAL — SPRINT 1: NOVOS TESTES DE REQUISITOS
@@ -4785,7 +4791,7 @@ def test_contracts_control_database_unavailability_read_endpoints():
     def override_get_db_session():
         yield None
 
-    app.dependency_overrides[get_db_session] = override_get_db_session
+    app.dependency_overrides[main.get_db_session] = override_get_db_session
     app.dependency_overrides[verify_backend_api_key] = lambda: {"sub": "user-123", "role": "authenticated"}
     from main import contracts_control_cache
     contracts_control_cache.clear()
@@ -5132,6 +5138,172 @@ def test_contracts_control_postgresql_suite():
         assert md.version == 2
         assert len(ContractsControlRepository.get_history_by_transaction_id(db, tx_id)) == 0
 
+        # ======================================================================
+        # 3. CONCORRÊNCIA REAL NO POSTGRESQL
+        # ======================================================================
+        from sqlalchemy.orm import sessionmaker
+        SessionLocal2 = sessionmaker(autocommit=False, autoflush=False, bind=database.engine)
+        db1 = database.SessionLocal()
+        db2 = SessionLocal2()
+        try:
+            # First attempt: succeeds and creates version 1
+            md1, changed1 = ContractsControlManualService.update_individual_attribution(
+                db1, "tx_concurrent_pg", r1.id, 0, "actor_1"
+            )
+            assert changed1 is True
+            assert md1.version == 1
+            db1.commit()
+
+            # Second attempt concurrent execution: expects version 0 but fails (unique violation or version conflict)
+            # To simulate a true concurrent insert collision before session 2 knows session 1 succeeded,
+            # we patch get_manual_data_by_transaction_id to return None, forcing it to attempt the insert on db2.
+            from unittest.mock import patch
+            with patch("repositories.contracts_control_repository.ContractsControlRepository.get_manual_data_by_transaction_id", return_value=None):
+                with pytest.raises(ValueError) as exc_concurrency:
+                    ContractsControlManualService.update_individual_attribution(
+                        db2, "tx_concurrent_pg", r1.id, 0, "actor_2"
+                    )
+                assert str(exc_concurrency.value) == "version_conflict"
+
+            # Rollback session 2 and verify it is still usable
+            db2.rollback()
+            # Try to query something to verify session usability after rollback
+            resp_still_usable = db2.get(ContractsControlResponsible, r1.id)
+            assert resp_still_usable is not None
+            assert resp_still_usable.name == "Active Responsible"
+        finally:
+            db1.close()
+            db2.close()
+
+        # ======================================================================
+        # 4. LOTE ATÔMICO REAL NO POSTGRESQL
+        # ======================================================================
+        # Ensure no records exist for tx_bulk_1 and tx_bulk_2
+        # Bulk items: first is valid (version 0), second is invalid (version 999)
+        bulk_items = [
+            {"transaction_id": "tx_bulk_1", "version": 0},
+            {"transaction_id": "tx_bulk_2", "version": 999}
+        ]
+        with pytest.raises(ValueError) as exc_bulk:
+            ContractsControlManualService.update_bulk_attribution(
+                db, bulk_items, r1.id, "actor_bulk", {"tx_bulk_1", "tx_bulk_2"}
+            )
+        assert str(exc_bulk.value) == "version_conflict"
+
+        # Confirm after error: neither is persisted/altered, versions not incremented, no history
+        from models.contracts_control import ContractsControlManualData
+        md_b1 = db.get(ContractsControlManualData, "tx_bulk_1")
+        md_b2 = db.get(ContractsControlManualData, "tx_bulk_2")
+        assert md_b1 is None
+        assert md_b2 is None
+
+        # Check history tables are empty for these transaction IDs
+        assert len(ContractsControlRepository.get_history_by_transaction_id(db, "tx_bulk_1")) == 0
+        assert len(ContractsControlRepository.get_history_by_transaction_id(db, "tx_bulk_2")) == 0
+
+        # ======================================================================
+        # 5. IDEMPOTÊNCIA NO POSTGRESQL
+        # ======================================================================
+        # A. responsible_id null + version 0 (Case A)
+        md_a, changed_a = ContractsControlManualService.update_individual_attribution(
+            db, "tx_idem_a", None, 0, "actor"
+        )
+        assert changed_a is False
+        assert md_a.version == 0
+        assert md_a.responsible_id is None
+        # Check database: no record exists
+        assert db.get(ContractsControlManualData, "tx_idem_a") is None
+        assert len(ContractsControlRepository.get_history_by_transaction_id(db, "tx_idem_a")) == 0
+
+        # Create record for Case B/C
+        md_init, changed_init = ContractsControlManualService.update_individual_attribution(
+            db, "tx_idem_b", r1.id, 0, "actor"
+        )
+        assert changed_init is True
+        assert md_init.version == 1
+        db.commit()
+
+        # B. mesmo responsável já atribuído (Case B)
+        md_b, changed_b = ContractsControlManualService.update_individual_attribution(
+            db, "tx_idem_b", r1.id, 1, "actor"
+        )
+        assert changed_b is False
+        assert md_b.version == 1
+        # Check no additional history record was written
+        assert len(ContractsControlRepository.get_history_by_transaction_id(db, "tx_idem_b")) == 1
+
+        # Create another active responsible for update
+        r_active = ContractsControlResponsible(id=uuid.uuid4(), name="Another Active Resp", normalized_name="another active resp", active=True)
+        db.add(r_active)
+        db.commit()
+
+        # C. alteração efetiva (Case C)
+        md_c, changed_c = ContractsControlManualService.update_individual_attribution(
+            db, "tx_idem_b", r_active.id, 1, "actor_c"
+        )
+        assert changed_c is True
+        assert md_c.version == 2
+        db.commit()
+        # Check history record created
+        hist = ContractsControlRepository.get_history_by_transaction_id(db, "tx_idem_b")
+        assert len(hist) == 2
+        update_record = next(h for h in hist if h.previous_value is not None)
+        assert update_record.field_name == "responsible_id"
+        assert update_record.previous_value == str(r1.id)
+        assert update_record.new_value == str(r_active.id)
+
+        # ======================================================================
+        # 6. VALIDAR UNIVERSO PIPEIMOB
+        # ======================================================================
+        from fastapi.testclient import TestClient
+        import main
+        client = TestClient(main.app)
+
+        # Mock dependency overrides for temporary admin credentials
+        main.app.dependency_overrides[main.verify_backend_api_key] = lambda: {
+            "sub": "admin_sub_1", "email": "admin@gralhaimoveis.com.br", "role": "authenticated"
+        }
+        os.environ["CONTRACTS_CONTROL_WRITES_ENABLED"] = "true"
+        os.environ["CONTRACTS_CONTROL_ADMIN_SUBS"] = "admin_sub_1"
+
+        try:
+            # Mock load_contracts_control_dataset to raise error -> 503
+            async def mock_load_error(*args, **kwargs):
+                raise Exception("Pipeimob api timeout")
+
+            with patch("main.load_contracts_control_dataset", side_effect=mock_load_error):
+                res_err = client.patch(
+                    "/api/contracts-control/deals/tx_any/manual-data",
+                    json={"responsible_id": str(r1.id), "version": 0}
+                )
+                assert res_err.status_code == 503
+
+            # Mock load_contracts_control_dataset to return a dataset -> non-existent ID -> 404
+            mock_universe = [
+                {"tx": {"transacao_unique_id_pipeimob": f"tx_page_{i}"}} for i in range(150)
+            ]
+            async def mock_load_universe(*args, **kwargs):
+                return "demo", "mock", mock_universe, 1, "stale"
+
+            with patch("main.load_contracts_control_dataset", side_effect=mock_load_universe):
+                # non-existent ID -> 404
+                res_not_found = client.patch(
+                    "/api/contracts-control/deals/tx_non_existent/manual-data",
+                    json={"responsible_id": str(r1.id), "version": 0}
+                )
+                assert res_not_found.status_code == 404
+
+                # exists but on page > 1 (e.g. index 120) -> 200 (since universe complete/deduplicated is checked)
+                res_page_2 = client.patch(
+                    f"/api/contracts-control/deals/tx_page_120/manual-data",
+                    json={"responsible_id": str(r1.id), "version": 0}
+                )
+                assert res_page_2.status_code == 200
+        finally:
+            main.app.dependency_overrides.clear()
+            os.environ.pop("CONTRACTS_CONTROL_WRITES_ENABLED", None)
+            os.environ.pop("CONTRACTS_CONTROL_ADMIN_SUBS", None)
+
     finally:
         db.close()
         # Clean up database tables in downgrade / upgrade cycle
@@ -5172,3 +5344,517 @@ def test_get_db_session_exception_rollback():
             pass
         mock_db.rollback.assert_called_once()
         mock_db.close.assert_called_once()
+
+def test_contracts_control_sprint2_auth_and_filling(client_with_db):
+    from unittest.mock import patch, MagicMock
+    import uuid
+    from fastapi.testclient import TestClient
+    from main import app, verify_backend_api_key
+    from models.contracts_control import ContractsControlResponsible
+    from repositories.contracts_control_repository import ContractsControlRepository
+    from services.contracts_control_manual_service import ContractsControlManualService
+    import main
+
+    # Enable writes and allowlist
+    import os
+    os.environ["CONTRACTS_CONTROL_WRITES_ENABLED"] = "true"
+    os.environ["CONTRACTS_CONTROL_ADMIN_SUBS"] = "admin_sub_1"
+
+    # Mock authenticated user
+    main.app.dependency_overrides[main.verify_backend_api_key] = lambda: {
+        "sub": "some_user", "email": "test@gralhaimoveis.com.br", "role": "authenticated"
+    }
+
+    db = client_with_db
+    client = TestClient(main.app)
+
+    try:
+        # Create some responsibles
+        r1 = ContractsControlResponsible(id=uuid.uuid4(), name="Beta Responsible", normalized_name="beta responsible", active=True)
+        r2 = ContractsControlResponsible(id=uuid.uuid4(), name="Alpha Responsible", normalized_name="alpha responsible", active=False)
+        db.add_all([r1, r2])
+        db.commit()
+
+        # 1. GET active ones
+        res = client.get("/api/contracts-control/responsibles")
+        assert res.status_code == 200
+        data = res.json()
+        active_names = [r["name"] for r in data["responsibles"]]
+        assert "Beta Responsible" in active_names
+        assert "Alpha Responsible" not in active_names
+
+        # GET with include_inactive=True when not admin (some_user is not in admin_subs)
+        res = client.get("/api/contracts-control/responsibles?include_inactive=true")
+        assert res.status_code == 403
+
+        # Set to admin
+        main.app.dependency_overrides[main.verify_backend_api_key] = lambda: {
+            "sub": "admin_sub_1", "email": "admin@gralhaimoveis.com.br", "role": "authenticated"
+        }
+        res = client.get("/api/contracts-control/responsibles?include_inactive=true")
+        assert res.status_code == 200
+        data = res.json()
+        assert len(data["responsibles"]) >= 2
+        # Check order by normalized name (Alpha comes before Beta)
+        idx_alpha = -1
+        idx_beta = -1
+        for idx, r in enumerate(data["responsibles"]):
+            if r["name"] == "Alpha Responsible":
+                idx_alpha = idx
+            elif r["name"] == "Beta Responsible":
+                idx_beta = idx
+        assert idx_alpha != -1 and idx_beta != -1
+        assert idx_alpha < idx_beta
+
+        # 2. Test POST /api/contracts-control/responsibles
+        # Non-admin user gets 403 Forbidden
+        main.app.dependency_overrides[main.verify_backend_api_key] = lambda: {
+            "sub": "regular_user", "email": "test@gralhaimoveis.com.br", "role": "authenticated"
+        }
+        res = client.post("/api/contracts-control/responsibles", json={"name": "Cristina"})
+        assert res.status_code == 403
+
+        # Admin user creates responsible successfully
+        main.app.dependency_overrides[main.verify_backend_api_key] = lambda: {
+            "sub": "admin_sub_1", "email": "admin@gralhaimoveis.com.br", "role": "authenticated"
+        }
+        res = client.post("/api/contracts-control/responsibles", json={"name": "Cristina"})
+        assert res.status_code == 200
+        created = res.json()
+        assert created["name"] == "Cristina"
+        assert created["active"] is True
+        cristina_id = created["id"]
+
+        # Try duplicate name -> 409
+        res = client.post("/api/contracts-control/responsibles", json={"name": "  cristina  "})
+        assert res.status_code == 409
+
+        # Try empty name -> 422
+        res = client.post("/api/contracts-control/responsibles", json={"name": ""})
+        assert res.status_code == 422
+
+        # 3. Test PATCH /api/contracts-control/responsibles/{responsible_id}
+        # Non-admin gets 403
+        main.app.dependency_overrides[main.verify_backend_api_key] = lambda: {
+            "sub": "regular_user", "email": "test@gralhaimoveis.com.br", "role": "authenticated"
+        }
+        res = client.patch(f"/api/contracts-control/responsibles/{cristina_id}", json={"name": "Cristina M"})
+        assert res.status_code == 403
+
+        # Admin updates responsible name
+        main.app.dependency_overrides[main.verify_backend_api_key] = lambda: {
+            "sub": "admin_sub_1", "email": "admin@gralhaimoveis.com.br", "role": "authenticated"
+        }
+        res = client.patch(f"/api/contracts-control/responsibles/{cristina_id}", json={"name": "Cristina Maria"})
+        assert res.status_code == 200
+        updated = res.json()
+        assert updated["name"] == "Cristina Maria"
+
+        # Deactivate responsible
+        res = client.patch(f"/api/contracts-control/responsibles/{cristina_id}", json={"active": False})
+        assert res.status_code == 200
+        assert res.json()["active"] is False
+
+        # 4. Test PATCH /api/contracts-control/deals/{transaction_id}/manual-data
+        mock_dataset = [
+            {
+                "tx": {
+                    "transacao_unique_id_pipeimob": "tx_test_123",
+                    "codigo_imovel": "IM100",
+                    "agente_gestor": "Gestor A"
+                },
+                "status_at_period_end": "operations",
+                "current_status": "operations",
+                "modality": "financing",
+                "modality_label": "Financiamento",
+                "modality_source": "manual",
+                "modality_confidence": "confirmed",
+                "financing_bank": "Banco do Brasil",
+                "financing_amount": 100000.0,
+                "financing_ratio": 0.8,
+                "modality_flags": [],
+                "source_type": "standard",
+                "source_type_label": "Padrão",
+                "data_quality_flags": [],
+                "duration_days": 10,
+                "current_aging_days": 5,
+                "aging_days_at_period_end": 5
+            }
+        ]
+
+        async def mock_load_dataset(*args, **kwargs):
+            return "demo", "mock", mock_dataset, 1, "stale"
+
+        with patch("main.load_contracts_control_dataset", side_effect=mock_load_dataset):
+            # Activate Cristina for test
+            res = client.patch(f"/api/contracts-control/responsibles/{cristina_id}", json={"active": True})
+            assert res.status_code == 200
+
+            # Non-admin gets 403
+            main.app.dependency_overrides[main.verify_backend_api_key] = lambda: {
+                "sub": "regular_user", "email": "test@gralhaimoveis.com.br", "role": "authenticated"
+            }
+            res = client.patch("/api/contracts-control/deals/tx_test_123/manual-data", json={"responsible_id": cristina_id, "version": 0})
+            assert res.status_code == 403
+
+            # Admin assigns responsible (version 0 -> 1)
+            main.app.dependency_overrides[main.verify_backend_api_key] = lambda: {
+                "sub": "admin_sub_1", "email": "admin@gralhaimoveis.com.br", "role": "authenticated"
+            }
+            res = client.patch("/api/contracts-control/deals/tx_test_123/manual-data", json={"responsible_id": cristina_id, "version": 0})
+            assert res.status_code == 200
+            assigned = res.json()
+            assert assigned["version"] == 1
+            assert assigned["responsible"]["id"] == cristina_id
+            assert assigned["changed"] is True
+
+            # Incompatible expected version -> 409
+            res = client.patch("/api/contracts-control/deals/tx_test_123/manual-data", json={"responsible_id": cristina_id, "version": 0})
+            assert res.status_code == 409
+
+            # Admin updates again (version 1 -> 2, responsible_id=None)
+            res = client.patch("/api/contracts-control/deals/tx_test_123/manual-data", json={"responsible_id": None, "version": 1})
+            assert res.status_code == 200
+            assert res.json()["version"] == 2
+            assert res.json()["responsible"] is None
+
+            # Re-assigning inactive responsible -> 422
+            client.patch(f"/api/contracts-control/responsibles/{cristina_id}", json={"active": False})
+            res = client.patch("/api/contracts-control/deals/tx_test_123/manual-data", json={"responsible_id": cristina_id, "version": 2})
+            assert res.status_code == 422
+
+            # Verify history entries preserve inactive responsible's name
+            res = client.get("/api/contracts-control/deals/tx_test_123/manual-data/history")
+            assert res.status_code == 200
+            history = res.json()
+            assert len(history) >= 2
+            assert history[0]["new_responsible"]["current_name"] == "Cristina Maria"
+            assert history[0]["new_responsible"]["active"] is False
+
+        # 5. Test bulk attribution
+        mock_dataset.append({
+            "tx": {
+                "transacao_unique_id_pipeimob": "tx_test_456",
+                "codigo_imovel": "IM101",
+                "agente_gestor": "Gestor B"
+            },
+            "status_at_period_end": "operations",
+            "current_status": "operations",
+            "modality": "financing",
+            "modality_label": "Financiamento",
+            "modality_source": "manual",
+            "modality_confidence": "confirmed",
+            "financing_bank": "Banco do Brasil",
+            "financing_amount": 100000.0,
+            "financing_ratio": 0.8,
+            "modality_flags": [],
+            "source_type": "standard",
+            "source_type_label": "Padrão",
+            "data_quality_flags": [],
+            "duration_days": 10,
+            "current_aging_days": 5,
+            "aging_days_at_period_end": 5
+        })
+
+        with patch("main.load_contracts_control_dataset", side_effect=mock_load_dataset):
+            # Create an active responsible
+            res = client.post("/api/contracts-control/responsibles", json={"name": "Mariana"})
+            assert res.status_code == 200
+            mariana_id = res.json()["id"]
+
+            # Test limit > 100 items
+            large_items = [{"transaction_id": f"tx_{i}", "version": 0} for i in range(101)]
+            res = client.post("/api/contracts-control/manual-data/bulk", json={"items": large_items, "responsible_id": mariana_id})
+            assert res.status_code == 422
+
+            # Test duplicate IDs
+            dup_items = [
+                {"transaction_id": "tx_test_123", "version": 2},
+                {"transaction_id": "tx_test_123", "version": 2}
+            ]
+            res = client.post("/api/contracts-control/manual-data/bulk", json={"items": dup_items, "responsible_id": mariana_id})
+            assert res.status_code == 422
+
+            # Test valid bulk update: tx_test_123 (expected version 2) and tx_test_456 (expected version 0)
+            valid_items = [
+                {"transaction_id": "tx_test_123", "version": 2},
+                {"transaction_id": "tx_test_456", "version": 0}
+            ]
+            res = client.post("/api/contracts-control/manual-data/bulk", json={"items": valid_items, "responsible_id": mariana_id})
+            assert res.status_code == 200
+            bulk_res = res.json()
+            assert bulk_res["requested_count"] == 2
+            assert bulk_res["updated_count"] == 2
+            assert bulk_res["unchanged_count"] == 0
+            assert any(item["transaction_id"] == "tx_test_123" and item["version"] == 3 and item["changed"] is True for item in bulk_res["items"])
+            assert any(item["transaction_id"] == "tx_test_456" and item["version"] == 1 and item["changed"] is True for item in bulk_res["items"])
+
+            # Test atomic rollback: one item fails, entire batch rolls back
+            failed_items = [
+                {"transaction_id": "tx_test_123", "version": 2}, # incorrect expected version (is 3)
+                {"transaction_id": "tx_test_456", "version": 1}  # correct version (is 1)
+            ]
+            res = client.post("/api/contracts-control/manual-data/bulk", json={"items": failed_items, "responsible_id": mariana_id})
+            assert res.status_code == 409
+
+            # Confirm rollback: tx_test_456 is still version 1 (not updated to 2)
+            from models.contracts_control import ContractsControlManualData
+            md = db.get(ContractsControlManualData, "tx_test_456")
+            assert md.version == 1
+
+    finally:
+        import os
+        os.environ.pop("CONTRACTS_CONTROL_WRITES_ENABLED", None)
+        os.environ.pop("CONTRACTS_CONTROL_ADMIN_SUBS", None)
+        main.app.dependency_overrides.clear()
+
+def test_contracts_control_manual_service_edge_cases(client_with_db):
+    import pytest
+    import uuid
+    from services.contracts_control_manual_service import ContractsControlManualService
+    db = client_with_db
+
+    # 1. update_responsible responsible_not_found
+    with pytest.raises(ValueError) as exc:
+        ContractsControlManualService.update_responsible(db, uuid.uuid4(), name="Non Existent")
+    assert str(exc.value) == "responsible_not_found"
+
+    # Create one active responsible
+    r1 = ContractsControlManualService.create_responsible(db, "First Resp")
+
+    # 2. update_responsible empty_name
+    with pytest.raises(ValueError) as exc:
+        ContractsControlManualService.update_responsible(db, r1.id, name="")
+    assert str(exc.value) == "empty_name"
+
+    # Create a second responsible
+    r2 = ContractsControlManualService.create_responsible(db, "Second Resp")
+
+    # 3. update_responsible duplicate_name
+    with pytest.raises(ValueError) as exc:
+        ContractsControlManualService.update_responsible(db, r1.id, name="Second Resp")
+    assert str(exc.value) == "duplicate_name"
+
+    # 4. update_individual_attribution responsible_not_found
+    with pytest.raises(ValueError) as exc:
+        ContractsControlManualService.update_individual_attribution(db, "tx_1", uuid.uuid4(), 0, "actor")
+    assert str(exc.value) == "responsible_not_found"
+
+    # Deactivate r2
+    ContractsControlManualService.update_responsible(db, r2.id, active=False)
+
+    # 5. update_individual_attribution responsible_inactive
+    with pytest.raises(ValueError) as exc:
+        ContractsControlManualService.update_individual_attribution(db, "tx_1", r2.id, 0, "actor")
+    assert str(exc.value) == "responsible_inactive"
+
+    # 6. update_bulk_attribution items_empty
+    with pytest.raises(ValueError) as exc:
+        ContractsControlManualService.update_bulk_attribution(db, [], None, "actor", set())
+    assert str(exc.value) == "items_empty"
+
+    # 7. update_bulk_attribution items_limit_exceeded
+    large_items = [{"transaction_id": f"tx_{i}", "version": 0} for i in range(101)]
+    with pytest.raises(ValueError) as exc:
+        ContractsControlManualService.update_bulk_attribution(db, large_items, None, "actor", set())
+    assert str(exc.value) == "items_limit_exceeded"
+
+    # 8. update_bulk_attribution empty_transaction_id
+    with pytest.raises(ValueError) as exc:
+        ContractsControlManualService.update_bulk_attribution(db, [{"transaction_id": "", "version": 0}], None, "actor", set())
+    assert str(exc.value) == "empty_transaction_id"
+
+    # 9. update_bulk_attribution duplicate_transaction_ids
+    with pytest.raises(ValueError) as exc:
+        ContractsControlManualService.update_bulk_attribution(db, [{"transaction_id": "tx_1", "version": 0}, {"transaction_id": "tx_1", "version": 0}], None, "actor", set())
+    assert str(exc.value) == "duplicate_transaction_ids"
+
+    # 10. update_bulk_attribution responsible_not_found
+    with pytest.raises(ValueError) as exc:
+        ContractsControlManualService.update_bulk_attribution(db, [{"transaction_id": "tx_1", "version": 0}], uuid.uuid4(), "actor", {"tx_1"})
+    assert str(exc.value) == "responsible_not_found"
+
+    # 11. update_bulk_attribution responsible_inactive
+    with pytest.raises(ValueError) as exc:
+        ContractsControlManualService.update_bulk_attribution(db, [{"transaction_id": "tx_1", "version": 0}], r2.id, "actor", {"tx_1"})
+    assert str(exc.value) == "responsible_inactive"
+
+    # 12. update_bulk_attribution transaction_not_found
+    with pytest.raises(ValueError) as exc:
+        ContractsControlManualService.update_bulk_attribution(db, [{"transaction_id": "tx_1", "version": 0}], None, "actor", set())
+    assert str(exc.value) == "transaction_not_found:tx_1"
+
+    # 13. Case A Idempotency: no record, responsible_id is None, version is 0
+    md_case_a, changed_case_a = ContractsControlManualService.update_individual_attribution(
+        db, "tx_not_exists_case_a", None, 0, "actor"
+    )
+    assert changed_case_a is False
+    assert md_case_a.version == 0
+    assert md_case_a.responsible_id is None
+
+    # Create a record for case B
+    r3 = ContractsControlManualService.create_responsible(db, "Third Resp")
+    db.commit()
+    md_initial, changed_initial = ContractsControlManualService.update_individual_attribution(
+        db, "tx_case_b", r3.id, 0, "actor"
+    )
+    assert changed_initial is True
+    assert md_initial.version == 1
+    db.commit()
+
+    # 14. Case B Idempotency: same responsible, expected version matches current version
+    md_case_b, changed_case_b = ContractsControlManualService.update_individual_attribution(
+        db, "tx_case_b", r3.id, 1, "actor"
+    )
+    assert changed_case_b is False
+    assert md_case_b.version == 1
+
+def test_contracts_control_temporary_config_validation(client_with_db):
+    import os
+    from fastapi.testclient import TestClient
+    from main import app, verify_backend_api_key
+    import main
+
+    db = client_with_db
+    client = TestClient(main.app)
+
+    def reset_env():
+        to_remove = [k for k in main.app.dependency_overrides if k != main.get_db_session]
+        for k in to_remove:
+            main.app.dependency_overrides.pop(k, None)
+        os.environ.pop("CONTRACTS_CONTROL_WRITES_ENABLED", None)
+        os.environ.pop("CONTRACTS_CONTROL_ADMIN_SUBS", None)
+
+    try:
+        # A. Claim sub missing from token -> 401
+        reset_env()
+        os.environ["CONTRACTS_CONTROL_WRITES_ENABLED"] = "true"
+        os.environ["CONTRACTS_CONTROL_ADMIN_SUBS"] = "admin_sub_1"
+        main.app.dependency_overrides[main.verify_backend_api_key] = lambda: {
+            "email": "test@gralhaimoveis.com.br", "role": "authenticated"
+        }
+        res = client.post("/api/contracts-control/responsibles", json={"name": "Test"})
+        assert res.status_code == 401
+
+        # B. Writes disabled (WRITES_ENABLED = false) -> 403
+        reset_env()
+        os.environ["CONTRACTS_CONTROL_WRITES_ENABLED"] = "false"
+        os.environ["CONTRACTS_CONTROL_ADMIN_SUBS"] = "admin_sub_1"
+        main.app.dependency_overrides[main.verify_backend_api_key] = lambda: {
+            "sub": "admin_sub_1", "email": "test@gralhaimoveis.com.br", "role": "authenticated"
+        }
+        res = client.post("/api/contracts-control/responsibles", json={"name": "Test"})
+        assert res.status_code == 403
+
+        # C. Invalid WRITES_ENABLED boolean format -> 503
+        reset_env()
+        os.environ["CONTRACTS_CONTROL_WRITES_ENABLED"] = "invalid"
+        os.environ["CONTRACTS_CONTROL_ADMIN_SUBS"] = "admin_sub_1"
+        main.app.dependency_overrides[main.verify_backend_api_key] = lambda: {
+            "sub": "admin_sub_1", "email": "test@gralhaimoveis.com.br", "role": "authenticated"
+        }
+        res = client.post("/api/contracts-control/responsibles", json={"name": "Test"})
+        assert res.status_code == 503
+
+        # D. Empty allowlist -> 503
+        reset_env()
+        os.environ["CONTRACTS_CONTROL_WRITES_ENABLED"] = "true"
+        os.environ["CONTRACTS_CONTROL_ADMIN_SUBS"] = ""
+        main.app.dependency_overrides[main.verify_backend_api_key] = lambda: {
+            "sub": "admin_sub_1", "email": "test@gralhaimoveis.com.br", "role": "authenticated"
+        }
+        res = client.post("/api/contracts-control/responsibles", json={"name": "Test"})
+        assert res.status_code == 503
+
+        # E. Allowlist with spaces -> 503
+        reset_env()
+        os.environ["CONTRACTS_CONTROL_WRITES_ENABLED"] = "true"
+        os.environ["CONTRACTS_CONTROL_ADMIN_SUBS"] = "admin_sub_1, admin_sub_2"
+        main.app.dependency_overrides[main.verify_backend_api_key] = lambda: {
+            "sub": "admin_sub_1", "email": "test@gralhaimoveis.com.br", "role": "authenticated"
+        }
+        res = client.post("/api/contracts-control/responsibles", json={"name": "Test"})
+        assert res.status_code == 503
+
+        # F. Allowlist with duplicates -> 503
+        reset_env()
+        os.environ["CONTRACTS_CONTROL_WRITES_ENABLED"] = "true"
+        os.environ["CONTRACTS_CONTROL_ADMIN_SUBS"] = "admin_sub_1,admin_sub_1"
+        main.app.dependency_overrides[main.verify_backend_api_key] = lambda: {
+            "sub": "admin_sub_1", "email": "test@gralhaimoveis.com.br", "role": "authenticated"
+        }
+        res = client.post("/api/contracts-control/responsibles", json={"name": "Test"})
+        assert res.status_code == 503
+
+        # G. Empty entries in allowlist -> 503
+        reset_env()
+        os.environ["CONTRACTS_CONTROL_WRITES_ENABLED"] = "true"
+        os.environ["CONTRACTS_CONTROL_ADMIN_SUBS"] = "admin_sub_1,,admin_sub_2"
+        main.app.dependency_overrides[main.verify_backend_api_key] = lambda: {
+            "sub": "admin_sub_1", "email": "test@gralhaimoveis.com.br", "role": "authenticated"
+        }
+        res = client.post("/api/contracts-control/responsibles", json={"name": "Test"})
+        assert res.status_code == 503
+
+        # H. Authorized sub -> 200
+        reset_env()
+        os.environ["CONTRACTS_CONTROL_WRITES_ENABLED"] = "true"
+        os.environ["CONTRACTS_CONTROL_ADMIN_SUBS"] = "admin_sub_1"
+        main.app.dependency_overrides[main.verify_backend_api_key] = lambda: {
+            "sub": "admin_sub_1", "email": "test@gralhaimoveis.com.br", "role": "authenticated"
+        }
+        res = client.post("/api/contracts-control/responsibles", json={"name": "Unique Name Config"})
+        assert res.status_code == 200
+
+        # I. Unauthorized sub -> 403
+        reset_env()
+        os.environ["CONTRACTS_CONTROL_WRITES_ENABLED"] = "true"
+        os.environ["CONTRACTS_CONTROL_ADMIN_SUBS"] = "admin_sub_1"
+        main.app.dependency_overrides[main.verify_backend_api_key] = lambda: {
+            "sub": "unauthorized_sub", "email": "test@gralhaimoveis.com.br", "role": "authenticated"
+        }
+        res = client.post("/api/contracts-control/responsibles", json={"name": "Unique Name Config 2"})
+        assert res.status_code == 403
+
+    finally:
+        reset_env()
+
+def test_contracts_control_creation_concurrency(client_with_db):
+    import os
+    import pytest
+    from fastapi.testclient import TestClient
+    from main import app, verify_backend_api_key
+    from models.contracts_control import ContractsControlResponsible
+    from services.contracts_control_manual_service import ContractsControlManualService
+    import main
+
+    db = client_with_db
+
+    try:
+        # Create an active responsible
+        r1 = ContractsControlManualService.create_responsible(db, "Concurrency Resp")
+        db.commit()
+
+        # Simulate concurrent creation at version 0 for the same transaction ID "tx_concurrent_123"
+        # First attempt: creates the record
+        md1, changed1 = ContractsControlManualService.update_individual_attribution(
+            db, "tx_concurrent_123", r1.id, 0, "actor_1"
+        )
+        assert changed1 is True
+        assert md1.version == 1
+        db.commit()
+
+        # Second attempt concurrent execution:
+        from repositories.contracts_control_repository import ContractsControlRepository
+        from sqlalchemy.exc import IntegrityError
+
+        with pytest.raises(ValueError) as exc:
+            from unittest.mock import patch
+            with patch("repositories.contracts_control_repository.ContractsControlRepository.get_manual_data_by_transaction_id", return_value=None):
+                ContractsControlManualService.update_individual_attribution(
+                    db, "tx_concurrent_123", r1.id, 0, "actor_2"
+                )
+        assert str(exc.value) == "version_conflict"
+
+    finally:
+        main.app.dependency_overrides.clear()

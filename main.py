@@ -1,4 +1,5 @@
 import os
+import uuid
 import asyncio
 import urllib.request
 import json
@@ -33,6 +34,12 @@ token_cache = TokenCache()
 
 # Dashboard Cache in memory (5 min TTL, configurable stale revalidation)
 DASHBOARD_STALE_TTL_SECONDS = int(os.getenv("DASHBOARD_STALE_TTL_SECONDS", "3600"))
+
+# Contracts Control temporary runtime authorization config
+CONTRACTS_CONTROL_WRITES_ENABLED = os.getenv("CONTRACTS_CONTROL_WRITES_ENABLED", "false").lower() == "true"
+_admin_subs_raw = os.getenv("CONTRACTS_CONTROL_ADMIN_SUBS", "")
+CONTRACTS_CONTROL_ADMIN_SUBS = {s.strip() for s in _admin_subs_raw.split(",")} if _admin_subs_raw else set()
+
 
 class DashboardCache:
     def __init__(self):
@@ -3666,6 +3673,72 @@ async def verify_backend_api_key(
 
     return payload
 
+def get_and_validate_contracts_control_config() -> set:
+    writes_enabled_raw = os.getenv("CONTRACTS_CONTROL_WRITES_ENABLED", "false").lower()
+    if writes_enabled_raw not in ("true", "false"):
+        raise HTTPException(
+            status_code=503,
+            detail="Invalid configuration: WRITES_ENABLED is not a valid boolean."
+        )
+
+    writes_enabled = (writes_enabled_raw == "true")
+    if not writes_enabled:
+        return set()
+
+    raw_subs = os.getenv("CONTRACTS_CONTROL_ADMIN_SUBS", "")
+    if not raw_subs:
+        raise HTTPException(
+            status_code=503,
+            detail="Invalid configuration: ADMIN_SUBS is empty when writes are enabled."
+        )
+
+    items = raw_subs.split(",")
+    seen = set()
+    for item in items:
+        if not item:
+            raise HTTPException(
+                status_code=503,
+                detail="Invalid configuration: ADMIN_SUBS contains empty entries."
+            )
+        if any(c.isspace() for c in item):
+            raise HTTPException(
+                status_code=503,
+                detail="Invalid configuration: ADMIN_SUBS entries cannot contain spaces."
+            )
+        if item in seen:
+            raise HTTPException(
+                status_code=503,
+                detail="Invalid configuration: ADMIN_SUBS contains duplicate entries."
+            )
+        seen.add(item)
+    return seen
+
+async def require_contracts_control_temporary_admin(
+    payload: dict = Depends(verify_backend_api_key)
+) -> str:
+    sub = payload.get("sub")
+    if not sub:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required: claim sub is missing."
+        )
+
+    admin_subs = get_and_validate_contracts_control_config()
+
+    writes_enabled_raw = os.getenv("CONTRACTS_CONTROL_WRITES_ENABLED", "false").lower()
+    if writes_enabled_raw != "true":
+        raise HTTPException(
+            status_code=403,
+            detail="Contracts Control write operations are disabled."
+        )
+
+    if sub not in admin_subs:
+        raise HTTPException(
+            status_code=403,
+            detail="Contracts Control write operations are unauthorized."
+        )
+    return sub
+
 @app.get(
     "/api/transactions",
     response_model=TransactionsListResponse,
@@ -4546,6 +4619,7 @@ class ContractsControlDeal(BaseModel):
     status_at_period_end: str
     data_quality_flags: List[str]
     period_roles: Optional[List[str]] = None
+    manual_data_version: int = 0
 
 class ContractsControlDealsResponse(BaseModel):
     page: int
@@ -4553,6 +4627,60 @@ class ContractsControlDealsResponse(BaseModel):
     total_records: int
     total_pages: int
     deals: List[ContractsControlDeal]
+
+class ContractsControlResponsiblesResponse(BaseModel):
+    responsibles: List[ContractsControlResponsibleReference]
+
+class CreateResponsibleRequest(BaseModel):
+    name: str
+
+class UpdateResponsibleRequest(BaseModel):
+    name: Optional[str] = None
+    active: Optional[bool] = None
+
+class UpdateIndividualAttributionRequest(BaseModel):
+    responsible_id: Optional[str] = None
+    version: int
+
+class IndividualAttributionResponse(BaseModel):
+    transaction_id: str
+    responsible: Optional[ContractsControlResponsibleReference] = None
+    version: int
+    updated_at: str
+    changed: bool
+
+class BulkAttributionItem(BaseModel):
+    transaction_id: str
+    version: int
+
+class BulkAttributionRequest(BaseModel):
+    items: List[BulkAttributionItem]
+    responsible_id: Optional[str] = None
+
+class BulkAttributionItemResponse(BaseModel):
+    transaction_id: str
+    version: int
+    changed: bool
+
+class BulkAttributionResponse(BaseModel):
+    requested_count: int
+    updated_count: int
+    unchanged_count: int
+    items: List[BulkAttributionItemResponse]
+
+class HistoryResponsibleReference(BaseModel):
+    id: str
+    current_name: str = Field(description="The current name of the responsible in the database register.")
+    active: bool
+
+class HistoryRecordItem(BaseModel):
+    field_name: str
+    previous_responsible: Optional[HistoryResponsibleReference] = None
+    new_responsible: Optional[HistoryResponsibleReference] = None
+    previous_version: Optional[int] = None
+    new_version: int
+    changed_at: str
+    changed_by_sub: str
 
 # Cache and settings
 CONTRACTS_CONTROL_CACHE_VERSION = "contracts-control-v1-data-inicio-venda"
@@ -5626,8 +5754,10 @@ async def get_contracts_control_deals(
 
         tx_id = tx.get("transacao_unique_id_pipeimob")
         responsible_ref = None
+        manual_version = 0
         if tx_id in manual_overlay:
             responsible_ref = manual_overlay[tx_id]["responsible"]
+            manual_version = manual_overlay[tx_id].get("version", 0)
 
         if responsible:
             if not responsible_ref:
@@ -5648,6 +5778,7 @@ async def get_contracts_control_deals(
             "aging_days_at_period_end": c["aging_days_at_period_end"],
             "manager": tx.get("agente_gestor"),
             "responsible": responsible_ref,
+            "manual_data_version": manual_version,
             "modality": c["modality"],
             "modality_label": c["modality_label"],
             "modality_source": c["modality_source"],
@@ -5684,3 +5815,309 @@ async def get_contracts_control_deals(
         total_pages=total_pages,
         deals=[ContractsControlDeal(**d) for d in paginated_deals]
     )
+
+@app.get(
+    "/api/contracts-control/responsibles",
+    response_model=ContractsControlResponsiblesResponse,
+    responses={**RESPONSES_503, **RESPONSES_AUTH},
+    summary="Get list of responsibles",
+    dependencies=[Depends(verify_backend_api_key)]
+)
+async def get_contracts_control_responsibles(
+    include_inactive: bool = Query(False),
+    payload: dict = Depends(verify_backend_api_key),
+    db: Optional[Any] = Depends(get_db_session)
+):
+    if include_inactive:
+        await require_contracts_control_temporary_admin(payload)
+
+    if not db:
+        raise HTTPException(status_code=503, detail="Database session unavailable.")
+
+    from services.contracts_control_manual_service import ContractsControlManualService
+    resps = ContractsControlManualService.list_responsibles(db, include_inactive)
+    return ContractsControlResponsiblesResponse(
+        responsibles=[
+            ContractsControlResponsibleReference(
+                id=str(r.id),
+                name=r.name,
+                active=r.active
+            ) for r in resps
+        ]
+    )
+
+@app.post(
+    "/api/contracts-control/responsibles",
+    response_model=ContractsControlResponsibleReference,
+    responses={**RESPONSES_503, **RESPONSES_AUTH},
+    summary="Create a new responsible"
+)
+async def create_contracts_control_responsible(
+    req: CreateResponsibleRequest,
+    sub: str = Depends(require_contracts_control_temporary_admin),
+    db: Optional[Any] = Depends(get_db_session)
+):
+    if not db:
+        raise HTTPException(status_code=503, detail="Database session unavailable.")
+
+    from services.contracts_control_manual_service import ContractsControlManualService
+    try:
+        resp = ContractsControlManualService.create_responsible(db, req.name)
+        db.commit()
+        return ContractsControlResponsibleReference(
+            id=str(resp.id),
+            name=resp.name,
+            active=resp.active
+        )
+    except ValueError as e:
+        err_str = str(e)
+        if err_str == "empty_name":
+            raise HTTPException(status_code=422, detail="Name cannot be empty.")
+        elif err_str == "duplicate_name":
+            raise HTTPException(status_code=409, detail="A responsible with this name already exists.")
+        raise HTTPException(status_code=400, detail=err_str)
+
+@app.patch(
+    "/api/contracts-control/responsibles/{responsible_id}",
+    response_model=ContractsControlResponsibleReference,
+    responses={**RESPONSES_503, **RESPONSES_AUTH},
+    summary="Update a responsible"
+)
+async def update_contracts_control_responsible(
+    responsible_id: str,
+    req: UpdateResponsibleRequest,
+    sub: str = Depends(require_contracts_control_temporary_admin),
+    db: Optional[Any] = Depends(get_db_session)
+):
+    if not db:
+        raise HTTPException(status_code=503, detail="Database session unavailable.")
+
+    try:
+        resp_uuid = uuid.UUID(responsible_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Responsible not found.")
+
+    from services.contracts_control_manual_service import ContractsControlManualService
+    try:
+        resp = ContractsControlManualService.update_responsible(
+            db, resp_uuid, req.name, req.active
+        )
+        db.commit()
+        return ContractsControlResponsibleReference(
+            id=str(resp.id),
+            name=resp.name,
+            active=resp.active
+        )
+    except ValueError as e:
+        err_str = str(e)
+        if err_str == "responsible_not_found":
+            raise HTTPException(status_code=404, detail="Responsible not found.")
+        elif err_str == "empty_name":
+            raise HTTPException(status_code=422, detail="Name cannot be empty.")
+        elif err_str == "duplicate_name":
+            raise HTTPException(status_code=409, detail="A responsible with this name already exists.")
+        raise HTTPException(status_code=400, detail=err_str)
+
+@app.patch(
+    "/api/contracts-control/deals/{transaction_id}/manual-data",
+    response_model=IndividualAttributionResponse,
+    responses={**RESPONSES_503, **RESPONSES_AUTH},
+    summary="Set or update responsible for a transaction"
+)
+async def patch_transaction_manual_data(
+    transaction_id: str,
+    req: UpdateIndividualAttributionRequest,
+    sub: str = Depends(require_contracts_control_temporary_admin),
+    db: Optional[Any] = Depends(get_db_session)
+):
+    if not db:
+        raise HTTPException(status_code=503, detail="Database session unavailable.")
+
+    req_id = str(uuid.uuid4())
+    try:
+        mode, src, dataset, pages, cache = await load_contracts_control_dataset(
+            request_id=req_id, refresh=False
+        )
+        valid_ids = {
+            c["tx"].get("transacao_unique_id_pipeimob")
+            for c in dataset
+            if c["tx"].get("transacao_unique_id_pipeimob")
+        }
+    except Exception:
+        raise HTTPException(status_code=503, detail="Pipeimob dataset universe is unavailable.")
+
+    if transaction_id not in valid_ids:
+        raise HTTPException(status_code=404, detail="Transaction not found in Pipeimob dataset.")
+
+    resp_uuid = None
+    if req.responsible_id is not None:
+        try:
+            resp_uuid = uuid.UUID(req.responsible_id)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Responsible not found.")
+
+    from services.contracts_control_manual_service import ContractsControlManualService
+    try:
+        md, changed = ContractsControlManualService.update_individual_attribution(
+            db, transaction_id, resp_uuid, req.version, sub
+        )
+        db.commit()
+
+        resp_ref = None
+        if md.responsible:
+            resp_ref = ContractsControlResponsibleReference(
+                id=str(md.responsible.id),
+                name=md.responsible.name,
+                active=md.responsible.active
+            )
+
+        return IndividualAttributionResponse(
+            transaction_id=md.transaction_id,
+            responsible=resp_ref,
+            version=md.version,
+            updated_at=md.updated_at.isoformat(),
+            changed=changed
+        )
+    except ValueError as e:
+        err_str = str(e)
+        if err_str == "responsible_not_found":
+            raise HTTPException(status_code=404, detail="Responsible not found.")
+        elif err_str == "responsible_inactive":
+            raise HTTPException(status_code=422, detail="Cannot assign an inactive responsible.")
+        elif err_str == "version_conflict":
+            raise HTTPException(status_code=409, detail="Version conflict. Optimistic locking check failed.")
+        raise HTTPException(status_code=400, detail=err_str)
+
+@app.post(
+    "/api/contracts-control/manual-data/bulk",
+    response_model=BulkAttributionResponse,
+    responses={**RESPONSES_503, **RESPONSES_AUTH},
+    summary="Bulk set or update responsible for transactions"
+)
+async def post_bulk_manual_data(
+    req: BulkAttributionRequest,
+    sub: str = Depends(require_contracts_control_temporary_admin),
+    db: Optional[Any] = Depends(get_db_session)
+):
+    if not db:
+        raise HTTPException(status_code=503, detail="Database session unavailable.")
+
+    if not req.items:
+        raise HTTPException(status_code=422, detail="Items list cannot be empty.")
+    if len(req.items) > 100:
+        raise HTTPException(status_code=422, detail="Lote excede o limite máximo de 100 itens.")
+
+    tx_ids = [item.transaction_id for item in req.items]
+    if len(tx_ids) != len(set(tx_ids)):
+        raise HTTPException(status_code=422, detail="Lote contém IDs de transação duplicados.")
+
+    req_id = str(uuid.uuid4())
+    try:
+        mode, src, dataset, pages, cache = await load_contracts_control_dataset(
+            request_id=req_id, refresh=False
+        )
+        valid_ids = {
+            c["tx"].get("transacao_unique_id_pipeimob")
+            for c in dataset
+            if c["tx"].get("transacao_unique_id_pipeimob")
+        }
+    except Exception:
+        raise HTTPException(status_code=503, detail="Pipeimob dataset universe is unavailable.")
+
+    resp_uuid = None
+    if req.responsible_id is not None:
+        try:
+            resp_uuid = uuid.UUID(req.responsible_id)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Responsible not found.")
+
+    items_dicts = [{"transaction_id": item.transaction_id, "version": item.version} for item in req.items]
+
+    from services.contracts_control_manual_service import ContractsControlManualService
+    try:
+        res = ContractsControlManualService.update_bulk_attribution(
+            db, items_dicts, resp_uuid, sub, valid_ids
+        )
+        return BulkAttributionResponse(
+            requested_count=res["requested_count"],
+            updated_count=res["updated_count"],
+            unchanged_count=res["unchanged_count"],
+            items=[BulkAttributionItemResponse(**it) for it in res["items"]]
+        )
+    except ValueError as e:
+        err_str = str(e)
+        if err_str.startswith("transaction_not_found:"):
+            invalid_tx = err_str.split(":")[1]
+            raise HTTPException(status_code=404, detail=f"Transaction {invalid_tx} not found.")
+        elif err_str == "responsible_not_found":
+            raise HTTPException(status_code=404, detail="Responsible not found.")
+        elif err_str == "responsible_inactive":
+            raise HTTPException(status_code=422, detail="Cannot assign an inactive responsible.")
+        elif err_str == "version_conflict":
+            raise HTTPException(status_code=409, detail="Version conflict. Optimistic locking check failed.")
+        elif err_str == "items_empty":
+            raise HTTPException(status_code=422, detail="Items list cannot be empty.")
+        elif err_str == "items_limit_exceeded":
+            raise HTTPException(status_code=422, detail="Lote excede o limite máximo de 100 itens.")
+        elif err_str == "empty_transaction_id":
+            raise HTTPException(status_code=422, detail="Lote contém IDs de transação vazios.")
+        elif err_str == "duplicate_transaction_ids":
+            raise HTTPException(status_code=422, detail="Lote contém IDs de transação duplicados.")
+        raise HTTPException(status_code=400, detail=err_str)
+
+@app.get(
+    "/api/contracts-control/deals/{transaction_id}/manual-data/history",
+    response_model=List[HistoryRecordItem],
+    responses={**RESPONSES_503, **RESPONSES_AUTH},
+    summary="Get transaction manual data history",
+    dependencies=[Depends(require_contracts_control_temporary_admin)]
+)
+async def get_transaction_manual_data_history(
+    transaction_id: str,
+    db: Optional[Any] = Depends(get_db_session)
+):
+    if not db:
+        raise HTTPException(status_code=503, detail="Database session unavailable.")
+
+    from repositories.contracts_control_repository import ContractsControlRepository
+    history_records = ContractsControlRepository.get_history_by_transaction_id(db, transaction_id)
+
+    result = []
+    for rec in history_records:
+        prev_resp = None
+        new_resp = None
+        if rec.field_name == "responsible_id":
+            if rec.previous_value:
+                try:
+                    prev_id = uuid.UUID(rec.previous_value)
+                    r = ContractsControlRepository.get_responsible_by_id(db, prev_id)
+                    if r:
+                        prev_resp = HistoryResponsibleReference(
+                            id=str(r.id), current_name=r.name, active=r.active
+                        )
+                except ValueError:
+                    pass
+            if rec.new_value:
+                try:
+                    new_id = uuid.UUID(rec.new_value)
+                    r = ContractsControlRepository.get_responsible_by_id(db, new_id)
+                    if r:
+                        new_resp = HistoryResponsibleReference(
+                            id=str(r.id), current_name=r.name, active=r.active
+                        )
+                except ValueError:
+                    pass
+
+        result.append(
+            HistoryRecordItem(
+                field_name=rec.field_name,
+                previous_responsible=prev_resp,
+                new_responsible=new_resp,
+                previous_version=rec.previous_version,
+                new_version=rec.new_version,
+                changed_at=rec.changed_at.isoformat(),
+                changed_by_sub=rec.changed_by_sub
+            )
+        )
+
+    return result
