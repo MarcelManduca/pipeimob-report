@@ -3447,6 +3447,32 @@ def get_jwk_client():
             from jwt import PyJWKClient
             _jwk_client = PyJWKClient(jwks_url)
     return _jwk_client
+
+authorization_role_status = "unresolved"
+
+def get_db_session():
+    try:
+        from database import SessionLocal
+        if not SessionLocal:
+            session_factory = None
+        else:
+            session_factory = SessionLocal
+    except Exception:
+        session_factory = None
+
+    if session_factory is None:
+        yield None
+        return
+
+    db = session_factory()
+    try:
+        yield db
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
 async def verify_backend_api_key(
     authorization: Optional[str] = Header(None)
 ):
@@ -4465,6 +4491,15 @@ class ContractsControlExtractionQuality(BaseModel):
     duplicate_conflict_count: int
     duplicate_resolution_policy: str = "first_api_occurrence"
 
+class ContractsControlManualEnrichment(BaseModel):
+    status: str
+    scope: str = "operations"
+    eligible_records_count: Optional[int] = None
+    responsible_filled_count: Optional[int] = None
+    responsible_pending_count: Optional[int] = None
+    responsible_completion_ratio: Optional[float] = None
+    last_manual_update_at: Optional[datetime] = None
+
 class ContractsControlSummaryResponse(BaseModel):
     period: ContractsControlPeriod
     extraction: ContractsControlExtraction
@@ -4479,6 +4514,12 @@ class ContractsControlSummaryResponse(BaseModel):
     by_source_type: List[ContractsControlSourceTypeMetric]
     timeline: List[ContractsControlTimelineMetric]
     data_quality: ContractsControlDataQuality
+    manual_enrichment: ContractsControlManualEnrichment
+
+class ContractsControlResponsibleReference(BaseModel):
+    id: str
+    name: str
+    active: bool
 
 class ContractsControlDeal(BaseModel):
     transaction_id: str
@@ -4490,7 +4531,7 @@ class ContractsControlDeal(BaseModel):
     current_aging_days: Optional[int] = None
     aging_days_at_period_end: Optional[int] = None
     manager: Optional[str] = None
-    responsible: Optional[str] = None
+    responsible: Optional[ContractsControlResponsibleReference] = None
     modality: str
     modality_label: str
     modality_source: str
@@ -5359,7 +5400,8 @@ async def get_contracts_control_summary(
     process_status: Optional[str] = Query(None),
     modality: Optional[str] = Query(None),
     source_type: Optional[str] = Query(None),
-    refresh: Optional[bool] = Query(None)
+    refresh: Optional[bool] = Query(None),
+    db: Optional[Any] = Depends(get_db_session)
 ):
     req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
 
@@ -5421,6 +5463,54 @@ async def get_contracts_control_summary(
         coverage_status="unverified"
     )
 
+    operations_tx_ids = list({
+        c["tx"].get("transacao_unique_id_pipeimob")
+        for c in aggregates["operations_txs"]
+        if c["tx"].get("transacao_unique_id_pipeimob")
+    })
+
+    import logging
+    logger = logging.getLogger(__name__)
+
+    from services.contracts_control_manual_service import ContractsControlManualService
+    enrichment_data = {
+        "status": "available",
+        "scope": "operations",
+        "eligible_records_count": len(operations_tx_ids),
+        "responsible_filled_count": 0,
+        "responsible_pending_count": len(operations_tx_ids),
+        "responsible_completion_ratio": 0.0,
+        "last_manual_update_at": None
+    }
+
+    if db:
+        try:
+            raw_indicators = ContractsControlManualService.get_enrichment_indicators(db, operations_tx_ids)
+            enrichment_data.update(raw_indicators)
+            enrichment_data["status"] = "available"
+        except Exception as e:
+            logger.error(f"Manual data layer indicators query failed: {type(e).__name__}")
+            enrichment_data = {
+                "status": "unavailable",
+                "scope": "operations",
+                "eligible_records_count": None,
+                "responsible_filled_count": None,
+                "responsible_pending_count": None,
+                "responsible_completion_ratio": None,
+                "last_manual_update_at": None
+            }
+    else:
+        enrichment_data = {
+            "status": "unavailable",
+            "scope": "operations",
+            "eligible_records_count": None,
+            "responsible_filled_count": None,
+            "responsible_pending_count": None,
+            "responsible_completion_ratio": None,
+            "last_manual_update_at": None
+        }
+
+
     return ContractsControlSummaryResponse(
         period=resp_period,
         extraction=resp_extraction,
@@ -5434,7 +5524,8 @@ async def get_contracts_control_summary(
         by_modality=ContractsControlModalitySummary(**aggregates["by_modality"]),
         by_source_type=[],
         timeline=[ContractsControlTimelineMetric(**t) for t in aggregates["timeline"]],
-        data_quality=ContractsControlDataQuality(**aggregates["data_quality"])
+        data_quality=ContractsControlDataQuality(**aggregates["data_quality"]),
+        manual_enrichment=ContractsControlManualEnrichment(**enrichment_data)
     )
 
 @app.get(
@@ -5459,7 +5550,8 @@ async def get_contracts_control_deals(
     source_type: Optional[str] = Query(None),
     aging_bucket: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
-    refresh: Optional[bool] = Query(None)
+    refresh: Optional[bool] = Query(None),
+    db: Optional[Any] = Depends(get_db_session)
 ):
     req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
 
@@ -5483,6 +5575,26 @@ async def get_contracts_control_deals(
         deals_source = aggregates["cohort_txs"]
     else:
         deals_source = aggregates["operations_txs"]
+
+    tx_ids = [
+        c["tx"].get("transacao_unique_id_pipeimob")
+        for c in deals_source
+        if c["tx"].get("transacao_unique_id_pipeimob")
+    ]
+
+    import logging
+    logger = logging.getLogger(__name__)
+
+    from services.contracts_control_manual_service import ContractsControlManualService
+    manual_overlay = {}
+    if db and tx_ids:
+        try:
+            manual_overlay = ContractsControlManualService.get_manual_data_for_overlay(db, tx_ids)
+        except Exception as e:
+            logger.error(f"Manual data layer overlay query failed: {type(e).__name__}")
+            manual_overlay = {}
+
+    from models.contracts_control import normalize_responsible_name
 
     filtered_deals = []
     for c in deals_source:
@@ -5512,8 +5624,21 @@ async def get_contracts_control_deals(
             if search_lower not in prop_code.lower() and search_lower not in mgr.lower():
                 continue
 
+        tx_id = tx.get("transacao_unique_id_pipeimob")
+        responsible_ref = None
+        if tx_id in manual_overlay:
+            responsible_ref = manual_overlay[tx_id]["responsible"]
+
+        if responsible:
+            if not responsible_ref:
+                continue
+            norm_resp_filter = normalize_responsible_name(responsible)
+            norm_resp_name = normalize_responsible_name(responsible_ref["name"])
+            if responsible_ref["id"] != responsible and norm_resp_name != norm_resp_filter:
+                continue
+
         deal_item = {
-            "transaction_id": tx.get("transacao_unique_id_pipeimob"),
+            "transaction_id": tx_id,
             "property_code": tx.get("codigo_imovel") or "",
             "property_title": None,
             "start_date": tx.get("data_inicio_venda"),
@@ -5522,7 +5647,7 @@ async def get_contracts_control_deals(
             "current_aging_days": c["current_aging_days"],
             "aging_days_at_period_end": c["aging_days_at_period_end"],
             "manager": tx.get("agente_gestor"),
-            "responsible": "manual_bi",
+            "responsible": responsible_ref,
             "modality": c["modality"],
             "modality_label": c["modality_label"],
             "modality_source": c["modality_source"],
@@ -5544,11 +5669,13 @@ async def get_contracts_control_deals(
 
     total_records = len(filtered_deals)
     total_pages = max(1, math.ceil(total_records / page_size))
-    page = min(page, total_pages)
 
-    start_idx = (page - 1) * page_size
-    end_idx = start_idx + page_size
-    paginated_deals = filtered_deals[start_idx:end_idx]
+    if page > total_pages:
+        paginated_deals = []
+    else:
+        start_idx = (page - 1) * page_size
+        end_idx = start_idx + page_size
+        paginated_deals = filtered_deals[start_idx:end_idx]
 
     return ContractsControlDealsResponse(
         page=page,

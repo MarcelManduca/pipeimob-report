@@ -3902,7 +3902,7 @@ def test_contracts_control_endpoints_summary_and_deals():
             first_deal = deals_ops["deals"][0]
             assert set(first_deal.keys()) == allowed_keys
             assert first_deal["property_title"] is None
-            assert first_deal["responsible"] == "manual_bi"
+            assert first_deal["responsible"] is None
             assert first_deal["source_type"] == "unknown"
             assert "period_roles" in first_deal
 
@@ -4386,3 +4386,789 @@ def test_contracts_control_modality_classification_matrix():
         assert "comprador" not in dumped.lower()
         assert "vendedor" not in dumped.lower()
         assert "cpf" not in dumped.lower()
+
+# ======================================================================
+# FASE 2 — SPRINT 1: TESTES DE PERSISTÊNCIA E OVERLAY
+# ======================================================================
+
+from sqlalchemy import create_engine, event
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.exc import IntegrityError
+from database import Base
+from main import app, get_db_session, verify_backend_api_key
+from repositories.contracts_control_repository import ContractsControlRepository
+from services.contracts_control_manual_service import ContractsControlManualService
+
+test_db_file = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "test_temp.db"))
+test_engine = create_engine(f"sqlite:///{test_db_file}", connect_args={"check_same_thread": False})
+
+@event.listens_for(test_engine, "connect")
+def set_sqlite_pragma(dbapi_connection, connection_record):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
+    dbapi_connection.create_function("btrim", 1, lambda s: s.strip() if s is not None else None)
+
+TestSessionLocal = sessionmaker(bind=test_engine)
+
+@pytest.fixture(name="db_session", scope="function")
+def db_session_fixture():
+    Base.metadata.create_all(test_engine)
+    db = TestSessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+        Base.metadata.drop_all(test_engine)
+        test_engine.dispose()
+        if os.path.exists(test_db_file):
+            try:
+                os.remove(test_db_file)
+            except Exception:
+                pass
+
+@pytest.fixture(name="client_with_db")
+def client_with_db_fixture():
+    Base.metadata.create_all(test_engine)
+    db = TestSessionLocal()
+
+    def override_get_db_session():
+        try:
+            yield db
+        finally:
+            pass
+
+    app.dependency_overrides[get_db_session] = override_get_db_session
+    yield db
+    app.dependency_overrides.clear()
+    db.close()
+    Base.metadata.drop_all(test_engine)
+    test_engine.dispose()
+    if os.path.exists(test_db_file):
+        try:
+            os.remove(test_db_file)
+        except Exception:
+            pass
+
+def test_contracts_control_migration_tables_schema(db_session):
+    # Verify tables creation
+    tables = Base.metadata.tables.keys()
+    assert "contracts_control_responsibles" in tables
+    assert "contracts_control_manual_data" in tables
+    assert "contracts_control_manual_data_history" in tables
+
+def test_contracts_control_migration_downgrade(db_session):
+    # Verify we can drop all tables cleanly
+    Base.metadata.drop_all(test_engine)
+    # Check that they don't exist anymore
+    from sqlalchemy import inspect
+    inspector = inspect(test_engine)
+    assert not inspector.has_table("contracts_control_responsibles")
+    assert not inspector.has_table("contracts_control_manual_data")
+    assert not inspector.has_table("contracts_control_manual_data_history")
+
+def test_contracts_control_responsible_normalized_name_unique(db_session):
+    # Create responsible
+    r1 = ContractsControlRepository.create_responsible(db_session, "Sec Vendas")
+    db_session.commit()
+    assert r1.id is not None
+    assert r1.name == "Sec Vendas"
+    assert r1.normalized_name == "sec vendas"
+    assert r1.active is True
+
+    # Try duplicate normalized name
+    with pytest.raises(IntegrityError):
+        ContractsControlRepository.create_responsible(db_session, "SEC VENDAS")
+        db_session.commit()
+
+def test_contracts_control_responsible_active_inactive(db_session):
+    r1 = ContractsControlRepository.create_responsible(db_session, "Sec Ativa", active=True)
+    r2 = ContractsControlRepository.create_responsible(db_session, "Sec Inativa", active=False)
+    db_session.commit()
+
+    active_list = ContractsControlRepository.list_active_responsibles(db_session, include_inactive=False)
+    assert r1 in active_list
+    assert r2 not in active_list
+
+    all_list = ContractsControlRepository.list_active_responsibles(db_session, include_inactive=True)
+    assert r1 in all_list
+    assert r2 in all_list
+
+def test_contracts_control_manual_data_concurrency_locking_and_history(db_session):
+    r1 = ContractsControlRepository.create_responsible(db_session, "Sec Vendas")
+    db_session.commit()
+
+    # Create manual data attribution
+    tx_id = "tx_concurrency_123"
+    md = ContractsControlRepository.create_manual_data(db_session, tx_id, r1.id, "sub_user_123")
+    db_session.commit()
+
+    assert md.transaction_id == tx_id
+    assert md.responsible_id == r1.id
+    assert md.version == 1
+
+    # Perform a successful update with expected version
+    success = ContractsControlRepository.update_manual_data_optimistic(
+        db_session, tx_id, None, expected_version=1, actor_sub="sub_user_456"
+    )
+    db_session.commit()
+    assert success is True
+
+    db_session.refresh(md)
+    assert md.responsible_id is None
+    assert md.version == 2
+
+    # Perform a failed update with incorrect expected version (Concurrency Conflict)
+    success_fail = ContractsControlRepository.update_manual_data_optimistic(
+        db_session, tx_id, r1.id, expected_version=1, actor_sub="sub_user_789"
+    )
+    db_session.commit()
+    assert success_fail is False
+
+    # Verify version has not changed
+    db_session.refresh(md)
+    assert md.version == 2
+
+    # Create history records
+    hist = ContractsControlRepository.create_history_record(
+        db_session, tx_id, "responsible_id", str(r1.id), None, 1, 2, "sub_user_456"
+    )
+    db_session.commit()
+
+    assert hist.id is not None
+    assert hist.transaction_id == tx_id
+    assert hist.previous_value == str(r1.id)
+    assert hist.new_value is None
+    assert hist.new_version == 2
+
+    history_list = ContractsControlRepository.get_history_by_transaction_id(db_session, tx_id)
+    assert hist in history_list
+
+def test_contracts_control_manual_data_rollback_on_error(db_session):
+    # Set up to test atomic updates and history registration
+    r1 = ContractsControlRepository.create_responsible(db_session, "Sec Vendas")
+    db_session.commit()
+
+    tx_id = "tx_rollback_123"
+    ContractsControlRepository.create_manual_data(db_session, tx_id, r1.id, "sub_user_123")
+    db_session.commit()
+
+    # Simulating update + history write inside a transaction block that fails midway
+    try:
+        with db_session.begin_nested():
+            # Update version from 1 to 2
+            success = ContractsControlRepository.update_manual_data_optimistic(
+                db_session, tx_id, None, expected_version=1, actor_sub="sub_user_456"
+            )
+            assert success is True
+            # Raise an error to force rollback
+            raise ValueError("Forced error to test atomic rollback")
+    except ValueError:
+        db_session.rollback()
+
+    # Check version was rolled back to 1 and responsible remains r1.id
+    md = ContractsControlRepository.get_manual_data_by_transaction_id(db_session, tx_id)
+    assert md.version == 1
+    assert md.responsible_id == r1.id
+
+def test_contracts_control_deals_endpoint_overlay(client_with_db):
+    # Setup database with responsible and manual data
+    db = client_with_db
+    r1 = ContractsControlRepository.create_responsible(db, "Secretaria Vendas")
+    r2 = ContractsControlRepository.create_responsible(db, "Pós-Venda Inativa", active=False)
+    db.commit()
+
+    # Associate transaction in mock data to r1 (Secretaria Vendas)
+    # the mock deal from test_contracts_control_endpoints_summary_and_deals uses unique ids like 'tx_uniq_1'
+    ContractsControlRepository.create_manual_data(db, "tx_uniq_1", r1.id, "sub_user_123")
+    ContractsControlRepository.create_manual_data(db, "tx_uniq_2", r2.id, "sub_user_123")
+    db.commit()
+
+    # Bypass auth
+    app.dependency_overrides[verify_backend_api_key] = lambda: {"sub": "user-123", "role": "authenticated"}
+
+    from main import contracts_control_cache
+    contracts_control_cache.clear()
+
+    try:
+        # Mock dataset
+        mock_txs = [
+            {"transacao_unique_id_pipeimob": "tx_uniq_1", "codigo_imovel": "123", "data_inicio_venda": "2026-06-10", "data_contrato": "2026-06-25", "agente_gestor": "Mgr A", "financiamento": True},
+            {"transacao_unique_id_pipeimob": "tx_uniq_2", "codigo_imovel": "456", "data_inicio_venda": "2026-06-12", "data_contrato": "2026-06-28", "agente_gestor": "Mgr A", "financiamento": True},
+            {"transacao_unique_id_pipeimob": "tx_uniq_3", "codigo_imovel": "789", "data_inicio_venda": "2026-06-15", "data_contrato": None, "agente_gestor": "Mgr A", "financiamento": True}
+        ]
+
+        with patch("main.fetch_all_pipeimob_transactions", return_value=(mock_txs, 1)), \
+             patch.dict(os.environ, {"PIPEIMOB_DATA_MODE": "live", "PIPEIMOB_API_KEY": "mock", "PIPEIMOB_SECRET_KEY": "mock"}):
+
+            res = client.get("/api/contracts-control/deals?start_date=2026-06-01&end_date=2026-06-30")
+            assert res.status_code == 200
+            data = res.json()
+            deals = data["deals"]
+            assert len(deals) == 3
+
+            # Verify tx_uniq_1 responsible overlay (active responsible)
+            deal1 = next(d for d in deals if d["transaction_id"] == "tx_uniq_1")
+            assert deal1["responsible"] is not None
+            assert deal1["responsible"]["id"] == str(r1.id)
+            assert deal1["responsible"]["name"] == "Secretaria Vendas"
+            assert deal1["responsible"]["active"] is True
+
+            # Verify tx_uniq_2 responsible overlay (inactive responsible)
+            deal2 = next(d for d in deals if d["transaction_id"] == "tx_uniq_2")
+            assert deal2["responsible"] is not None
+            assert deal2["responsible"]["id"] == str(r2.id)
+            assert deal2["responsible"]["name"] == "Pós-Venda Inativa"
+            assert deal2["responsible"]["active"] is False
+
+            # Verify tx_uniq_3 responsible overlay (no manual data assigned)
+            deal3 = next(d for d in deals if d["transaction_id"] == "tx_uniq_3")
+            assert deal3["responsible"] is None
+
+            # Verify responsible filter query param
+            res_filtered = client.get(f"/api/contracts-control/deals?start_date=2026-06-01&end_date=2026-06-30&responsible={r1.id}")
+            assert res_filtered.status_code == 200
+            assert res_filtered.json()["total_records"] == 1
+            assert res_filtered.json()["deals"][0]["transaction_id"] == "tx_uniq_1"
+
+            # Verify summary manual enrichment indicators
+            res_summary = client.get("/api/contracts-control/summary?start_date=2026-06-01&end_date=2026-06-30")
+            assert res_summary.status_code == 200
+            summary_data = res_summary.json()
+            assert "manual_enrichment" in summary_data
+
+            enrichment = summary_data["manual_enrichment"]
+            assert enrichment["status"] == "available"
+            assert enrichment["scope"] == "operations"
+            assert enrichment["eligible_records_count"] == 3
+            assert enrichment["responsible_filled_count"] == 2
+            assert enrichment["responsible_pending_count"] == 1
+            assert enrichment["responsible_completion_ratio"] == float(2 / 3)
+            assert enrichment["last_manual_update_at"] is not None
+
+            # Confirm mapping_status has not altered modality_detail, source_type, etc.
+            dq = summary_data["data_quality"]
+            assert dq["mapping_status"]["responsible"] == "manual_bi"
+            assert dq["mapping_status"]["financing_classification"] == "resolved_api"
+            assert dq["mapping_status"]["modality_detail"] == "partial"
+            assert dq["mapping_status"]["source_type"] == "resolved_api"
+
+            # Check that no client PII data is returned in deals or summary
+            for deal in deals:
+                deal_str = json.dumps(deal)
+                assert "comprador" not in deal_str.lower()
+                assert "vendedor" not in deal_str.lower()
+                assert "cpf" not in deal_str.lower()
+
+    finally:
+        app.dependency_overrides.clear()
+        contracts_control_cache.clear()
+
+def test_contracts_control_deals_endpoint_401_unauthorized():
+    # Calling deals without authorization should fail
+    from main import verify_backend_api_key
+    app.dependency_overrides.clear()
+
+    no_auth_client = TestClient(app)
+    response = no_auth_client.get("/api/contracts-control/deals")
+    assert response.status_code == 401
+    assert "detail" in response.json()
+
+def test_contracts_control_no_write_endpoints_activated():
+    # PATCH /api/contracts-control/deals/{id}/manual-data and POST /api/contracts-control/manual-data/bulk
+    # must return 404 since authorization_role_status == "unresolved" and endpoints are not registered
+    res_patch = client.patch("/api/contracts-control/deals/tx_123/manual-data", json={"responsible_id": "none", "version": 1})
+    assert res_patch.status_code == 404
+
+    res_post_bulk = client.post("/api/contracts-control/manual-data/bulk", json={"transaction_ids": ["tx_123"], "responsible_id": "none"})
+    assert res_post_bulk.status_code == 404
+
+# ======================================================================
+# AUDITORIA FINAL — SPRINT 1: NOVOS TESTES DE REQUISITOS
+# ======================================================================
+
+def test_contracts_control_deals_pagination_and_responsible_filtering_before_pagination(client_with_db):
+    db = client_with_db
+    # Create 2 responsibles
+    resp_wanted = ContractsControlRepository.create_responsible(db, "Special Secretary")
+    resp_other = ContractsControlRepository.create_responsible(db, "Other User")
+    db.commit()
+
+    # Assign resp_wanted to deal tx_uniq_5, resp_other to tx_uniq_1
+    ContractsControlRepository.create_manual_data(db, "tx_uniq_1", resp_other.id, "actor")
+    ContractsControlRepository.create_manual_data(db, "tx_uniq_5", resp_wanted.id, "actor")
+    db.commit()
+
+    # Setup auth and cached data bypass
+    app.dependency_overrides[verify_backend_api_key] = lambda: {"sub": "user-123", "role": "authenticated"}
+    from main import contracts_control_cache
+    contracts_control_cache.clear()
+
+    try:
+        # Mock 5 deals
+        mock_txs = [
+            {"transacao_unique_id_pipeimob": "tx_uniq_1", "codigo_imovel": "1", "data_inicio_venda": "2026-06-10", "data_contrato": "2026-06-25", "agente_gestor": "Mgr A", "financiamento": True},
+            {"transacao_unique_id_pipeimob": "tx_uniq_2", "codigo_imovel": "2", "data_inicio_venda": "2026-06-12", "data_contrato": "2026-06-25", "agente_gestor": "Mgr A", "financiamento": True},
+            {"transacao_unique_id_pipeimob": "tx_uniq_3", "codigo_imovel": "3", "data_inicio_venda": "2026-06-14", "data_contrato": "2026-06-25", "agente_gestor": "Mgr A", "financiamento": True},
+            {"transacao_unique_id_pipeimob": "tx_uniq_4", "codigo_imovel": "4", "data_inicio_venda": "2026-06-16", "data_contrato": "2026-06-25", "agente_gestor": "Mgr A", "financiamento": True},
+            {"transacao_unique_id_pipeimob": "tx_uniq_5", "codigo_imovel": "5", "data_inicio_venda": "2026-06-18", "data_contrato": "2026-06-25", "agente_gestor": "Mgr A", "financiamento": True}
+        ]
+
+        with patch("main.fetch_all_pipeimob_transactions", return_value=(mock_txs, 1)), \
+             patch.dict(os.environ, {"PIPEIMOB_DATA_MODE": "live", "PIPEIMOB_API_KEY": "mock", "PIPEIMOB_SECRET_KEY": "mock"}):
+
+            # Query without filter, check pagination defaults
+            res_all = client.get("/api/contracts-control/deals?start_date=2026-06-01&end_date=2026-06-30&page_size=2&page=1")
+            assert res_all.status_code == 200
+            data_all = res_all.json()
+            assert data_all["total_records"] == 5
+            assert data_all["total_pages"] == 3
+            assert len(data_all["deals"]) == 2
+
+            # Apply filter: special secretary.
+            # Filtering happens BEFORE pagination: tx_uniq_5 should be on page 1 of the filtered results.
+            res_filtered = client.get("/api/contracts-control/deals?start_date=2026-06-01&end_date=2026-06-30&page_size=2&page=1&responsible=Special Secretary")
+            assert res_filtered.status_code == 200
+            data_filtered = res_filtered.json()
+            assert data_filtered["total_records"] == 1
+            assert data_filtered["total_pages"] == 1
+            assert len(data_filtered["deals"]) == 1
+            assert data_filtered["deals"][0]["transaction_id"] == "tx_uniq_5"
+
+            # Query page out of range (e.g. page=2) -> must return empty list
+            res_out_of_range = client.get("/api/contracts-control/deals?start_date=2026-06-01&end_date=2026-06-30&page_size=2&page=2&responsible=Special Secretary")
+            assert res_out_of_range.status_code == 200
+            assert res_out_of_range.json()["deals"] == []
+
+    finally:
+        app.dependency_overrides.clear()
+        contracts_control_cache.clear()
+
+def test_contracts_control_manual_enrichment_scope_and_period_roles_uniqueness(client_with_db):
+    db = client_with_db
+    resp = ContractsControlRepository.create_responsible(db, "Special Sec")
+    db.commit()
+    # Associate to tx_uniq_1
+    ContractsControlRepository.create_manual_data(db, "tx_uniq_1", resp.id, "actor")
+    db.commit()
+
+    app.dependency_overrides[verify_backend_api_key] = lambda: {"sub": "user-123", "role": "authenticated"}
+    from main import contracts_control_cache
+    contracts_control_cache.clear()
+
+    try:
+        # tx_uniq_1 started and completed in period -> has 2 roles: started_in_period, completed_in_period.
+        # It must not be counted twice in eligible records!
+        mock_txs = [
+            {"transacao_unique_id_pipeimob": "tx_uniq_1", "codigo_imovel": "1", "data_inicio_venda": "2026-06-10", "data_contrato": "2026-06-25", "agente_gestor": "Mgr A", "financiamento": True}
+        ]
+
+        with patch("main.fetch_all_pipeimob_transactions", return_value=(mock_txs, 1)), \
+             patch.dict(os.environ, {"PIPEIMOB_DATA_MODE": "live", "PIPEIMOB_API_KEY": "mock", "PIPEIMOB_SECRET_KEY": "mock"}):
+
+            res = client.get("/api/contracts-control/summary?start_date=2026-06-01&end_date=2026-06-30")
+            assert res.status_code == 200
+            enrichment = res.json()["manual_enrichment"]
+            assert enrichment["scope"] == "operations"
+            assert enrichment["status"] == "available"
+            assert enrichment["eligible_records_count"] == 1
+            assert enrichment["responsible_filled_count"] == 1
+            assert enrichment["responsible_pending_count"] == 0
+            assert enrichment["responsible_completion_ratio"] == 1.0
+
+    finally:
+        app.dependency_overrides.clear()
+        contracts_control_cache.clear()
+
+def test_contracts_control_database_unavailability_read_endpoints():
+    # Force get_db_session to yield None (database unavailable)
+    def override_get_db_session():
+        yield None
+
+    app.dependency_overrides[get_db_session] = override_get_db_session
+    app.dependency_overrides[verify_backend_api_key] = lambda: {"sub": "user-123", "role": "authenticated"}
+    from main import contracts_control_cache
+    contracts_control_cache.clear()
+
+    try:
+        mock_txs = [
+            {"transacao_unique_id_pipeimob": "tx_uniq_1", "codigo_imovel": "1", "data_inicio_venda": "2026-06-10", "data_contrato": "2026-06-25", "agente_gestor": "Mgr A", "financiamento": True}
+        ]
+
+        with patch("main.fetch_all_pipeimob_transactions", return_value=(mock_txs, 1)), \
+             patch.dict(os.environ, {"PIPEIMOB_DATA_MODE": "live", "PIPEIMOB_API_KEY": "mock", "PIPEIMOB_SECRET_KEY": "mock"}):
+
+            # Deals endpoint must return response, preserving Pipeimob fields, returning responsible = null
+            res_deals = client.get("/api/contracts-control/deals?start_date=2026-06-01&end_date=2026-06-30")
+            assert res_deals.status_code == 200
+            data_deals = res_deals.json()
+            assert len(data_deals["deals"]) == 1
+            assert data_deals["deals"][0]["transaction_id"] == "tx_uniq_1"
+            assert data_deals["deals"][0]["responsible"] is None
+
+            # Summary endpoint must return manual_enrichment.status = "unavailable" and null metrics
+            res_sum = client.get("/api/contracts-control/summary?start_date=2026-06-01&end_date=2026-06-30")
+            assert res_sum.status_code == 200
+            enrichment = res_sum.json()["manual_enrichment"]
+            assert enrichment["status"] == "unavailable"
+            assert enrichment["scope"] == "operations"
+            assert enrichment["eligible_records_count"] is None
+            assert enrichment["responsible_filled_count"] is None
+            assert enrichment["responsible_pending_count"] is None
+            assert enrichment["responsible_completion_ratio"] is None
+            assert enrichment["last_manual_update_at"] is None
+
+    finally:
+        app.dependency_overrides.clear()
+        contracts_control_cache.clear()
+
+def test_contracts_control_name_normalization_semantically_equivalent(db_session):
+    from models.contracts_control import normalize_responsible_name
+
+    # Normalization sanity checks
+    assert normalize_responsible_name("  José   da  Silva  ") == "jose da silva"
+    assert normalize_responsible_name("JOSÉ DA SILVA") == "jose da silva"
+    assert normalize_responsible_name("José da Silva") == "jose da silva"
+
+    # Persistence constraint checks: unique normalized name
+    r1 = ContractsControlRepository.create_responsible(db_session, "  José   da  Silva  ")
+    db_session.commit()
+    assert r1.normalized_name == "jose da silva"
+
+    with pytest.raises(IntegrityError):
+        # Semantic duplicate: JOSÉ DA SILVA has same normalized name "jose da silva"
+        ContractsControlRepository.create_responsible(db_session, "JOSÉ DA SILVA")
+        db_session.commit()
+
+# ======================================================================
+# AUDITORIA FINAL POSTGRESQL: COBERTURA E INTEGRACAO
+# ======================================================================
+
+def test_database_py_comprehensive_coverage():
+    import database
+    import importlib
+    from sqlalchemy.exc import ArgumentError
+
+    # 1. DATABASE_URL ausente / engine não criado na importação
+    with patch.dict(os.environ, {}, clear=True):
+        importlib.reload(database)
+        assert database.engine is None
+        assert database.SessionLocal is None
+
+        # 2. get_db raises RuntimeError
+        with pytest.raises(RuntimeError) as exc_info:
+            next(database.get_db())
+        assert "DATABASE_URL is not set" in str(exc_info.value)
+
+    # 3. Dynamic initialization tardia do engine / dynamic init errors
+    with pytest.raises(ValueError):
+        database.init_db("")
+
+    with pytest.raises(ArgumentError):
+        database.init_db("invalid_url://")
+
+    # 4. Successful initialization with SQLite in memory
+    database.init_db("sqlite:///:memory:")
+    assert database.engine is not None
+    assert database.SessionLocal is not None
+
+    from sqlalchemy import event
+    @event.listens_for(database.engine, "connect")
+    def register_btrim(dbapi_connection, connection_record):
+        dbapi_connection.create_function("btrim", 1, lambda s: s.strip() if s is not None else None)
+
+    # Base metadata create
+    database.Base.metadata.create_all(database.engine)
+
+    # 5. Sessão aberta e fechada corretamente
+    with patch("sqlalchemy.orm.Session.close") as mock_close:
+        db_gen = database.get_db()
+        db_session = next(db_gen)
+        assert db_session is not None
+
+        # Check database operations work
+        from sqlalchemy import text
+        db_session.execute(text("SELECT 1"))
+
+        # 6. Fechamento da sessão em finally/context manager
+        try:
+            next(db_gen)
+        except StopIteration:
+            pass
+        mock_close.assert_called_once()
+
+    # 7. Rollback em exceção
+    db_gen2 = database.get_db()
+    db_session2 = next(db_gen2)
+    assert db_session2.is_active
+
+    # Simulate exception escaping the yield
+    try:
+        with patch.object(db_session2, 'rollback') as mock_rollback:
+            try:
+                db_gen2.throw(ValueError("Simulated route exception"))
+            except ValueError:
+                pass
+            mock_rollback.assert_called_once()
+    finally:
+        db_session2.close()
+
+    # 8. Dispose do engine nos testes
+    database.engine.dispose()
+
+    # 9. Ausência de sessão global compartilhada entre requests
+    db_gen_a = database.get_db()
+    db_gen_b = database.get_db()
+    session_a = next(db_gen_a)
+    session_b = next(db_gen_b)
+    try:
+        assert session_a is not session_b
+    finally:
+        session_a.close()
+        session_b.close()
+
+def test_manual_service_and_repository_edge_cases(db_session):
+    # Setup a responsible
+    r = ContractsControlRepository.create_responsible(db_session, "Sec Boundary Test")
+    db_session.commit()
+
+    # 1. get_responsible_by_id
+    r_by_id = ContractsControlRepository.get_responsible_by_id(db_session, r.id)
+    assert r_by_id.id == r.id
+
+    # 2. get_responsible_by_normalized_name
+    r_by_norm = ContractsControlRepository.get_responsible_by_normalized_name(db_session, "sec boundary test")
+    assert r_by_norm.id == r.id
+
+    # 3. get_manual_data_by_transaction_ids empty
+    assert ContractsControlRepository.get_manual_data_by_transaction_ids(db_session, []) == []
+
+    # 4. list_responsibles service
+    res_list = ContractsControlManualService.list_responsibles(db_session, include_inactive=True)
+    assert r in res_list
+
+    # 5. get_manual_data_for_overlay empty service
+    assert ContractsControlManualService.get_manual_data_for_overlay(db_session, []) == {}
+
+    # 6. get_enrichment_indicators empty service
+    ind = ContractsControlManualService.get_enrichment_indicators(db_session, [])
+    assert ind["eligible_records_count"] == 0
+    assert ind["responsible_filled_count"] == 0
+
+def test_contracts_control_postgresql_suite():
+    # Only run this if a real PostgreSQL DATABASE_URL is available
+    pg_url = os.environ.get("DATABASE_URL")
+    is_dedicated = os.environ.get("POSTGRES_REQUIRED") == "1" or os.environ.get("POSTGRES_DEDICATED") == "1"
+    if not pg_url or not pg_url.startswith("postgresql"):
+        if is_dedicated:
+            pytest.fail("Dedicated PostgreSQL integration test failed: DATABASE_URL is not set or not a PostgreSQL URL")
+        else:
+            pytest.skip("Skipping PostgreSQL integration tests because DATABASE_URL is not set or not a PostgreSQL URL")
+
+    # Re-initialize database with the real pg_url
+    import database
+    database.init_db(pg_url)
+    db = database.SessionLocal()
+
+    import uuid
+    from models.contracts_control import (
+        ContractsControlResponsible,
+        ContractsControlManualData,
+    )
+
+    # Verify database_dialect is postgresql
+    assert database.engine.dialect.name == "postgresql"
+
+    # ======================================================================
+    # 2. CICLO REAL DO ALEMBIC NO POSTGRESQL
+    # ======================================================================
+    from alembic.config import Config
+    from alembic import command
+
+    alembic_cfg = Config("alembic.ini")
+
+    # 1. Downgrade to base to clean up first
+    command.downgrade(alembic_cfg, "base")
+
+    # Check tables do not exist
+    from sqlalchemy import inspect
+    inspector = inspect(database.engine)
+    assert "contracts_control_responsibles" not in inspector.get_table_names()
+    assert "contracts_control_manual_data" not in inspector.get_table_names()
+    assert "contracts_control_manual_data_history" not in inspector.get_table_names()
+
+    # 2. Upgrade to head
+    command.upgrade(alembic_cfg, "head")
+
+    # Check three tables are created
+    inspector = inspect(database.engine)
+    table_names = inspector.get_table_names()
+    assert "contracts_control_responsibles" in table_names
+    assert "contracts_control_manual_data" in table_names
+    assert "contracts_control_manual_data_history" in table_names
+
+    # ======================================================================
+    # 3 & 4. VALIDAR SCHEMA E COMPORTAMENTOS POSTGRESQL
+    # ======================================================================
+    try:
+        # Check active and inactive responsible insertions
+        r1 = ContractsControlResponsible(id=uuid.uuid4(), name="Active Responsible", normalized_name="active responsible", active=True)
+        r2 = ContractsControlResponsible(id=uuid.uuid4(), name="Inactive Responsible", normalized_name="inactive responsible", active=False)
+        db.add_all([r1, r2])
+        db.commit()
+
+        # Check unique constraint on normalized_name
+        r_dup = ContractsControlResponsible(id=uuid.uuid4(), name="Dup", normalized_name="active responsible")
+        db.add(r_dup)
+        with pytest.raises(IntegrityError):
+            db.commit()
+        db.rollback()
+
+        # Check chk_responsible_name_not_empty (empty string)
+        r_empty_name = ContractsControlResponsible(id=uuid.uuid4(), name="", normalized_name="empty name test")
+        db.add(r_empty_name)
+        with pytest.raises(IntegrityError):
+            db.commit()
+        db.rollback()
+
+        # Check chk_responsible_name_not_empty (whitespace string with btrim)
+        r_space_name = ContractsControlResponsible(id=uuid.uuid4(), name="   ", normalized_name="space name test")
+        db.add(r_space_name)
+        with pytest.raises(IntegrityError):
+            db.commit()
+        db.rollback()
+
+        # Check chk_responsible_normalized_name_not_empty (empty string)
+        r_empty_norm = ContractsControlResponsible(id=uuid.uuid4(), name="Empty Norm Test", normalized_name="")
+        db.add(r_empty_norm)
+        with pytest.raises(IntegrityError):
+            db.commit()
+        db.rollback()
+
+        # Check chk_responsible_normalized_name_not_empty (whitespace string with btrim)
+        r_space_norm = ContractsControlResponsible(id=uuid.uuid4(), name="Space Norm Test", normalized_name="   ")
+        db.add(r_space_norm)
+        with pytest.raises(IntegrityError):
+            db.commit()
+        db.rollback()
+
+        # Check timezone offsets on dates (TIMESTAMPTZ)
+        db.refresh(r1)
+        assert r1.created_at.tzinfo is not None
+
+        # Check manual_data creation and foreign key constraint (invalid responsible_id)
+        md_invalid_fk = ContractsControlManualData(
+            transaction_id="tx_invalid_fk",
+            responsible_id=uuid.uuid4(),  # random non-existent uuid
+            version=1,
+            created_by_sub="actor",
+            updated_by_sub="actor"
+        )
+        db.add(md_invalid_fk)
+        with pytest.raises(IntegrityError):
+            db.commit()
+        db.rollback()
+
+        # Check chk_manual_data_version_min (version >= 1 check constraint)
+        md_invalid_ver = ContractsControlManualData(
+            transaction_id="tx_invalid_ver",
+            responsible_id=r1.id,
+            version=0,
+            created_by_sub="actor",
+            updated_by_sub="actor"
+        )
+        db.add(md_invalid_ver)
+        with pytest.raises(IntegrityError):
+            db.commit()
+        db.rollback()
+
+        # Success path creation of manual data
+        tx_id = "tx_success_pg"
+        md = ContractsControlManualData(
+            transaction_id=tx_id,
+            responsible_id=r1.id,
+            version=1,
+            created_by_sub="sub_1",
+            updated_by_sub="sub_1"
+        )
+        db.add(md)
+        db.commit()
+
+        # Concurrency: update with correct version
+        md.responsible_id = r2.id
+        md.version = 2
+        md.updated_by_sub = "sub_2"
+        db.commit()
+
+        db.refresh(md)
+        assert md.responsible_id == r2.id
+        assert md.version == 2
+
+        # Concurrency conflict: update with outdated version
+        success = ContractsControlRepository.update_manual_data_optimistic(
+            db, tx_id, r1.id, expected_version=1, actor_sub="sub_3"
+        )
+        assert success is False
+        db.rollback()
+
+        # History writing in the same transaction block & Rollback conjunto
+        try:
+            with db.begin_nested():
+                success = ContractsControlRepository.update_manual_data_optimistic(
+                    db, tx_id, r1.id, expected_version=2, actor_sub="sub_4"
+                )
+                assert success is True
+                # Write history record
+                ContractsControlRepository.create_history_record(
+                    db, tx_id, "responsible_id", str(r2.id), str(r1.id), 2, 3, "sub_4"
+                )
+                # Raise exception midway to force rollback
+                raise ValueError("Rollback everything")
+        except ValueError:
+            pass
+
+        # Check version remains 2 and no history record was committed
+        db.refresh(md)
+        assert md.version == 2
+        assert len(ContractsControlRepository.get_history_by_transaction_id(db, tx_id)) == 0
+
+    finally:
+        db.close()
+        # Clean up database tables in downgrade / upgrade cycle
+        command.downgrade(alembic_cfg, "base")
+        command.upgrade(alembic_cfg, "head")
+
+def test_verify_backend_api_key_invalid_format():
+    from main import verify_backend_api_key, AuthException
+    import pytest
+    import asyncio
+    with pytest.raises(AuthException) as exc:
+        asyncio.run(verify_backend_api_key(authorization="Basic 12345"))
+    assert exc.value.status_code == 401
+
+def test_main_http_timeout_value_error():
+    import asyncio
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        with patch.dict(os.environ, {"PIPEIMOB_HTTP_TIMEOUT_SECONDS": "invalid"}):
+            import main
+            import importlib
+            importlib.reload(main)
+            assert main.PIPEIMOB_HTTP_TIMEOUT_SECONDS == 12
+    finally:
+        loop.close()
+        asyncio.set_event_loop(None)
+
+def test_get_db_session_exception_rollback():
+    from main import get_db_session
+    db_gen = get_db_session()
+    mock_db = MagicMock()
+    with patch("database.SessionLocal", return_value=mock_db):
+        next(db_gen)
+        try:
+            db_gen.throw(ValueError("Simulated route exception"))
+        except ValueError:
+            pass
+        mock_db.rollback.assert_called_once()
+        mock_db.close.assert_called_once()
