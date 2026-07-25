@@ -1,7 +1,7 @@
 """init_contracts_control
 
 Revision ID: e1d27ea84474
-Revises: 
+Revises:
 Create Date: 2026-07-24 20:04:15.881681
 
 """
@@ -81,4 +81,3 @@ def downgrade() -> None:
     op.drop_table('contracts_control_manual_data')
 
     op.drop_table('contracts_control_responsibles')
-
