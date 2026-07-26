@@ -5938,12 +5938,18 @@ async def patch_transaction_manual_data(
         mode, src, dataset, pages, cache = await load_contracts_control_dataset(
             request_id=req_id, refresh=False
         )
-        valid_ids = {
-            c["tx"].get("transacao_unique_id_pipeimob")
-            for c in dataset
-            if c["tx"].get("transacao_unique_id_pipeimob")
-        }
-    except Exception:
+        valid_ids = set()
+        for c in dataset:
+            if isinstance(c, dict):
+                tx_id = c["tx"].get("transacao_unique_id_pipeimob") if "tx" in c and isinstance(c["tx"], dict) else c.get("transacao_unique_id_pipeimob")
+                if tx_id:
+                    valid_ids.add(tx_id)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(
+            f"Error loading contracts control dataset in PATCH: {type(e).__name__} - "
+            "stage: load_dataset - service: ContractsControl - code: ERR_INDIVIDUAL_PATCH_DATASET"
+        )
         raise HTTPException(status_code=503, detail="Pipeimob dataset universe is unavailable.")
 
     if transaction_id not in valid_ids:
@@ -6016,12 +6022,18 @@ async def post_bulk_manual_data(
         mode, src, dataset, pages, cache = await load_contracts_control_dataset(
             request_id=req_id, refresh=False
         )
-        valid_ids = {
-            c["tx"].get("transacao_unique_id_pipeimob")
-            for c in dataset
-            if c["tx"].get("transacao_unique_id_pipeimob")
-        }
-    except Exception:
+        valid_ids = set()
+        for c in dataset:
+            if isinstance(c, dict):
+                tx_id = c["tx"].get("transacao_unique_id_pipeimob") if "tx" in c and isinstance(c["tx"], dict) else c.get("transacao_unique_id_pipeimob")
+                if tx_id:
+                    valid_ids.add(tx_id)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(
+            f"Error loading contracts control dataset in BULK POST: {type(e).__name__} - "
+            "stage: load_dataset - service: ContractsControl - code: ERR_BULK_PATCH_DATASET"
+        )
         raise HTTPException(status_code=503, detail="Pipeimob dataset universe is unavailable.")
 
     resp_uuid = None

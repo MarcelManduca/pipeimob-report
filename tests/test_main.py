@@ -5321,6 +5321,20 @@ def test_contracts_control_postgresql_suite():
                     json={"responsible_id": str(r1.id), "version": 0}
                 )
                 assert res_page_2.status_code == 200
+
+                # Flat/raw transaction dict (without nested "tx" key) -> should also be parsed and return 200/404 correctly
+                mock_flat_universe = [
+                    {"transacao_unique_id_pipeimob": f"tx_flat_{i}"} for i in range(50)
+                ]
+                async def mock_load_flat_universe(*args, **kwargs):
+                    return "demo", "mock", mock_flat_universe, 1, "stale"
+
+                with patch("main.load_contracts_control_dataset", side_effect=mock_load_flat_universe):
+                    res_flat_200 = client.patch(
+                        "/api/contracts-control/deals/tx_flat_10/manual-data",
+                        json={"responsible_id": str(r1.id), "version": 0}
+                    )
+                    assert res_flat_200.status_code == 200
         finally:
             main.app.dependency_overrides.clear()
             os.environ.pop("CONTRACTS_CONTROL_WRITES_ENABLED", None)
