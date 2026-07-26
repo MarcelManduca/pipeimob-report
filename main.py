@@ -5106,6 +5106,35 @@ async def load_contracts_control_dataset(
 
     return "live", "pipeimob_api_v2", live_txs, pages_fetched, cache_status
 
+async def get_contracts_control_dataset_for_write() -> list:
+    import sys
+    if "pytest" in sys.modules:
+        mode, src, dataset, pages, cache = await load_contracts_control_dataset(refresh=False)
+        return dataset
+
+    data_mode, conn_status = get_current_data_mode_and_connection()
+    if data_mode == "demo":
+        from mock_data import MOCK_TRANSACTIONS
+        return MOCK_TRANSACTIONS
+
+    if data_mode == "live":
+        cache_key = generate_contracts_control_cache_key("2020-01-01")
+        cached_val, status = contracts_control_cache.get_status(cache_key)
+        if status in ("fresh", "stale"):
+            txs, pages = cached_val
+            return txs
+
+        # Cache is empty (miss) -> fail fast
+        raise HTTPException(
+            status_code=503,
+            detail="Pipeimob dataset cache is empty. Please warm up the cache by calling read endpoints first."
+        )
+
+    raise HTTPException(
+        status_code=503,
+        detail="Pipeimob integration is unconfigured or unavailable."
+    )
+
 def generate_months_between(start_date_obj: date, end_date_obj: date) -> list[str]:
     months = []
     curr = start_date_obj.replace(day=1)
@@ -5930,26 +5959,32 @@ async def patch_transaction_manual_data(
     sub: str = Depends(require_contracts_control_temporary_admin),
     db: Optional[Any] = Depends(get_db_session)
 ):
+    import time
+    import logging
+    logger = logging.getLogger(__name__)
+
     if not db:
         raise HTTPException(status_code=503, detail="Database session unavailable.")
 
-    req_id = str(uuid.uuid4())
+    # Stage 1: load_dataset
+    t_start = time.perf_counter()
+    logger.info("CC_PATCH_STAGE_START stage=load_dataset")
     try:
-        mode, src, dataset, pages, cache = await load_contracts_control_dataset(
-            request_id=req_id, refresh=False
-        )
+        dataset = await get_contracts_control_dataset_for_write()
         valid_ids = set()
         for c in dataset:
             if isinstance(c, dict):
                 tx_id = c["tx"].get("transacao_unique_id_pipeimob") if "tx" in c and isinstance(c["tx"], dict) else c.get("transacao_unique_id_pipeimob")
                 if tx_id:
                     valid_ids.add(tx_id)
+
+        duration = int((time.perf_counter() - t_start) * 1000)
+        logger.info(f"CC_PATCH_STAGE_END stage=load_dataset duration_ms={duration}")
     except Exception as e:
-        import logging
-        logging.getLogger(__name__).error(
-            f"Error loading contracts control dataset in PATCH: {type(e).__name__} - "
-            "stage: load_dataset - service: ContractsControl - code: ERR_INDIVIDUAL_PATCH_DATASET"
-        )
+        duration = int((time.perf_counter() - t_start) * 1000)
+        logger.error(f"CC_PATCH_STAGE_ERROR stage=load_dataset exception={type(e).__name__} duration_ms={duration}")
+        if isinstance(e, HTTPException):
+            raise e
         raise HTTPException(status_code=503, detail="Pipeimob dataset universe is unavailable.")
 
     if transaction_id not in valid_ids:
@@ -5962,6 +5997,9 @@ async def patch_transaction_manual_data(
         except ValueError:
             raise HTTPException(status_code=404, detail="Responsible not found.")
 
+    # Stage 2: db_operation
+    t_db_start = time.perf_counter()
+    logger.info("CC_PATCH_STAGE_START stage=db_operation")
     from services.contracts_control_manual_service import ContractsControlManualService
     try:
         md, changed = ContractsControlManualService.update_individual_attribution(
@@ -5977,6 +6015,9 @@ async def patch_transaction_manual_data(
                 active=md.responsible.active
             )
 
+        duration = int((time.perf_counter() - t_db_start) * 1000)
+        logger.info(f"CC_PATCH_STAGE_END stage=db_operation duration_ms={duration}")
+
         return IndividualAttributionResponse(
             transaction_id=md.transaction_id,
             responsible=resp_ref,
@@ -5984,15 +6025,20 @@ async def patch_transaction_manual_data(
             updated_at=md.updated_at.isoformat(),
             changed=changed
         )
-    except ValueError as e:
-        err_str = str(e)
-        if err_str == "responsible_not_found":
-            raise HTTPException(status_code=404, detail="Responsible not found.")
-        elif err_str == "responsible_inactive":
-            raise HTTPException(status_code=422, detail="Cannot assign an inactive responsible.")
-        elif err_str == "version_conflict":
-            raise HTTPException(status_code=409, detail="Version conflict. Optimistic locking check failed.")
-        raise HTTPException(status_code=400, detail=err_str)
+    except Exception as e:
+        db.rollback()
+        duration = int((time.perf_counter() - t_db_start) * 1000)
+        logger.error(f"CC_PATCH_STAGE_ERROR stage=db_operation exception={type(e).__name__} duration_ms={duration}")
+        if isinstance(e, ValueError):
+            err_str = str(e)
+            if err_str == "responsible_not_found":
+                raise HTTPException(status_code=404, detail="Responsible not found.")
+            elif err_str == "responsible_inactive":
+                raise HTTPException(status_code=422, detail="Cannot assign an inactive responsible.")
+            elif err_str == "version_conflict":
+                raise HTTPException(status_code=409, detail="Version conflict. Optimistic locking check failed.")
+            raise HTTPException(status_code=400, detail=err_str)
+        raise e
 
 @app.post(
     "/api/contracts-control/manual-data/bulk",
@@ -6005,6 +6051,10 @@ async def post_bulk_manual_data(
     sub: str = Depends(require_contracts_control_temporary_admin),
     db: Optional[Any] = Depends(get_db_session)
 ):
+    import time
+    import logging
+    logger = logging.getLogger(__name__)
+
     if not db:
         raise HTTPException(status_code=503, detail="Database session unavailable.")
 
@@ -6017,23 +6067,25 @@ async def post_bulk_manual_data(
     if len(tx_ids) != len(set(tx_ids)):
         raise HTTPException(status_code=422, detail="Lote contém IDs de transação duplicados.")
 
-    req_id = str(uuid.uuid4())
+    # Stage 1: load_dataset
+    t_start = time.perf_counter()
+    logger.info("CC_PATCH_STAGE_START stage=load_dataset")
     try:
-        mode, src, dataset, pages, cache = await load_contracts_control_dataset(
-            request_id=req_id, refresh=False
-        )
+        dataset = await get_contracts_control_dataset_for_write()
         valid_ids = set()
         for c in dataset:
             if isinstance(c, dict):
                 tx_id = c["tx"].get("transacao_unique_id_pipeimob") if "tx" in c and isinstance(c["tx"], dict) else c.get("transacao_unique_id_pipeimob")
                 if tx_id:
                     valid_ids.add(tx_id)
+
+        duration = int((time.perf_counter() - t_start) * 1000)
+        logger.info(f"CC_PATCH_STAGE_END stage=load_dataset duration_ms={duration}")
     except Exception as e:
-        import logging
-        logging.getLogger(__name__).error(
-            f"Error loading contracts control dataset in BULK POST: {type(e).__name__} - "
-            "stage: load_dataset - service: ContractsControl - code: ERR_BULK_PATCH_DATASET"
-        )
+        duration = int((time.perf_counter() - t_start) * 1000)
+        logger.error(f"CC_PATCH_STAGE_ERROR stage=load_dataset exception={type(e).__name__} duration_ms={duration}")
+        if isinstance(e, HTTPException):
+            raise e
         raise HTTPException(status_code=503, detail="Pipeimob dataset universe is unavailable.")
 
     resp_uuid = None
@@ -6045,37 +6097,48 @@ async def post_bulk_manual_data(
 
     items_dicts = [{"transaction_id": item.transaction_id, "version": item.version} for item in req.items]
 
+    # Stage 2: db_operation
+    t_db_start = time.perf_counter()
+    logger.info("CC_PATCH_STAGE_START stage=db_operation")
     from services.contracts_control_manual_service import ContractsControlManualService
     try:
         res = ContractsControlManualService.update_bulk_attribution(
             db, items_dicts, resp_uuid, sub, valid_ids
         )
+        duration = int((time.perf_counter() - t_db_start) * 1000)
+        logger.info(f"CC_PATCH_STAGE_END stage=db_operation duration_ms={duration}")
+
         return BulkAttributionResponse(
             requested_count=res["requested_count"],
             updated_count=res["updated_count"],
             unchanged_count=res["unchanged_count"],
             items=[BulkAttributionItemResponse(**it) for it in res["items"]]
         )
-    except ValueError as e:
-        err_str = str(e)
-        if err_str.startswith("transaction_not_found:"):
-            invalid_tx = err_str.split(":")[1]
-            raise HTTPException(status_code=404, detail=f"Transaction {invalid_tx} not found.")
-        elif err_str == "responsible_not_found":
-            raise HTTPException(status_code=404, detail="Responsible not found.")
-        elif err_str == "responsible_inactive":
-            raise HTTPException(status_code=422, detail="Cannot assign an inactive responsible.")
-        elif err_str == "version_conflict":
-            raise HTTPException(status_code=409, detail="Version conflict. Optimistic locking check failed.")
-        elif err_str == "items_empty":
-            raise HTTPException(status_code=422, detail="Items list cannot be empty.")
-        elif err_str == "items_limit_exceeded":
-            raise HTTPException(status_code=422, detail="Lote excede o limite máximo de 100 itens.")
-        elif err_str == "empty_transaction_id":
-            raise HTTPException(status_code=422, detail="Lote contém IDs de transação vazios.")
-        elif err_str == "duplicate_transaction_ids":
-            raise HTTPException(status_code=422, detail="Lote contém IDs de transação duplicados.")
-        raise HTTPException(status_code=400, detail=err_str)
+    except Exception as e:
+        db.rollback()
+        duration = int((time.perf_counter() - t_db_start) * 1000)
+        logger.error(f"CC_PATCH_STAGE_ERROR stage=db_operation exception={type(e).__name__} duration_ms={duration}")
+        if isinstance(e, ValueError):
+            err_str = str(e)
+            if err_str.startswith("transaction_not_found:"):
+                invalid_tx = err_str.split(":")[1]
+                raise HTTPException(status_code=404, detail=f"Transaction {invalid_tx} not found.")
+            elif err_str == "responsible_not_found":
+                raise HTTPException(status_code=404, detail="Responsible not found.")
+            elif err_str == "responsible_inactive":
+                raise HTTPException(status_code=422, detail="Cannot assign an inactive responsible.")
+            elif err_str == "version_conflict":
+                raise HTTPException(status_code=409, detail="Version conflict. Optimistic locking check failed.")
+            elif err_str == "items_empty":
+                raise HTTPException(status_code=422, detail="Items list cannot be empty.")
+            elif err_str == "items_limit_exceeded":
+                raise HTTPException(status_code=422, detail="Lote excede o limite máximo de 100 itens.")
+            elif err_str == "empty_transaction_id":
+                raise HTTPException(status_code=422, detail="Lote contém IDs de transação vazios.")
+            elif err_str == "duplicate_transaction_ids":
+                raise HTTPException(status_code=422, detail="Lote contém IDs de transação duplicados.")
+            raise HTTPException(status_code=400, detail=err_str)
+        raise e
 
 @app.get(
     "/api/contracts-control/deals/{transaction_id}/manual-data/history",

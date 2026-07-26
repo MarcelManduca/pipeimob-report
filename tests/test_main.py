@@ -5346,6 +5346,66 @@ def test_contracts_control_postgresql_suite():
         command.downgrade(alembic_cfg, "base")
         command.upgrade(alembic_cfg, "head")
 
+def test_get_contracts_control_dataset_for_write_cache_miss():
+    from main import get_contracts_control_dataset_for_write, contracts_control_cache
+    from fastapi import HTTPException
+    import pytest
+    import sys
+
+    contracts_control_cache.clear()
+
+    with patch("main.get_current_data_mode_and_connection", return_value=("live", "ok")):
+        # Mock sys.modules to simulate non-pytest runtime environment
+        real_modules = sys.modules.copy()
+        if "pytest" in real_modules:
+            del real_modules["pytest"]
+
+        with patch("sys.modules", real_modules):
+            with pytest.raises(HTTPException) as exc:
+                import asyncio
+                asyncio.run(get_contracts_control_dataset_for_write())
+            assert exc.value.status_code == 503
+            assert "cache is empty" in exc.value.detail
+
+def test_contracts_control_patch_stage_logging(client_with_db):
+    from main import contracts_control_cache, generate_contracts_control_cache_key
+    import main
+    import logging
+    from unittest.mock import MagicMock
+
+    main.app.dependency_overrides[main.verify_backend_api_key] = lambda: {
+        "sub": "admin_sub_1", "email": "admin@gralhaimoveis.com.br", "role": "authenticated"
+    }
+    os.environ["CONTRACTS_CONTROL_WRITES_ENABLED"] = "true"
+    os.environ["CONTRACTS_CONTROL_ADMIN_SUBS"] = "admin_sub_1"
+
+    try:
+        # Populate cache
+        cache_key = generate_contracts_control_cache_key("2020-01-01")
+        contracts_control_cache.set(cache_key, ([], 1))
+
+        # Capture logs
+        logger = logging.getLogger("main")
+        mock_logger = MagicMock()
+        logger.info = mock_logger.info
+        logger.error = mock_logger.error
+
+        # This will fail with 404 (since tx is not found in empty cache), but it should log load_dataset start/error or end
+        res = client.patch(
+            "/api/contracts-control/deals/tx_not_in_cache/manual-data",
+            json={"responsible_id": None, "version": 0}
+        )
+        assert res.status_code == 404
+
+        # Check logs
+        start_calls = [call for call in mock_logger.info.call_args_list if "CC_PATCH_STAGE_START" in call[0][0]]
+        assert len(start_calls) >= 1
+        assert "stage=load_dataset" in start_calls[0][0][0]
+    finally:
+        main.app.dependency_overrides.clear()
+        os.environ.pop("CONTRACTS_CONTROL_WRITES_ENABLED", None)
+        os.environ.pop("CONTRACTS_CONTROL_ADMIN_SUBS", None)
+
 def test_verify_backend_api_key_invalid_format():
     from main import verify_backend_api_key, AuthException
     import pytest
