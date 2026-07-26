@@ -148,6 +148,28 @@ def test_cors_preflight_options():
     assert response.headers.get("access-control-allow-origin") == "https://lovable-test-origin.app"
     assert "GET" in response.headers.get("access-control-allow-methods", "")
 
+def test_cors_preflight_options_patch():
+    headers = {
+        "Origin": "https://lovable-test-origin.app",
+        "Access-Control-Request-Method": "PATCH",
+        "Access-Control-Request-Headers": "authorization,content-type",
+    }
+    response = client.options("/api/contracts-control/deals/tx_123/manual-data", headers=headers)
+    assert response.status_code == 200
+    assert response.headers.get("access-control-allow-origin") == "https://lovable-test-origin.app"
+    assert "PATCH" in response.headers.get("access-control-allow-methods", "")
+    assert "authorization" in response.headers.get("access-control-allow-headers", "").lower()
+    assert "content-type" in response.headers.get("access-control-allow-headers", "").lower()
+
+def test_cors_preflight_options_patch_unauthorized():
+    headers = {
+        "Origin": "https://unauthorized-domain.com",
+        "Access-Control-Request-Method": "PATCH",
+        "Access-Control-Request-Headers": "authorization,content-type",
+    }
+    response = client.options("/api/contracts-control/deals/tx_123/manual-data", headers=headers)
+    assert "access-control-allow-origin" not in response.headers
+
 def test_demo_data_anonymization_and_purity():
     # Assert that no real manager/agency names or properties from real sheets remain in the mock dataset
     real_names = ["Raphael", "Carvalho", "Vanessa", "Cavedon", "Gralha", "Manduca", "Michele", "Maitê", "Yakabi"]
