@@ -5621,7 +5621,7 @@ async def get_contracts_control_summary(
     )
 
     operations_tx_ids = list({
-        c["tx"].get("transacao_unique_id_pipeimob")
+        str(c["tx"].get("transacao_unique_id_pipeimob"))
         for c in aggregates["operations_txs"]
         if c["tx"].get("transacao_unique_id_pipeimob")
     })
@@ -5734,7 +5734,7 @@ async def get_contracts_control_deals(
         deals_source = aggregates["operations_txs"]
 
     tx_ids = [
-        c["tx"].get("transacao_unique_id_pipeimob")
+        str(c["tx"].get("transacao_unique_id_pipeimob"))
         for c in deals_source
         if c["tx"].get("transacao_unique_id_pipeimob")
     ]
@@ -5781,10 +5781,10 @@ async def get_contracts_control_deals(
             if search_lower not in prop_code.lower() and search_lower not in mgr.lower():
                 continue
 
-        tx_id = tx.get("transacao_unique_id_pipeimob")
+        tx_id = str(tx.get("transacao_unique_id_pipeimob")) if tx.get("transacao_unique_id_pipeimob") is not None else None
         responsible_ref = None
         manual_version = 0
-        if tx_id in manual_overlay:
+        if tx_id and tx_id in manual_overlay:
             responsible_ref = manual_overlay[tx_id]["responsible"]
             manual_version = manual_overlay[tx_id].get("version", 0)
 

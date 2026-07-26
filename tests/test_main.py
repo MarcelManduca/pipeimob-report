@@ -5406,6 +5406,142 @@ def test_contracts_control_patch_stage_logging(client_with_db):
         os.environ.pop("CONTRACTS_CONTROL_WRITES_ENABLED", None)
         os.environ.pop("CONTRACTS_CONTROL_ADMIN_SUBS", None)
 
+def test_contracts_control_read_endpoints_overlay_integration(client_with_db):
+    db = client_with_db
+    from fastapi.testclient import TestClient
+    import main
+    client = TestClient(main.app)
+    from main import contracts_control_cache, generate_contracts_control_cache_key
+    from repositories.contracts_control_repository import ContractsControlRepository
+    from models.contracts_control import normalize_responsible_name
+    from main import HistoryRecordItem, ContractsControlResponsibleReference
+
+    # 1. Create active responsible
+    r = ContractsControlRepository.create_responsible(db, "Ana Cristina", active=True)
+
+    # 2. Create manual record with transaction_id as integer in simulated dataset
+    tx_numeric = 19382103
+    tx_numeric_str = str(tx_numeric)
+
+    # Create manual data record
+    ContractsControlRepository.create_manual_data(db, tx_numeric_str, r.id, "admin_sub_1")
+    # Create history record
+    ContractsControlRepository.create_history_record(
+        db, tx_numeric_str, "responsible_id", None, str(r.id), 0, 1, "admin_sub_1"
+    )
+    db.commit()
+
+    # 3. Simulate dataset containing the numeric transaction_id (dataset flat)
+    simulated_flat_dataset = [
+        {
+            "transacao_unique_id_pipeimob": tx_numeric,
+            "data_inicio_venda": "2026-01-10",
+            "agente_gestor": "Gestor Ana",
+            "agente_gestor_grupo_filial": "Filial A",
+            "agente_gestor_grupos_a_que_pertence": ["group_1"]
+        }
+    ]
+
+    # Mock dependency verification
+    main.app.dependency_overrides[main.verify_backend_api_key] = lambda: {
+        "sub": "admin_sub_1", "email": "admin@gralhaimoveis.com.br", "role": "authenticated"
+    }
+    os.environ["CONTRACTS_CONTROL_WRITES_ENABLED"] = "true"
+    os.environ["CONTRACTS_CONTROL_ADMIN_SUBS"] = "admin_sub_1"
+
+    try:
+        # Mock load_contracts_control_dataset to return the simulated flat dataset
+        async def mock_load_simulated(*args, **kwargs):
+            return "demo", "synthetic_mock", simulated_flat_dataset, 1, "stale"
+
+        with patch("main.load_contracts_control_dataset", side_effect=mock_load_simulated):
+            # 6. Call GET /deals
+            res_deals = client.get("/api/contracts-control/deals?scope=operations")
+            assert res_deals.status_code == 200
+            deals_data = res_deals.json()["deals"]
+            assert len(deals_data) == 1
+            deal = deals_data[0]
+            assert deal["transaction_id"] == tx_numeric_str
+            assert deal["responsible"]["name"] == "Ana Cristina"
+            assert deal["manual_data_version"] == 1
+
+            # 7. Call GET /summary
+            res_summary = client.get("/api/contracts-control/summary")
+            assert res_summary.status_code == 200
+            summary_data = res_summary.json()["manual_enrichment"]
+            assert summary_data["eligible_records_count"] == 1
+            assert summary_data["responsible_filled_count"] == 1
+            assert summary_data["responsible_pending_count"] == 0
+            assert abs(summary_data["responsible_completion_ratio"] - 1.0) < 1e-5
+
+            # 8. Call GET /history
+            res_history = client.get(f"/api/contracts-control/deals/{tx_numeric}/manual-data/history")
+            assert res_history.status_code == 200
+            history_data = res_history.json()
+            assert len(history_data) == 1
+            hist_event = history_data[0]
+            assert hist_event["field_name"] == "responsible_id"
+            assert hist_event["previous_responsible"] is None
+            assert hist_event["new_responsible"]["current_name"] == "Ana Cristina"
+            assert hist_event["new_responsible"]["active"] is True
+
+            # 9. Test variations: transaction_id longo e alfanumérico, dataset aninhado, etc.
+            tx_long_alpha = "tx_long_alpha_12345_abc"
+            ContractsControlRepository.create_manual_data(db, tx_long_alpha, r.id, "admin_sub_1")
+            ContractsControlRepository.create_history_record(
+                db, tx_long_alpha, "responsible_id", None, str(r.id), 0, 1, "admin_sub_1"
+            )
+            db.commit()
+
+            simulated_nested_dataset = [
+                {
+                    "tx": {
+                        "transacao_unique_id_pipeimob": tx_long_alpha,
+                        "data_inicio_venda": "2026-01-10",
+                        "agente_gestor": "Gestor Ana",
+                        "agente_gestor_grupo_filial": "Filial A",
+                        "agente_gestor_grupos_a_que_pertence": ["group_1"]
+                    }
+                }
+            ]
+
+            async def mock_load_nested(*args, **kwargs):
+                return "demo", "synthetic_mock", simulated_nested_dataset, 1, "stale"
+
+            with patch("main.load_contracts_control_dataset", side_effect=mock_load_nested):
+                # Call PATCH with nested dataset mock to verify compatibility
+                res_patch_nested = client.patch(
+                    f"/api/contracts-control/deals/{tx_long_alpha}/manual-data",
+                    json={"responsible_id": None, "version": 1}
+                )
+                assert res_patch_nested.status_code == 200
+
+                # Call GET /history for long alpha
+                res_hist_nested = client.get(f"/api/contracts-control/deals/{tx_long_alpha}/manual-data/history")
+                assert res_hist_nested.status_code == 200
+                assert len(res_hist_nested.json()) == 2
+
+            # Responsible subsequently inactive
+            ContractsControlRepository.update_responsible(db, r.id, active=False)
+            db.commit()
+
+            async def mock_load_simulated2(*args, **kwargs):
+                return "demo", "synthetic_mock", simulated_flat_dataset, 1, "stale"
+
+            with patch("main.load_contracts_control_dataset", side_effect=mock_load_simulated2):
+                res_deals_inactive = client.get("/api/contracts-control/deals?scope=operations")
+                assert res_deals_inactive.status_code == 200
+                deal_inactive = res_deals_inactive.json()["deals"][0]
+                assert deal_inactive["responsible"]["active"] is False
+
+                res_history_inactive = client.get(f"/api/contracts-control/deals/{tx_numeric}/manual-data/history")
+                assert res_history_inactive.status_code == 200
+                assert res_history_inactive.json()[0]["new_responsible"]["active"] is False
+    finally:
+        main.app.dependency_overrides.clear()
+        os.environ.pop("CONTRACTS_CONTROL_WRITES_ENABLED", None)
+        os.environ.pop("CONTRACTS_CONTROL_ADMIN_SUBS", None)
+
 def test_verify_backend_api_key_invalid_format():
     from main import verify_backend_api_key, AuthException
     import pytest

@@ -49,13 +49,14 @@ class ContractsControlRepository:
 
     @staticmethod
     def get_manual_data_by_transaction_id(db: Session, tx_id: str) -> Optional[ContractsControlManualData]:
-        return db.get(ContractsControlManualData, tx_id)
+        return db.get(ContractsControlManualData, str(tx_id))
 
     @staticmethod
     def get_manual_data_by_transaction_ids(db: Session, tx_ids: List[str]) -> List[ContractsControlManualData]:
         if not tx_ids:
             return []
-        stmt = select(ContractsControlManualData).where(ContractsControlManualData.transaction_id.in_(tx_ids))
+        str_tx_ids = [str(tid) for tid in tx_ids]
+        stmt = select(ContractsControlManualData).where(ContractsControlManualData.transaction_id.in_(str_tx_ids))
         return list(db.scalars(stmt).all())
 
     @staticmethod
@@ -142,7 +143,7 @@ class ContractsControlRepository:
     def get_history_by_transaction_id(db: Session, tx_id: str) -> List[ContractsControlManualDataHistory]:
         stmt = (
             select(ContractsControlManualDataHistory)
-            .where(ContractsControlManualDataHistory.transaction_id == tx_id)
+            .where(ContractsControlManualDataHistory.transaction_id == str(tx_id))
             .order_by(ContractsControlManualDataHistory.changed_at.asc())
         )
         return list(db.scalars(stmt).all())
