@@ -4717,6 +4717,15 @@ class ContractsControlCache:
         with self.lock:
             self.cache.clear()
 
+    def clear_endpoint_caches(self):
+        with self.lock:
+            keys_to_remove = [
+                k for k in self.cache.keys()
+                if isinstance(k, tuple) and len(k) > 0 and k[0] in ("deals", "summary")
+            ]
+            for k in keys_to_remove:
+                self.cache.pop(k, None)
+
 contracts_control_cache = ContractsControlCache()
 
 def generate_contracts_control_cache_key(coverage_start: str) -> tuple:
@@ -5163,22 +5172,35 @@ def get_aging_bucket(days: int) -> str:
     return "over_30_days"
 
 # Main Core Aggregator
-def compute_contracts_control_data(dataset: list, start_date_str: str, end_date_str: str, as_of_date_str: str) -> dict:
+def compute_contracts_control_data(
+    dataset: list,
+    start_date_str: str,
+    end_date_str: str,
+    as_of_date_str: str,
+    pre_classified_txs: Optional[list] = None,
+    duplicate_count: int = 0,
+    conflict_count: int = 0,
+    raw_records_count: int = 0,
+    unique_records_count: int = 0
+) -> dict:
     start_date_obj = parse_date_to_date_obj(start_date_str)
     end_date_obj = parse_date_to_date_obj(end_date_str)
     as_of_date_obj = parse_date_to_date_obj(as_of_date_str)
 
-    # 1. Deduplicate
-    unique_list, duplicate_count, conflict_count = deduplicate_contracts_control_dataset(dataset)
-    raw_records_count = len(dataset)
-    unique_records_count = len(unique_list)
+    if pre_classified_txs is not None:
+        classified_txs = pre_classified_txs
+    else:
+        # 1. Deduplicate
+        unique_list, duplicate_count, conflict_count = deduplicate_contracts_control_dataset(dataset)
+        raw_records_count = len(dataset)
+        unique_records_count = len(unique_list)
 
-    # 2. Classify
-    classified_txs = []
-    for tx in unique_list:
-        res = classify_contracts_control_process(tx, as_of_date_obj, end_date_obj)
-        res["tx"] = tx
-        classified_txs.append(res)
+        # 2. Classify
+        classified_txs = []
+        for tx in unique_list:
+            res = classify_contracts_control_process(tx, as_of_date_obj, end_date_obj)
+            res["tx"] = tx
+            classified_txs.append(res)
 
     # 3. Categorize Universes
     cohort_txs = []
@@ -5566,11 +5588,51 @@ async def get_contracts_control_summary(
     now_sp = datetime.now(sp_tz)
     as_of_date_str = now_sp.strftime("%Y-%m-%d")
 
-    if not start_date:
-        start_date = f"{now_sp.year}-01-01"
-    if not end_date:
-        end_date = as_of_date_str
+    # 1. Resolve parameters checking both English and Portuguese query parameters
+    q_params = request.query_params
+    resolved_start_date = start_date or q_params.get("data_inicio")
+    resolved_end_date = end_date or q_params.get("data_fim")
+    resolved_manager = manager or q_params.get("gerente")
+    resolved_responsible = responsible or q_params.get("responsavel")
+    resolved_process_status = process_status or q_params.get("status")
+    resolved_modality = modality or q_params.get("modalidade")
+    resolved_source_type = source_type or q_params.get("origem")
+    resolved_search = q_params.get("busca") or q_params.get("search")
+    resolved_aging_bucket = q_params.get("faixa_de_tempo") or q_params.get("aging_bucket")
 
+    if not resolved_start_date:
+        resolved_start_date = f"{now_sp.year}-01-01"
+    if not resolved_end_date:
+        resolved_end_date = as_of_date_str
+
+    # 2. Check endpoint cache if refresh is not requested
+    cache_key = (
+        "summary",
+        CONTRACTS_CONTROL_CACHE_VERSION,
+        resolved_start_date,
+        resolved_end_date,
+        resolved_responsible,
+        resolved_manager,
+        resolved_process_status,
+        resolved_modality,
+        resolved_source_type,
+        resolved_search,
+        resolved_aging_bucket
+    )
+
+    import logging
+    logger = logging.getLogger(__name__)
+
+    if not refresh:
+        cached_val, status = contracts_control_cache.get_status(cache_key)
+        if status in ("fresh", "stale"):
+            response_data, mode = cached_val
+            response.headers["X-Cache"] = status
+            response.headers["X-Data-Mode"] = mode
+            logger.info("CC_SUMMARY_CACHE_HIT key_hash=%s cache_status=%s", hash(cache_key) % 10000, status)
+            return response_data
+
+    # 3. Load raw dataset (Miss or refresh)
     try:
         mode, src, dataset, pages_fetched, cache_status = await load_contracts_control_dataset(
             request_id=req_id, refresh=bool(refresh)
@@ -5585,11 +5647,100 @@ async def get_contracts_control_summary(
             data_mode="live",
             pipeimob_connection="unavailable"
         )
-
     validate_dataset_origin(mode, src, dataset)
 
+    # 4. Classify and Deduplicate
+    unique_list, duplicate_count, conflict_count = deduplicate_contracts_control_dataset(dataset)
+    as_of_date_obj = parse_date_to_date_obj(as_of_date_str)
+    end_date_obj = parse_date_to_date_obj(resolved_end_date)
+
+    classified_txs = []
+    for tx in unique_list:
+        res = classify_contracts_control_process(tx, as_of_date_obj, end_date_obj)
+        res["tx"] = tx
+        classified_txs.append(res)
+
+    tx_ids = [
+        str(c["tx"].get("transacao_unique_id_pipeimob"))
+        for c in classified_txs
+        if c["tx"].get("transacao_unique_id_pipeimob")
+    ]
+
+    # 5. Load and Apply Manual Overlay
+    from services.contracts_control_manual_service import ContractsControlManualService
+    manual_overlay = {}
+    if db and tx_ids:
+        try:
+            manual_overlay = ContractsControlManualService.get_manual_data_for_overlay(db, tx_ids)
+        except Exception as e:
+            logger.error(f"Manual data layer overlay query failed: {type(e).__name__}")
+            manual_overlay = {}
+
+    for c in classified_txs:
+        tx = c["tx"]
+        tx_id = str(tx.get("transacao_unique_id_pipeimob")) if tx.get("transacao_unique_id_pipeimob") is not None else None
+        responsible_ref = None
+        manual_version = 0
+        if tx_id and tx_id in manual_overlay:
+            responsible_ref = manual_overlay[tx_id]["responsible"]
+            manual_version = manual_overlay[tx_id].get("version", 0)
+        c["responsible_ref"] = responsible_ref
+        c["manual_data_version"] = manual_version
+
+    # 6. Apply Filters to classified_txs
+    from models.contracts_control import normalize_responsible_name
+    filtered_classified_txs = []
+    for c in classified_txs:
+        tx = c["tx"]
+
+        if resolved_manager and tx.get("agente_gestor") != resolved_manager:
+            continue
+
+        if resolved_process_status and c["status_at_period_end"] != resolved_process_status:
+            continue
+
+        tx_modality = c["modality"]
+        if resolved_modality and tx_modality != resolved_modality:
+            continue
+
+        if resolved_aging_bucket and c["aging_days_at_period_end"] is not None:
+            tx_aging_bucket = get_aging_bucket(c["aging_days_at_period_end"])
+            if tx_aging_bucket != resolved_aging_bucket:
+                continue
+        elif resolved_aging_bucket:
+            continue
+
+        if resolved_search:
+            search_lower = resolved_search.lower()
+            prop_code = tx.get("codigo_imovel") or ""
+            mgr = tx.get("agente_gestor") or ""
+            if search_lower not in prop_code.lower() and search_lower not in mgr.lower():
+                continue
+
+        if resolved_responsible:
+            responsible_ref = c["responsible_ref"]
+            if not responsible_ref:
+                continue
+            norm_resp_filter = normalize_responsible_name(resolved_responsible)
+            norm_resp_name = normalize_responsible_name(responsible_ref["name"])
+            if responsible_ref["id"] != resolved_responsible and norm_resp_name != norm_resp_filter:
+                continue
+
+        filtered_classified_txs.append(c)
+
+    # 7. Compute Aggregates on filtered list
     try:
-        aggregates = compute_contracts_control_data(dataset, start_date, end_date, as_of_date_str)
+        aggregates = compute_contracts_control_data(
+            dataset,
+            resolved_start_date,
+            resolved_end_date,
+            as_of_date_str,
+            pre_classified_txs=filtered_classified_txs,
+            duplicate_count=duplicate_count,
+            conflict_count=conflict_count,
+            raw_records_count=len(dataset),
+            unique_records_count=len(unique_list)
+        )
     except Exception as e:
         raise IntegrationUnavailableError(
             status_code=503,
@@ -5599,17 +5750,17 @@ async def get_contracts_control_summary(
             pipeimob_connection="internal_error"
         )
 
+    # 8. Set Headers
     response.headers["X-Data-Mode"] = mode
     response.headers["X-Cache"] = cache_status
 
     resp_period = ContractsControlPeriod(
-        start=start_date,
-        end=end_date,
+        start=resolved_start_date,
+        end=resolved_end_date,
         basis="data_inicio_venda",
         as_of_date=as_of_date_str
     )
 
-    # "A data de 2020 é uma baseline histórica presumida para a primeira versão e ainda não foi comprovada como início absoluto dos registros do CRM."
     resp_extraction = ContractsControlExtraction(
         upstream_endpoint="/api/v2/negocios/transacoes",
         upstream_filter_field="data_inicio_criacao",
@@ -5626,10 +5777,6 @@ async def get_contracts_control_summary(
         if c["tx"].get("transacao_unique_id_pipeimob")
     })
 
-    import logging
-    logger = logging.getLogger(__name__)
-
-    from services.contracts_control_manual_service import ContractsControlManualService
     enrichment_data = {
         "status": "available",
         "scope": "operations",
@@ -5667,8 +5814,7 @@ async def get_contracts_control_summary(
             "last_manual_update_at": None
         }
 
-
-    return ContractsControlSummaryResponse(
+    response_data = ContractsControlSummaryResponse(
         period=resp_period,
         extraction=resp_extraction,
         extraction_quality=ContractsControlExtractionQuality(**aggregates["extraction_quality"]),
@@ -5685,6 +5831,13 @@ async def get_contracts_control_summary(
         manual_enrichment=ContractsControlManualEnrichment(**enrichment_data)
     )
 
+    contracts_control_cache.set(cache_key, (response_data, mode))
+
+    logger.info("CC_SUMMARY_PROCESSING_DONE key_hash=%s cache_status=%s raw_count=%s filtered_count=%s eligible_records=%s",
+                hash(cache_key) % 10000, cache_status, len(dataset), len(filtered_classified_txs), len(operations_tx_ids))
+
+    return response_data
+
 @app.get(
     "/api/contracts-control/deals",
     response_model=ContractsControlDealsResponse,
@@ -5694,6 +5847,7 @@ async def get_contracts_control_summary(
     dependencies=[Depends(verify_backend_api_key)]
 )
 async def get_contracts_control_deals(
+    response: Response,
     request: Request,
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=100),
@@ -5716,17 +5870,61 @@ async def get_contracts_control_deals(
     now_sp = datetime.now(sp_tz)
     as_of_date_str = now_sp.strftime("%Y-%m-%d")
 
-    if not start_date:
-        start_date = f"{now_sp.year}-01-01"
-    if not end_date:
-        end_date = as_of_date_str
+    # 1. Resolve parameters checking both English and Portuguese query parameters
+    q_params = request.query_params
+    resolved_start_date = start_date or q_params.get("data_inicio")
+    resolved_end_date = end_date or q_params.get("data_fim")
+    resolved_manager = manager or q_params.get("gerente")
+    resolved_responsible = responsible or q_params.get("responsavel")
+    resolved_process_status = process_status or q_params.get("status")
+    resolved_modality = modality or q_params.get("modalidade")
+    resolved_source_type = source_type or q_params.get("origem")
+    resolved_search = search or q_params.get("busca")
+    resolved_aging_bucket = aging_bucket or q_params.get("faixa_de_tempo")
 
+    if not resolved_start_date:
+        resolved_start_date = f"{now_sp.year}-01-01"
+    if not resolved_end_date:
+        resolved_end_date = as_of_date_str
+
+    # 2. Check endpoint cache if refresh is not requested
+    cache_key = (
+        "deals",
+        CONTRACTS_CONTROL_CACHE_VERSION,
+        resolved_start_date,
+        resolved_end_date,
+        scope,
+        resolved_responsible,
+        resolved_manager,
+        resolved_process_status,
+        resolved_modality,
+        resolved_source_type,
+        resolved_search,
+        resolved_aging_bucket,
+        page,
+        page_size
+    )
+
+    import logging
+    logger = logging.getLogger(__name__)
+
+    if not refresh:
+        cached_val, status = contracts_control_cache.get_status(cache_key)
+        if status in ("fresh", "stale"):
+            response_data, mode = cached_val
+            response.headers["X-Cache"] = status
+            response.headers["X-Data-Mode"] = mode
+            logger.info("CC_DEALS_CACHE_HIT key_hash=%s cache_status=%s", hash(cache_key) % 10000, status)
+            return response_data
+
+    # 3. Load dataset (Miss or refresh)
     mode, src, dataset, pages_fetched, cache_status = await load_contracts_control_dataset(
         request_id=req_id, refresh=bool(refresh)
     )
     validate_dataset_origin(mode, src, dataset)
 
-    aggregates = compute_contracts_control_data(dataset, start_date, end_date, as_of_date_str)
+    # 4. Process and Filter
+    aggregates = compute_contracts_control_data(dataset, resolved_start_date, resolved_end_date, as_of_date_str)
 
     if scope == "cohort":
         deals_source = aggregates["cohort_txs"]
@@ -5738,9 +5936,6 @@ async def get_contracts_control_deals(
         for c in deals_source
         if c["tx"].get("transacao_unique_id_pipeimob")
     ]
-
-    import logging
-    logger = logging.getLogger(__name__)
 
     from services.contracts_control_manual_service import ContractsControlManualService
     manual_overlay = {}
@@ -5757,25 +5952,25 @@ async def get_contracts_control_deals(
     for c in deals_source:
         tx = c["tx"]
 
-        if manager and tx.get("agente_gestor") != manager:
+        if resolved_manager and tx.get("agente_gestor") != resolved_manager:
             continue
 
-        if process_status and c["status_at_period_end"] != process_status:
+        if resolved_process_status and c["status_at_period_end"] != resolved_process_status:
             continue
 
         tx_modality = c["modality"]
-        if modality and tx_modality != modality:
+        if resolved_modality and tx_modality != resolved_modality:
             continue
 
-        if aging_bucket and c["aging_days_at_period_end"] is not None:
+        if resolved_aging_bucket and c["aging_days_at_period_end"] is not None:
             tx_aging_bucket = get_aging_bucket(c["aging_days_at_period_end"])
-            if tx_aging_bucket != aging_bucket:
+            if tx_aging_bucket != resolved_aging_bucket:
                 continue
-        elif aging_bucket:
+        elif resolved_aging_bucket:
             continue
 
-        if search:
-            search_lower = search.lower()
+        if resolved_search:
+            search_lower = resolved_search.lower()
             prop_code = tx.get("codigo_imovel") or ""
             mgr = tx.get("agente_gestor") or ""
             if search_lower not in prop_code.lower() and search_lower not in mgr.lower():
@@ -5788,12 +5983,12 @@ async def get_contracts_control_deals(
             responsible_ref = manual_overlay[tx_id]["responsible"]
             manual_version = manual_overlay[tx_id].get("version", 0)
 
-        if responsible:
+        if resolved_responsible:
             if not responsible_ref:
                 continue
-            norm_resp_filter = normalize_responsible_name(responsible)
+            norm_resp_filter = normalize_responsible_name(resolved_responsible)
             norm_resp_name = normalize_responsible_name(responsible_ref["name"])
-            if responsible_ref["id"] != responsible and norm_resp_name != norm_resp_filter:
+            if responsible_ref["id"] != resolved_responsible and norm_resp_name != norm_resp_filter:
                 continue
 
         deal_item = {
@@ -5837,13 +6032,22 @@ async def get_contracts_control_deals(
         end_idx = start_idx + page_size
         paginated_deals = filtered_deals[start_idx:end_idx]
 
-    return ContractsControlDealsResponse(
+    response_data = ContractsControlDealsResponse(
         page=page,
         page_size=page_size,
         total_records=total_records,
         total_pages=total_pages,
         deals=[ContractsControlDeal(**d) for d in paginated_deals]
     )
+
+    contracts_control_cache.set(cache_key, (response_data, mode))
+    response.headers["X-Data-Mode"] = mode
+    response.headers["X-Cache"] = cache_status
+
+    logger.info("CC_DEALS_PROCESSING_DONE key_hash=%s cache_status=%s raw_count=%s filtered_count=%s paginated_count=%s",
+                hash(cache_key) % 10000, cache_status, len(deals_source), total_records, len(paginated_deals))
+
+    return response_data
 
 @app.get(
     "/api/contracts-control/responsibles",
@@ -6006,6 +6210,7 @@ async def patch_transaction_manual_data(
             db, transaction_id, resp_uuid, req.version, sub
         )
         db.commit()
+        contracts_control_cache.clear_endpoint_caches()
 
         resp_ref = None
         if md.responsible:
@@ -6105,6 +6310,7 @@ async def post_bulk_manual_data(
         res = ContractsControlManualService.update_bulk_attribution(
             db, items_dicts, resp_uuid, sub, valid_ids
         )
+        contracts_control_cache.clear_endpoint_caches()
         duration = int((time.perf_counter() - t_db_start) * 1000)
         logger.info(f"CC_PATCH_STAGE_END stage=db_operation duration_ms={duration}")
 

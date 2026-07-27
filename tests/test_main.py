@@ -5542,6 +5542,170 @@ def test_contracts_control_read_endpoints_overlay_integration(client_with_db):
         os.environ.pop("CONTRACTS_CONTROL_WRITES_ENABLED", None)
         os.environ.pop("CONTRACTS_CONTROL_ADMIN_SUBS", None)
 
+def test_contracts_control_responsible_filter_regression(client_with_db):
+    db = client_with_db
+    from fastapi.testclient import TestClient
+    import main
+    from main import contracts_control_cache
+    from repositories.contracts_control_repository import ContractsControlRepository
+
+    client = TestClient(main.app)
+
+    # 1. Create active responsible Ana Cristina
+    r_ana = ContractsControlRepository.create_responsible(db, "Ana Cristina", active=True)
+    # 2. Create inactive responsible
+    r_inactive = ContractsControlRepository.create_responsible(db, "Inativo Carlos", active=False)
+
+    tx_ana = "tx_ana_999"
+    tx_unassigned = "tx_unassigned_888"
+    tx_inactive = "tx_inactive_777"
+
+    # Create manual data and history
+    ContractsControlRepository.create_manual_data(db, tx_ana, r_ana.id, "admin_sub_1")
+    ContractsControlRepository.create_manual_data(db, tx_inactive, r_inactive.id, "admin_sub_1")
+    db.commit()
+
+    simulated_dataset = [
+        {
+            "transacao_unique_id_pipeimob": tx_ana,
+            "data_inicio_venda": "2026-01-10",
+            "agente_gestor": "Gestor Ana"
+        },
+        {
+            "transacao_unique_id_pipeimob": tx_unassigned,
+            "data_inicio_venda": "2026-01-11",
+            "agente_gestor": "Gestor B"
+        },
+        {
+            "transacao_unique_id_pipeimob": tx_inactive,
+            "data_inicio_venda": "2026-01-12",
+            "agente_gestor": "Gestor C"
+        }
+    ]
+
+    main.app.dependency_overrides[main.verify_backend_api_key] = lambda: {
+        "sub": "admin_sub_1", "email": "admin@gralhaimoveis.com.br", "role": "authenticated"
+    }
+    os.environ["CONTRACTS_CONTROL_WRITES_ENABLED"] = "true"
+    os.environ["CONTRACTS_CONTROL_ADMIN_SUBS"] = "admin_sub_1"
+
+    try:
+        async def mock_load(*args, **kwargs):
+            return "demo", "synthetic_mock", simulated_dataset, 1, "stale"
+
+        with patch("main.load_contracts_control_dataset", side_effect=mock_load):
+            # Clear caches before test starts
+            contracts_control_cache.clear()
+
+            # --- Cenário A: cache global aquecido ---
+            # 1. GET /deals sem responsavel (global)
+            res_global_1 = client.get("/api/contracts-control/deals?scope=operations")
+            assert res_global_1.status_code == 200
+            assert res_global_1.headers.get("X-Cache") in ("stale", "miss", "fresh")
+            data_global_1 = res_global_1.json()
+            assert data_global_1["total_records"] == 3
+
+            # 2. GET /deals com responsavel=Ana Cristina (filtrado)
+            res_filtered_1 = client.get("/api/contracts-control/deals?scope=operations&responsavel=Ana+Cristina")
+            assert res_filtered_1.status_code == 200
+            data_filtered_1 = res_filtered_1.json()
+            assert data_filtered_1["total_records"] == 1
+            assert data_filtered_1["deals"][0]["transaction_id"] == tx_ana
+            assert data_filtered_1["deals"][0]["responsible"]["name"] == "Ana Cristina"
+
+            # --- Cenário B: ordem inversa ---
+            # Clear caches
+            contracts_control_cache.clear()
+            # 1. GET filtrado primeiro
+            res_filtered_2 = client.get("/api/contracts-control/deals?scope=operations&responsavel=Ana+Cristina")
+            assert res_filtered_2.status_code == 200
+            assert res_filtered_2.json()["total_records"] == 1
+            # 2. GET global segundo
+            res_global_2 = client.get("/api/contracts-control/deals?scope=operations")
+            assert res_global_2.status_code == 200
+            assert res_global_2.json()["total_records"] == 3
+
+            # --- Cenário C: paginação ---
+            # filtro com um resultado; page=1; page_size=25; total_records=1; total_pages=1
+            res_page = client.get("/api/contracts-control/deals?scope=operations&responsavel=Ana+Cristina&page=1&page_size=25")
+            assert res_page.status_code == 200
+            data_page = res_page.json()
+            assert data_page["page"] == 1
+            assert data_page["page_size"] == 25
+            assert data_page["total_records"] == 1
+            assert data_page["total_pages"] == 1
+            assert len(data_page["deals"]) == 1
+
+            # --- Cenário D: summary ---
+            # elegíveis=1; preenchidos=1; pendentes=0; ratio=1.0
+            res_sum = client.get("/api/contracts-control/summary?responsavel=Ana+Cristina")
+            assert res_sum.status_code == 200
+            sum_data = res_sum.json()["manual_enrichment"]
+            assert sum_data["eligible_records_count"] == 1
+            assert sum_data["responsible_filled_count"] == 1
+            assert sum_data["responsible_pending_count"] == 0
+            assert abs(sum_data["responsible_completion_ratio"] - 1.0) < 1e-5
+
+            # --- Cenário E: responsável inexistente ---
+            # deals vazio; total_records=0; summary sem registros
+            res_nonexistent = client.get("/api/contracts-control/deals?scope=operations&responsavel=Nonexistent")
+            assert res_nonexistent.status_code == 200
+            data_nonexistent = res_nonexistent.json()
+            assert data_nonexistent["total_records"] == 0
+            assert data_nonexistent["total_pages"] == 1
+            assert len(data_nonexistent["deals"]) == 0
+
+            res_sum_nonexistent = client.get("/api/contracts-control/summary?responsavel=Nonexistent")
+            assert res_sum_nonexistent.status_code == 200
+            sum_nonexistent_data = res_sum_nonexistent.json()["manual_enrichment"]
+            assert sum_nonexistent_data["eligible_records_count"] == 0
+            assert sum_nonexistent_data["responsible_filled_count"] == 0
+            assert sum_nonexistent_data["responsible_pending_count"] == 0
+            assert sum_nonexistent_data["responsible_completion_ratio"] == 0.0
+
+            # --- Cenário F: responsável inativo ---
+            # processo já atribuído continua localizável pelo nome; active=false é preservado na resposta
+            res_inactive = client.get("/api/contracts-control/deals?scope=operations&responsavel=Inativo+Carlos")
+            assert res_inactive.status_code == 200
+            data_inactive = res_inactive.json()
+            assert data_inactive["total_records"] == 1
+            assert data_inactive["deals"][0]["transaction_id"] == tx_inactive
+            assert data_inactive["deals"][0]["responsible"]["active"] is False
+
+            # --- Cenário G: transaction_id longo e alfanumérico ---
+            # (provido na configuração acima, tx_ana e tx_inactive são alfanuméricos e longos)
+
+            # --- Cenário H: cache e parâmetros ---
+            # As chaves são diferentes, então o cabeçalho X-Cache deve se comportar de forma isolada
+            contracts_control_cache.clear()
+            # 1. Primeira chamada deals para Ana Cristina -> Miss
+            r1 = client.get("/api/contracts-control/deals?scope=operations&responsavel=Ana+Cristina")
+            assert r1.headers.get("X-Cache") in ("stale", "miss")
+            # 2. Segunda chamada deals para Ana Cristina -> Fresh/Stale (Hit)
+            r2 = client.get("/api/contracts-control/deals?scope=operations&responsavel=Ana+Cristina")
+            assert r2.headers.get("X-Cache") in ("fresh", "stale")
+            # 3. Chamada deals para Carlos -> Miss (pois a chave é diferente!)
+            r3 = client.get("/api/contracts-control/deals?scope=operations&responsavel=Inativo+Carlos")
+            assert r3.headers.get("X-Cache") in ("stale", "miss")
+
+            # --- Teste de Invalidação no PATCH ---
+            # 1. Aquece o cache do GET deals Ana Cristina
+            client.get("/api/contracts-control/deals?scope=operations&responsavel=Ana+Cristina")
+            # 2. Executa um PATCH de atribuição
+            res_patch = client.patch(
+                f"/api/contracts-control/deals/{tx_ana}/manual-data",
+                json={"responsible_id": str(r_ana.id), "version": 1}
+            )
+            assert res_patch.status_code == 200
+            # 3. A leitura seguinte para Ana Cristina deve ser Miss/Stale (não fresh) devido ao cache invalidado!
+            r_post_patch = client.get("/api/contracts-control/deals?scope=operations&responsavel=Ana+Cristina")
+            assert r_post_patch.headers.get("X-Cache") in ("stale", "miss")
+
+    finally:
+        main.app.dependency_overrides.clear()
+        os.environ.pop("CONTRACTS_CONTROL_WRITES_ENABLED", None)
+        os.environ.pop("CONTRACTS_CONTROL_ADMIN_SUBS", None)
+
 def test_verify_backend_api_key_invalid_format():
     from main import verify_backend_api_key, AuthException
     import pytest
