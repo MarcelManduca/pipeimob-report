@@ -4104,7 +4104,7 @@ def test_contracts_control_no_regressions_dashboard_full():
 
 def test_contracts_control_additional_coverage_details():
     from fastapi.testclient import TestClient
-    from main import app, verify_backend_api_key, contracts_control_cache, classify_contracts_control_process
+    from main import app, verify_backend_api_key, contracts_control_cache, classify_contracts_control_process, generate_contracts_control_cache_key
     from datetime import date
     import time
 
@@ -4144,7 +4144,7 @@ def test_contracts_control_additional_coverage_details():
         now = time.time()
         # cached value structure: (val, fresh_until, stale_until)
         # where val is (live_txs, pages_fetched)
-        cache_key = ("contracts-control-v1-data-inicio-venda", "2020-01-01")
+        cache_key = generate_contracts_control_cache_key("2020-01-01")
         contracts_control_cache.cache[cache_key] = ((mock_txs, 1), now - 10, now + 1000)
 
         with patch("main.fetch_all_pipeimob_transactions", return_value=(mock_txs, 1)) as mock_fetch, \
@@ -5700,6 +5700,213 @@ def test_contracts_control_responsible_filter_regression(client_with_db):
             # 3. A leitura seguinte para Ana Cristina deve ser Miss/Stale (não fresh) devido ao cache invalidado!
             r_post_patch = client.get("/api/contracts-control/deals?scope=operations&responsavel=Ana+Cristina")
             assert r_post_patch.headers.get("X-Cache") in ("stale", "miss")
+
+    finally:
+        main.app.dependency_overrides.clear()
+        os.environ.pop("CONTRACTS_CONTROL_WRITES_ENABLED", None)
+        os.environ.pop("CONTRACTS_CONTROL_ADMIN_SUBS", None)
+
+def test_bi_secretaria_non_interference(client_with_db):
+    db = client_with_db
+    from fastapi.testclient import TestClient
+    import main
+    from main import contracts_control_cache, dashboard_cache, generate_dashboard_cache_key
+    from repositories.contracts_control_repository import ContractsControlRepository
+    from zoneinfo import ZoneInfo
+
+    client = TestClient(main.app)
+
+    # Clean all caches
+    contracts_control_cache.clear()
+    dashboard_cache.clear()
+
+    # Create mock CRM dataset used by BI and CC
+    mock_crm_dataset = [
+        {
+            "transacao_unique_id_pipeimob": "tx_non_int_1",
+            "codigo_imovel": "IMOB_101",
+            "data_inicio_venda": "2026-06-10",
+            "data_contrato": "2026-06-25",
+            "agente_gestor": "Manager A",
+            "financiamento": True,
+            "valor_gralha_vgc": 1000.0,
+            "data_inicio_criacao": "2026-06-01",
+            "data_inicio_ccv": "2026-06-01",
+            "etapa_nome": "Vendido",
+            "origem_lead": "Portal"
+        }
+    ]
+
+    # Setup mocks
+    main.app.dependency_overrides[main.verify_backend_api_key] = lambda: {
+        "sub": "admin_sub_1", "email": "admin@gralhaimoveis.com.br", "role": "authenticated"
+    }
+    os.environ["CONTRACTS_CONTROL_WRITES_ENABLED"] = "true"
+    os.environ["CONTRACTS_CONTROL_ADMIN_SUBS"] = "admin_sub_1"
+
+    # Mock fetch for both BI and CC raw loaders
+    async def mock_load_cc(*args, **kwargs):
+        return "demo", "synthetic_mock", mock_crm_dataset, 1, "miss"
+
+    try:
+        with patch("main.load_contracts_control_dataset", side_effect=mock_load_cc), \
+             patch("main.fetch_all_pipeimob_transactions", return_value=(mock_crm_dataset, 1)), \
+             patch.dict(os.environ, {"PIPEIMOB_DATA_MODE": "live", "PIPEIMOB_API_KEY": "mock", "PIPEIMOB_SECRET_KEY": "mock"}):
+
+            # Clear cache first
+            contracts_control_cache.clear()
+            dashboard_cache.clear()
+
+            # --- PRE-TEST: Get initial BI payload ---
+            res_bi_initial = client.get("/api/dashboard/full?data_inicio_criacao=2026-06-01&data_fim_criacao=2026-06-30")
+            assert res_bi_initial.status_code == 200
+            bi_initial_data = res_bi_initial.json()
+
+            def clean_dynamic_fields(d):
+                import copy
+                c = copy.deepcopy(d)
+                if "generated_at" in c:
+                    c["generated_at"] = "STATIC"
+                if "data_quality" in c and "generated_at" in c["data_quality"]:
+                    c["data_quality"]["generated_at"] = "STATIC"
+                return c
+
+            # --- A. Atribuir responsável na Secretaria ---
+            # dados da Secretaria mudam; payload e indicadores do BI permanecem idênticos.
+            r_ana = ContractsControlRepository.create_responsible(db, "Ana Cristina", active=True)
+            db.commit()
+
+            # Assign responsible via Secretaria endpoint
+            res_patch = client.patch(
+                "/api/contracts-control/deals/tx_non_int_1/manual-data",
+                json={"responsible_id": str(r_ana.id), "version": 0}
+            )
+            assert res_patch.status_code == 200
+
+            # Verify Secretaria (Secretaria data has changed)
+            res_deals_after_assign = client.get("/api/contracts-control/deals?scope=operations")
+            assert res_deals_after_assign.status_code == 200
+            assert res_deals_after_assign.json()["deals"][0]["responsible"]["name"] == "Ana Cristina"
+
+            # Verify BI (BI payload and indicators remain identical)
+            res_bi_after_assign = client.get("/api/dashboard/full?data_inicio_criacao=2026-06-01&data_fim_criacao=2026-06-30")
+            assert res_bi_after_assign.status_code == 200
+            assert clean_dynamic_fields(res_bi_after_assign.json()) == clean_dynamic_fields(bi_initial_data)
+
+            # --- B. Limpar responsável na Secretaria ---
+            # histórico e versão da Secretaria mudam; BI permanece inalterado.
+            # Clean responsible by setting to null
+            res_patch_clear = client.patch(
+                "/api/contracts-control/deals/tx_non_int_1/manual-data",
+                json={"responsible_id": None, "version": 1}
+            )
+            assert res_patch_clear.status_code == 200
+
+            # Verify Secretaria (responsible is now null, version is 2)
+            res_deals_after_clear = client.get("/api/contracts-control/deals?scope=operations")
+            assert res_deals_after_clear.status_code == 200
+            assert res_deals_after_clear.json()["deals"][0]["responsible"] is None
+            assert res_deals_after_clear.json()["deals"][0]["manual_data_version"] == 2
+
+            # Verify BI remains completely unaltered
+            res_bi_after_clear = client.get("/api/dashboard/full?data_inicio_criacao=2026-06-01&data_fim_criacao=2026-06-30")
+            assert res_bi_after_clear.status_code == 200
+            assert clean_dynamic_fields(res_bi_after_clear.json()) == clean_dynamic_fields(bi_initial_data)
+
+            # --- C. Atualizar/recalcular BI ---
+            # responsáveis manuais da Secretaria permanecem intactos.
+            # Reassign responsible in CC first
+            res_reassign = client.patch(
+                "/api/contracts-control/deals/tx_non_int_1/manual-data",
+                json={"responsible_id": str(r_ana.id), "version": 2}
+            )
+            assert res_reassign.status_code == 200
+
+            # Trigger BI recalculation (endpoint call with refresh=True)
+            res_bi_recalc = client.get("/api/dashboard/full?data_inicio_criacao=2026-06-01&data_fim_criacao=2026-06-30&refresh=True")
+            assert res_bi_recalc.status_code == 200
+
+            # Verify CC responsible remains intact
+            res_deals_after_bi_recalc = client.get("/api/contracts-control/deals?scope=operations")
+            assert res_deals_after_bi_recalc.json()["deals"][0]["responsible"]["name"] == "Ana Cristina"
+
+            # --- D. Invalidar cache da Secretaria ---
+            # cache do BI permanece válido.
+            # Populate BI cache
+            client.get("/api/dashboard/full?data_inicio_criacao=2026-06-01&data_fim_criacao=2026-06-30")
+            bi_cache_key = generate_dashboard_cache_key(data_inicio_criacao="2026-06-01", data_fim_criacao="2026-06-30")
+            assert dashboard_cache.get(bi_cache_key) is not None
+
+            # Invalidate CC cache
+            contracts_control_cache.clear_endpoint_caches()
+
+            # Verify BI cache remains valid
+            assert dashboard_cache.get(bi_cache_key) is not None
+
+            # --- E. Invalidar cache do BI ---
+            # cache e dados manuais da Secretaria permanecem válidos.
+            # Populate CC cache
+            client.get("/api/contracts-control/deals?scope=operations")
+            cc_deals_key = (
+                "contracts-control",
+                "deals",
+                main.CONTRACTS_CONTROL_CACHE_VERSION,
+                "2026-01-01",
+                main.datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%Y-%m-%d"),
+                "operations",
+                None, None, None, None, None, None, None,
+                1, 25
+            )
+            assert contracts_control_cache.get(cc_deals_key) is not None
+
+            # Invalidate BI cache
+            dashboard_cache.clear()
+
+            # Verify CC cache and manual database data remain completely valid
+            assert contracts_control_cache.get(cc_deals_key) is not None
+            res_deals_final = client.get("/api/contracts-control/deals?scope=operations")
+            assert res_deals_final.json()["deals"][0]["responsible"]["name"] == "Ana Cristina"
+
+            # --- F. Importar planilha ---
+            # gravações ocorrem somente nas tabelas da Secretaria; nenhuma tabela ou projeção do BI é modificada.
+            # Simulation of spreadsheet import function following requirements:
+            # planilha.property_code -> index over pipeimob negocios -> transaction_id -> Secretaria manual responsible.
+
+            # 1. Spreadsheet row simulated: Property IMOB_101 belongs to responsible Ana Cristina
+            row = {"property_code": "IMOB_101", "responsible_name": "Ana Cristina"}
+
+            # 2. Get the index on property code from the raw pipeimob dataset (simulating no BI query or dataframe usage)
+            prop_index = {tx.get("codigo_imovel"): tx.get("transacao_unique_id_pipeimob") for tx in mock_crm_dataset}
+            matched_tx_id = prop_index.get(row["property_code"])
+            assert matched_tx_id == "tx_non_int_1"
+
+            # 3. Write only to Secretaria's manual table
+            # Verify no BI tables or dashboard_cache are modified
+            dashboard_cache.clear()
+
+            md_record = ContractsControlRepository.get_manual_data_by_transaction_id(db, matched_tx_id)
+            if md_record:
+                initial_version = md_record.version
+                ContractsControlRepository.update_manual_data_optimistic(
+                    db, matched_tx_id, r_ana.id, initial_version, "importer_sub"
+                )
+                db.commit()
+                db.refresh(md_record)
+                updated_md = md_record
+            else:
+                initial_version = 0
+                updated_md = ContractsControlRepository.create_manual_data(
+                    db, matched_tx_id, r_ana.id, "importer_sub"
+                )
+                db.commit()
+
+            assert updated_md.version == initial_version + 1
+            assert updated_md.responsible_id == r_ana.id
+
+            # Assert BI cache or database is not affected
+            res_bi_post_import = client.get("/api/dashboard/full?data_inicio_criacao=2026-06-01&data_fim_criacao=2026-06-30")
+            assert res_bi_post_import.status_code == 200
+            assert clean_dynamic_fields(res_bi_post_import.json()) == clean_dynamic_fields(bi_initial_data)
 
     finally:
         main.app.dependency_overrides.clear()

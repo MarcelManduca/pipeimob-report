@@ -133,6 +133,7 @@ def generate_dashboard_cache_key(
     transacao_unique_id: Optional[str] = None
 ) -> tuple:
     return (
+        "bi",
         DASHBOARD_CACHE_VERSION,
         data_inicio_criacao, data_fim_criacao,
         data_inicio_ccv, data_fim_ccv,
@@ -4721,7 +4722,7 @@ class ContractsControlCache:
         with self.lock:
             keys_to_remove = [
                 k for k in self.cache.keys()
-                if isinstance(k, tuple) and len(k) > 0 and k[0] in ("deals", "summary")
+                if isinstance(k, tuple) and len(k) > 0 and k[0] == "contracts-control"
             ]
             for k in keys_to_remove:
                 self.cache.pop(k, None)
@@ -4729,7 +4730,7 @@ class ContractsControlCache:
 contracts_control_cache = ContractsControlCache()
 
 def generate_contracts_control_cache_key(coverage_start: str) -> tuple:
-    return (CONTRACTS_CONTROL_CACHE_VERSION, coverage_start)
+    return ("pipeimob:raw", CONTRACTS_CONTROL_CACHE_VERSION, coverage_start)
 
 # Strict date parsing and stats helpers
 def parse_date_to_date_obj(val: Any) -> Optional[date]:
@@ -5607,6 +5608,7 @@ async def get_contracts_control_summary(
 
     # 2. Check endpoint cache if refresh is not requested
     cache_key = (
+        "contracts-control",
         "summary",
         CONTRACTS_CONTROL_CACHE_VERSION,
         resolved_start_date,
@@ -5889,6 +5891,7 @@ async def get_contracts_control_deals(
 
     # 2. Check endpoint cache if refresh is not requested
     cache_key = (
+        "contracts-control",
         "deals",
         CONTRACTS_CONTROL_CACHE_VERSION,
         resolved_start_date,
