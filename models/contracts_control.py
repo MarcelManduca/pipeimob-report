@@ -2,7 +2,7 @@ import uuid
 import unicodedata
 from datetime import datetime, timezone
 from typing import Optional
-from sqlalchemy import String, Boolean, DateTime, ForeignKey, Integer, UniqueConstraint, Index, CheckConstraint
+from sqlalchemy import String, Boolean, DateTime, ForeignKey, Integer, UniqueConstraint, Index, CheckConstraint, JSON
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from database import Base
@@ -74,4 +74,45 @@ class ContractsControlManualDataHistory(Base):
     __table_args__ = (
         Index("idx_history_transaction_id", "transaction_id"),
         Index("idx_history_changed_at", "changed_at"),
+    )
+
+class ContractsControlImportPreview(Base):
+    __tablename__ = "contracts_control_import_previews"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_filename: Mapped[str] = mapped_column(String, nullable=False)
+    source_format: Mapped[str] = mapped_column(String, nullable=False)
+    parser_version: Mapped[str] = mapped_column(String, nullable=False)
+    created_by_sub: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="pending")
+    source_hash: Mapped[str] = mapped_column(String, nullable=False)
+    summary: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    items = relationship("ContractsControlImportPreviewItem", back_populates="preview", cascade="all, delete-orphan")
+
+class ContractsControlImportPreviewItem(Base):
+    __tablename__ = "contracts_control_import_preview_items"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    preview_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("contracts_control_import_previews.id", ondelete="CASCADE"), nullable=False)
+    aba: Mapped[str] = mapped_column(String, nullable=False)
+    linha: Mapped[int] = mapped_column(Integer, nullable=False)
+    codigo_imovel: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    nome_imovel: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    responsavel_planilha: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    responsavel_atual_secretaria: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    transaction_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    versao_manual_atual: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    decisao_proposta: Mapped[str] = mapped_column(String, nullable=False)
+    motivo: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    source_occurrences: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+
+    preview = relationship("ContractsControlImportPreview", back_populates="items")
+
+    __table_args__ = (
+        Index("idx_preview_item_preview_id", "preview_id"),
+        Index("idx_preview_item_decisao_proposta", "decisao_proposta"),
+        Index("idx_preview_item_codigo_imovel", "codigo_imovel"),
     )

@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import List, Optional, Union
 from decimal import Decimal
 from zoneinfo import ZoneInfo
-from fastapi import FastAPI, Header, Query, HTTPException, Response, Request, Depends
+from fastapi import FastAPI, Header, Query, HTTPException, Response, Request, Depends, File, UploadFile
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -6391,7 +6391,6 @@ async def get_transaction_manual_data_history(
                         )
                 except ValueError:
                     pass
-
         result.append(
             HistoryRecordItem(
                 field_name=rec.field_name,
@@ -6405,3 +6404,249 @@ async def get_transaction_manual_data_history(
         )
 
     return result
+
+# Spreadsheet Import Preview Pydantic Schemas
+class ImportPreviewSummaryResponse(BaseModel):
+    source_rows_count: int
+    unique_property_codes_count: int
+    rows_with_responsible_count: int
+    rows_without_responsible_count: int
+    duplicate_same_value_count: int
+    duplicate_conflict_count: int
+    unique_match_count: int
+    ambiguous_match_count: int
+    not_found_count: int
+    responsible_not_registered_count: int
+    already_synchronized_count: int
+    to_assign_count: int
+    to_change_count: int
+    to_clear_count: int
+    invalid_source_row_count: int = 0
+
+class ImportPreviewItemResponse(BaseModel):
+    id: str
+    aba: str
+    linha: int
+    codigo_imovel: Optional[str] = None
+    nome_imovel: Optional[str] = None
+    responsavel_planilha: Optional[str] = None
+    responsavel_atual_secretaria: Optional[str] = None
+    transaction_id: Optional[str] = None
+    versao_manual_atual: Optional[int] = None
+    decisao_proposta: str
+    motivo: Optional[str] = None
+    source_occurrences: Optional[dict] = None
+
+class ImportPreviewResponse(BaseModel):
+    preview_id: str
+    source_filename: str
+    source_format: str
+    parser_version: str
+    created_by_sub: str
+    status: str
+    source_hash: str
+    created_at: str
+    expires_at: str
+    summary: ImportPreviewSummaryResponse
+    page: int
+    page_size: int
+    total_records: int
+    total_pages: int
+    items: List[ImportPreviewItemResponse]
+
+@app.post(
+    "/api/contracts-control/imports/responsibles/preview",
+    response_model=ImportPreviewResponse,
+    responses={**RESPONSES_503, **RESPONSES_AUTH},
+    summary="Generate a responsible spreadsheet import preview"
+)
+async def post_import_responsibles_preview(
+    file: UploadFile = File(...),
+    sub: str = Depends(require_contracts_control_temporary_admin),
+    db: Optional[Any] = Depends(get_db_session)
+):
+    import os
+    import tempfile
+    from services.contracts_control_import_service import ContractsControlImportService
+    from repositories.contracts_control_import_repository import ContractsControlImportRepository
+
+    if not db:
+        raise HTTPException(status_code=503, detail="Database session unavailable.")
+
+    # Validate file extension
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in (".xlsx", ".csv"):
+        raise HTTPException(status_code=400, detail="Invalid file format. Only .xlsx and .csv are supported.")
+
+    # Save to a temporary file, ensuring it gets removed in finally
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+            tmp.write(await file.read())
+            tmp_path = tmp.name
+
+        # Fetch Pipeimob dataset
+        dataset = await get_contracts_control_dataset_for_write()
+
+        # Generate preview
+        preview = await ContractsControlImportService.create_import_preview(
+            db=db,
+            file_path=tmp_path,
+            filename=file.filename,
+            created_by_sub=sub,
+            dataset=dataset
+        )
+        db.commit()
+
+        # Retrieve first page of preview items (page=1, page_size=25)
+        items, total_count = ContractsControlImportRepository.get_preview_items_paginated(
+            db=db,
+            preview_id=preview.id,
+            page=1,
+            page_size=25,
+            filters={}
+        )
+
+        total_pages = (total_count + 24) // 25
+
+        # Build response items
+        resp_items = []
+        for it in items:
+            resp_items.append(ImportPreviewItemResponse(
+                id=str(it.id),
+                aba=it.aba,
+                linha=it.linha,
+                codigo_imovel=it.codigo_imovel,
+                nome_imovel=it.nome_imovel,
+                responsavel_planilha=it.responsavel_planilha,
+                responsavel_atual_secretaria=it.responsavel_atual_secretaria,
+                transaction_id=it.transaction_id,
+                versao_manual_atual=it.versao_manual_atual,
+                decisao_proposta=it.decisao_proposta,
+                motivo=it.motivo,
+                source_occurrences=it.source_occurrences
+            ))
+
+        return ImportPreviewResponse(
+            preview_id=str(preview.id),
+            source_filename=preview.source_filename,
+            source_format=preview.source_format,
+            parser_version=preview.parser_version,
+            created_by_sub=preview.created_by_sub,
+            status=preview.status,
+            source_hash=preview.source_hash,
+            created_at=preview.created_at.isoformat(),
+            expires_at=preview.expires_at.isoformat(),
+            summary=ImportPreviewSummaryResponse(**preview.summary),
+            page=1,
+            page_size=25,
+            total_records=total_count,
+            total_pages=total_pages,
+            items=resp_items
+        )
+    except ValueError as val_err:
+        raise HTTPException(status_code=400, detail=str(val_err))
+    except Exception as e:
+        db.rollback()
+        if isinstance(e, HTTPException):
+            raise e
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except:
+                pass
+
+@app.get(
+    "/api/contracts-control/imports/responsibles/previews/{preview_id}",
+    response_model=ImportPreviewResponse,
+    responses={**RESPONSES_503, **RESPONSES_AUTH},
+    summary="Get details of a spreadsheet import preview"
+)
+async def get_import_responsibles_preview(
+    preview_id: str,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    status: Optional[str] = Query(None),
+    responsavel: Optional[str] = Query(None),
+    codigo: Optional[str] = Query(None),
+    aba: Optional[str] = Query(None),
+    only_pending: bool = Query(False),
+    sub: str = Depends(require_contracts_control_temporary_admin),
+    db: Optional[Any] = Depends(get_db_session)
+):
+    from repositories.contracts_control_import_repository import ContractsControlImportRepository
+
+    if not db:
+        raise HTTPException(status_code=503, detail="Database session unavailable.")
+
+    try:
+        p_uuid = uuid.UUID(preview_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Preview not found.")
+
+    preview = ContractsControlImportRepository.get_preview_by_id(db, p_uuid)
+    if not preview:
+        raise HTTPException(status_code=404, detail="Preview not found.")
+
+    # Check expiry -> Return HTTP 410 Gone
+    now_dt = datetime.now(timezone.utc)
+    expires_at = preview.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at <= now_dt:
+        raise HTTPException(status_code=410, detail="Preview has expired.")
+
+    filters = {
+        "status": status,
+        "responsavel": responsavel,
+        "codigo": codigo,
+        "aba": aba,
+        "only_pending": only_pending
+    }
+
+    items, total_count = ContractsControlImportRepository.get_preview_items_paginated(
+        db=db,
+        preview_id=p_uuid,
+        page=page,
+        page_size=page_size,
+        filters=filters
+    )
+
+    total_pages = (total_count + page_size - 1) // page_size
+
+    resp_items = []
+    for it in items:
+        resp_items.append(ImportPreviewItemResponse(
+            id=str(it.id),
+            aba=it.aba,
+            linha=it.linha,
+            codigo_imovel=it.codigo_imovel,
+            nome_imovel=it.nome_imovel,
+            responsavel_planilha=it.responsavel_planilha,
+            responsavel_atual_secretaria=it.responsavel_atual_secretaria,
+            transaction_id=it.transaction_id,
+            versao_manual_atual=it.versao_manual_atual,
+            decisao_proposta=it.decisao_proposta,
+            motivo=it.motivo,
+            source_occurrences=it.source_occurrences
+        ))
+
+    return ImportPreviewResponse(
+        preview_id=str(preview.id),
+        source_filename=preview.source_filename,
+        source_format=preview.source_format,
+        parser_version=preview.parser_version,
+        created_by_sub=preview.created_by_sub,
+        status=preview.status,
+        source_hash=preview.source_hash,
+        created_at=preview.created_at.isoformat(),
+        expires_at=preview.expires_at.isoformat(),
+        summary=ImportPreviewSummaryResponse(**preview.summary),
+        page=page,
+        page_size=page_size,
+        total_records=total_count,
+        total_pages=total_pages,
+        items=resp_items
+    )
