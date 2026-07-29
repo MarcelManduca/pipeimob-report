@@ -505,11 +505,104 @@ def test_import_no_write_and_bi_isolation():
     )
     assert response.status_code == 200
     
-    # Assert counts are exactly the same
     db = TestingSessionLocal()
     manual_data_count_after = db.query(ContractsControlManualData).count()
     history_count_after = db.query(ContractsControlManualDataHistory).count()
     db.close()
-    
+
     assert manual_data_count_before == manual_data_count_after
     assert history_count_before == history_count_after
+
+def test_import_preview_cache_prefilled(monkeypatch):
+    # Mock prefilled cache (get_contracts_control_dataset_for_write returns successfully)
+    async def mock_write():
+        return MOCK_PIPEIMOB_DATASET
+    monkeypatch.setattr("main.get_contracts_control_dataset_for_write", mock_write)
+
+    sheets = {
+        "Sheet1": [
+            ["CODIGO IMOVEL", "RESPONSÁVEL"],
+            ["10001", "Guilherme"]
+        ]
+    }
+    xlsx_bytes = create_in_memory_xlsx(sheets)
+
+    headers = {"Authorization": f"Bearer {mock_admin_token}"}
+    response = client.post(
+        "/api/contracts-control/imports/responsibles/preview",
+        headers=headers,
+        files={"file": ("import_cache_prefilled.xlsx", xlsx_bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
+    )
+    assert response.status_code == 200
+
+def test_import_preview_cache_empty_warmup_success(monkeypatch):
+    from fastapi import HTTPException
+
+    # 1. Mock empty cache error on first check
+    async def mock_write_empty():
+        raise HTTPException(
+            status_code=503,
+            detail="Pipeimob dataset cache is empty. Please warm up the cache by calling read endpoints first."
+        )
+    monkeypatch.setattr("main.get_contracts_control_dataset_for_write", mock_write_empty)
+
+    # 2. Mock load_contracts_control_dataset to simulate successful API fetch
+    call_count = 0
+    async def mock_load(request_id=None, refresh=False):
+        nonlocal call_count
+        call_count += 1
+        return "live", "pipeimob_api_v2", MOCK_PIPEIMOB_DATASET, 1, "miss"
+    monkeypatch.setattr("main.load_contracts_control_dataset", mock_load)
+
+    sheets = {
+        "Sheet1": [
+            ["CODIGO IMOVEL", "RESPONSÁVEL"],
+            ["10001", "Guilherme"]
+        ]
+    }
+    xlsx_bytes = create_in_memory_xlsx(sheets)
+
+    headers = {"Authorization": f"Bearer {mock_admin_token}"}
+    response = client.post(
+        "/api/contracts-control/imports/responsibles/preview",
+        headers=headers,
+        files={"file": ("import_warmup_success.xlsx", xlsx_bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
+    )
+    assert response.status_code == 200
+    assert call_count == 1
+
+def test_import_preview_cache_empty_warmup_failure(monkeypatch):
+    from fastapi import HTTPException
+
+    # 1. Mock empty cache error
+    async def mock_write_empty():
+        raise HTTPException(
+            status_code=503,
+            detail="Pipeimob dataset cache is empty. Please warm up the cache by calling read endpoints first."
+        )
+    monkeypatch.setattr("main.get_contracts_control_dataset_for_write", mock_write_empty)
+
+    # 2. Mock load_contracts_control_dataset to raise a real API failure
+    async def mock_load_fail(request_id=None, refresh=False):
+        raise HTTPException(
+            status_code=503,
+            detail="Pipeimob CRM API returned empty transactions dataset."
+        )
+    monkeypatch.setattr("main.load_contracts_control_dataset", mock_load_fail)
+
+    sheets = {
+        "Sheet1": [
+            ["CODIGO IMOVEL", "RESPONSÁVEL"],
+            ["10001", "Guilherme"]
+        ]
+    }
+    xlsx_bytes = create_in_memory_xlsx(sheets)
+
+    headers = {"Authorization": f"Bearer {mock_admin_token}"}
+    response = client.post(
+        "/api/contracts-control/imports/responsibles/preview",
+        headers=headers,
+        files={"file": ("import_warmup_fail.xlsx", xlsx_bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
+    )
+    assert response.status_code == 503
+    assert "Pipeimob CRM API returned empty" in response.json()["detail"]

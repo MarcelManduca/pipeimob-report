@@ -6486,7 +6486,13 @@ async def post_import_responsibles_preview(
             tmp_path = tmp.name
 
         # Fetch Pipeimob dataset
-        dataset = await get_contracts_control_dataset_for_write()
+        try:
+            dataset = await get_contracts_control_dataset_for_write()
+        except HTTPException as e:
+            if e.status_code == 503 and "cache is empty" in str(e.detail):
+                _, _, dataset, _, _ = await load_contracts_control_dataset()
+            else:
+                raise e
 
         # Generate preview
         preview = await ContractsControlImportService.create_import_preview(
