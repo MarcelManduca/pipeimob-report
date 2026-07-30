@@ -170,6 +170,49 @@ def test_cors_preflight_options_patch_unauthorized():
     response = client.options("/api/contracts-control/deals/tx_123/manual-data", headers=headers)
     assert "access-control-allow-origin" not in response.headers
 
+def test_cors_preflight_summary_lovable_preview():
+    headers = {
+        "Origin": "https://preview--happy-data-hugger.lovable.app",
+        "Access-Control-Request-Method": "GET",
+        "Access-Control-Request-Headers": "authorization",
+    }
+    response = client.options("/api/contracts-control/summary", headers=headers)
+    assert response.status_code == 200
+    assert response.headers.get("access-control-allow-origin") == "https://preview--happy-data-hugger.lovable.app"
+    assert "GET" in response.headers.get("access-control-allow-methods", "")
+    assert "authorization" in response.headers.get("access-control-allow-headers", "").lower()
+
+def test_cors_preflight_import_preview_lovable_branch():
+    headers = {
+        "Origin": "https://my-awesome-branch-123--happy-data-hugger.lovable.app",
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "authorization,content-type",
+    }
+    response = client.options("/api/contracts-control/imports/responsibles/preview", headers=headers)
+    assert response.status_code == 200
+    assert response.headers.get("access-control-allow-origin") == "https://my-awesome-branch-123--happy-data-hugger.lovable.app"
+    assert "POST" in response.headers.get("access-control-allow-methods", "")
+    assert "authorization" in response.headers.get("access-control-allow-headers", "").lower()
+    assert "content-type" in response.headers.get("access-control-allow-headers", "").lower()
+
+def test_cors_preflight_unauthorized_lovable_app():
+    headers = {
+        "Origin": "https://preview--other-app-name.lovable.app",
+        "Access-Control-Request-Method": "GET",
+        "Access-Control-Request-Headers": "authorization",
+    }
+    response = client.options("/api/contracts-control/summary", headers=headers)
+    assert "access-control-allow-origin" not in response.headers
+
+def test_cors_preflight_unauthorized_external_origin():
+    headers = {
+        "Origin": "https://evil-hacker-domain.com",
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "authorization,content-type",
+    }
+    response = client.options("/api/contracts-control/imports/responsibles/preview", headers=headers)
+    assert "access-control-allow-origin" not in response.headers
+
 def test_demo_data_anonymization_and_purity():
     # Assert that no real manager/agency names or properties from real sheets remain in the mock dataset
     real_names = ["Raphael", "Carvalho", "Vanessa", "Cavedon", "Gralha", "Manduca", "Michele", "Maitê", "Yakabi"]
