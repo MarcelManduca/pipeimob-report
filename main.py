@@ -83,7 +83,13 @@ class AsyncSingleFlightRegistry:
         self.lock = asyncio.Lock()
         self.in_flight = {} # key -> Future
 
-    async def execute(self, key, fetch_coro):
+    async def execute(self, key, fetch_coro, request_id=None, caller_endpoint=None):
+        import time
+        import json
+        import logging
+        import sys
+        logger = logging.getLogger(__name__)
+
         future = None
         is_leader = False
 
@@ -95,7 +101,17 @@ class AsyncSingleFlightRegistry:
                 self.in_flight[key] = future
                 is_leader = True
 
+        role = "owner" if is_leader else "waiter"
+
+        logger.info(json.dumps({
+            "event": "singleflight_role_assigned",
+            "request_id": request_id,
+            "caller_endpoint": caller_endpoint,
+            "singleflight_role": role
+        }))
+
         if is_leader:
+            start_time = time.perf_counter()
             try:
                 # Shield the fetch coroutine from client cancellation
                 result = await asyncio.shield(fetch_coro())
@@ -105,12 +121,42 @@ class AsyncSingleFlightRegistry:
                 future.set_result((None, e))
                 raise e
             finally:
+                duration_ms = (time.perf_counter() - start_time) * 1000
+                exc_type, exc_val, exc_tb = sys.exc_info()
+                logger.info(json.dumps({
+                    "event": "finally_cleanup",
+                    "request_id": request_id,
+                    "caller_endpoint": caller_endpoint,
+                    "singleflight_role": role,
+                    "total_duration_ms": duration_ms,
+                    "exception_class": exc_type.__name__ if exc_type else None,
+                    "sanitized_message": str(exc_val) if exc_val else None
+                }))
                 async with self.lock:
                     if key in self.in_flight:
                         del self.in_flight[key]
         else:
             # Followers await the shielded Future
+            start_wait = time.perf_counter()
+            logger.info(json.dumps({
+                "event": "singleflight_wait_start",
+                "request_id": request_id,
+                "caller_endpoint": caller_endpoint,
+                "singleflight_role": role
+            }))
+
             result, err = await asyncio.shield(future)
+
+            wait_duration = (time.perf_counter() - start_wait) * 1000
+            logger.info(json.dumps({
+                "event": "singleflight_wait_end",
+                "request_id": request_id,
+                "caller_endpoint": caller_endpoint,
+                "singleflight_role": role,
+                "wait_duration_ms": wait_duration,
+                "exception_class": type(err).__name__ if err else None,
+                "sanitized_message": str(err) if err else None
+            }))
             if err is not None:
                 raise err
             return result
@@ -5036,13 +5082,33 @@ def classify_contracts_control_process(tx: dict, as_of_date_obj: date, end_date_
 
 async def load_contracts_control_dataset(
     request_id: Optional[str] = None,
-    refresh: bool = False
+    refresh: bool = False,
+    caller_endpoint: Optional[str] = None
 ) -> tuple:
     import time
+    import json
+    import logging
+    logger = logging.getLogger(__name__)
+
     start_time = time.perf_counter()
+
+    logger.info(json.dumps({
+        "event": "load_start",
+        "request_id": request_id,
+        "caller_endpoint": caller_endpoint,
+        "refresh": refresh
+    }))
+
     data_mode, conn_status = get_current_data_mode_and_connection()
 
     if data_mode == "unconfigured":
+        logger.info(json.dumps({
+            "event": "error",
+            "request_id": request_id,
+            "caller_endpoint": caller_endpoint,
+            "exception_class": "IntegrationUnavailableError",
+            "sanitized_message": "Configuration pending."
+        }))
         raise IntegrationUnavailableError(
             status_code=503,
             detail="Configuration pending. Please set PIPEIMOB_DATA_MODE environment variable.",
@@ -5054,9 +5120,25 @@ async def load_contracts_control_dataset(
     if data_mode == "demo":
         from mock_data import MOCK_TRANSACTIONS
         dataset = MOCK_TRANSACTIONS
+        duration_ms = (time.perf_counter() - start_time) * 1000
+        logger.info(json.dumps({
+            "event": "load_end",
+            "request_id": request_id,
+            "caller_endpoint": caller_endpoint,
+            "cache_status": "miss",
+            "records_count": len(dataset),
+            "total_duration_ms": duration_ms
+        }))
         return "demo", "synthetic_mock", dataset, 1, "miss"
 
     if conn_status == "missing_credentials":
+        logger.info(json.dumps({
+            "event": "error",
+            "request_id": request_id,
+            "caller_endpoint": caller_endpoint,
+            "exception_class": "IntegrationUnavailableError",
+            "sanitized_message": "Pipeimob credentials are not configured on the server."
+        }))
         raise IntegrationUnavailableError(
             status_code=503,
             detail="Pipeimob credentials are not configured on the server.",
@@ -5069,14 +5151,46 @@ async def load_contracts_control_dataset(
     cache_key = generate_contracts_control_cache_key(coverage_start)
 
     def sync_fetch():
+        import time as t
         api_key = os.getenv("PIPEIMOB_API_KEY").strip()
         api_secret = os.getenv("PIPEIMOB_SECRET_KEY").strip()
 
-        txs, pages = fetch_all_pipeimob_transactions(
-            api_key=api_key,
-            api_secret=api_secret,
-            data_inicio_criacao=coverage_start
-        )
+        logger.info(json.dumps({
+            "event": "external_call_start",
+            "request_id": request_id,
+            "caller_endpoint": caller_endpoint,
+            "timeout_configured": PIPEIMOB_HTTP_TIMEOUT_SECONDS
+        }))
+
+        ext_start = t.perf_counter()
+        try:
+            txs, pages = fetch_all_pipeimob_transactions(
+                api_key=api_key,
+                api_secret=api_secret,
+                data_inicio_criacao=coverage_start
+            )
+            ext_duration = (t.perf_counter() - ext_start) * 1000
+
+            logger.info(json.dumps({
+                "event": "external_call_end",
+                "request_id": request_id,
+                "caller_endpoint": caller_endpoint,
+                "external_duration_ms": ext_duration,
+                "external_status": "success",
+                "records_count": len(txs)
+            }))
+        except Exception as err:
+            ext_duration = (t.perf_counter() - ext_start) * 1000
+            logger.info(json.dumps({
+                "event": "external_call_end",
+                "request_id": request_id,
+                "caller_endpoint": caller_endpoint,
+                "external_duration_ms": ext_duration,
+                "external_status": "error",
+                "exception_class": type(err).__name__,
+                "sanitized_message": str(err)
+            }))
+            raise err
 
         if not txs:
             raise IntegrationUnavailableError(
@@ -5087,15 +5201,43 @@ async def load_contracts_control_dataset(
                 pipeimob_connection="unavailable"
             )
 
+        logger.info(json.dumps({
+            "event": "transformation_start",
+            "request_id": request_id,
+            "caller_endpoint": caller_endpoint
+        }))
+
+        trans_start = t.perf_counter()
+        trans_duration = (t.perf_counter() - trans_start) * 1000
+        logger.info(json.dumps({
+            "event": "transformation_end",
+            "request_id": request_id,
+            "caller_endpoint": caller_endpoint,
+            "records_count": len(txs),
+            "transformation_duration_ms": trans_duration
+        }))
+
         contracts_control_cache.set(cache_key, (txs, pages))
         return txs, pages
 
     if refresh:
+        logger.info(json.dumps({
+            "event": "cache_check",
+            "request_id": request_id,
+            "caller_endpoint": caller_endpoint,
+            "cache_status": "miss"
+        }))
         coro = lambda: asyncio.get_event_loop().run_in_executor(None, sync_fetch)
-        live_txs, pages_fetched = await single_flight_registry.execute(cache_key, coro)
+        live_txs, pages_fetched = await single_flight_registry.execute(cache_key, coro, request_id, caller_endpoint)
         cache_status = "miss"
     else:
         cached_val, status = contracts_control_cache.get_status(cache_key)
+        logger.info(json.dumps({
+            "event": "cache_check",
+            "request_id": request_id,
+            "caller_endpoint": caller_endpoint,
+            "cache_status": status
+        }))
         if status == "fresh":
             live_txs, pages_fetched = cached_val
             cache_status = "fresh"
@@ -5106,14 +5248,24 @@ async def load_contracts_control_dataset(
                 async def run_bg_refresh():
                     try:
                         c = lambda: asyncio.get_event_loop().run_in_executor(None, sync_fetch)
-                        await single_flight_registry.execute(cache_key, c)
+                        await single_flight_registry.execute(cache_key, c, request_id, caller_endpoint)
                     except Exception:
                         pass
                 asyncio.create_task(run_bg_refresh())
         else:
             coro = lambda: asyncio.get_event_loop().run_in_executor(None, sync_fetch)
-            live_txs, pages_fetched = await single_flight_registry.execute(cache_key, coro)
+            live_txs, pages_fetched = await single_flight_registry.execute(cache_key, coro, request_id, caller_endpoint)
             cache_status = "miss"
+
+    duration_ms = (time.perf_counter() - start_time) * 1000
+    logger.info(json.dumps({
+        "event": "load_end",
+        "request_id": request_id,
+        "caller_endpoint": caller_endpoint,
+        "cache_status": cache_status,
+        "records_count": len(live_txs),
+        "total_duration_ms": duration_ms
+    }))
 
     return "live", "pipeimob_api_v2", live_txs, pages_fetched, cache_status
 
@@ -5638,7 +5790,7 @@ async def get_contracts_control_summary(
     # 3. Load raw dataset (Miss or refresh)
     try:
         mode, src, dataset, pages_fetched, cache_status = await load_contracts_control_dataset(
-            request_id=req_id, refresh=bool(refresh)
+            request_id=req_id, refresh=bool(refresh), caller_endpoint="/api/contracts-control/summary"
         )
     except Exception as e:
         if isinstance(e, IntegrationUnavailableError) or isinstance(e, HTTPException):
@@ -5923,7 +6075,7 @@ async def get_contracts_control_deals(
 
     # 3. Load dataset (Miss or refresh)
     mode, src, dataset, pages_fetched, cache_status = await load_contracts_control_dataset(
-        request_id=req_id, refresh=bool(refresh)
+        request_id=req_id, refresh=bool(refresh), caller_endpoint="/api/contracts-control/deals"
     )
     validate_dataset_origin(mode, src, dataset)
 
@@ -6491,7 +6643,9 @@ async def post_import_responsibles_preview(
             dataset = await get_contracts_control_dataset_for_write()
         except HTTPException as e:
             if e.status_code == 503 and "cache is empty" in str(e.detail):
-                _, _, dataset, _, _ = await load_contracts_control_dataset()
+                _, _, dataset, _, _ = await load_contracts_control_dataset(
+                    request_id=sub, caller_endpoint="/api/contracts-control/imports/responsibles/preview"
+                )
             else:
                 raise e
 

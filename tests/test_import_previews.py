@@ -548,7 +548,7 @@ def test_import_preview_cache_empty_warmup_success(monkeypatch):
 
     # 2. Mock load_contracts_control_dataset to simulate successful API fetch
     call_count = 0
-    async def mock_load(request_id=None, refresh=False):
+    async def mock_load(request_id=None, refresh=False, **kwargs):
         nonlocal call_count
         call_count += 1
         return "live", "pipeimob_api_v2", MOCK_PIPEIMOB_DATASET, 1, "miss"
@@ -583,7 +583,7 @@ def test_import_preview_cache_empty_warmup_failure(monkeypatch):
     monkeypatch.setattr("main.get_contracts_control_dataset_for_write", mock_write_empty)
 
     # 2. Mock load_contracts_control_dataset to raise a real API failure
-    async def mock_load_fail(request_id=None, refresh=False):
+    async def mock_load_fail(request_id=None, refresh=False, **kwargs):
         raise HTTPException(
             status_code=503,
             detail="Pipeimob CRM API returned empty transactions dataset."

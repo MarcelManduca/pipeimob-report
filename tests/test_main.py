@@ -3012,6 +3012,146 @@ def test_single_flight_concurrent_deduplication(monkeypatch):
     finally:
         patcher.stop()
 
+def test_single_flight_diagnostics_scenarios():
+    import pytest
+    from main import AsyncSingleFlightRegistry
+
+    loop = asyncio.get_event_loop()
+
+    # 1. Owner succeeding
+    async def owner_succeeds():
+        registry = AsyncSingleFlightRegistry()
+        async def fetch():
+            await asyncio.sleep(0.01)
+            return "ok"
+        res = await registry.execute("k1", fetch)
+        assert res == "ok"
+        # 6. finally block cleanup: key is removed
+        assert not await registry.is_running("k1")
+    loop.run_until_complete(owner_succeeds())
+
+    # 2. Owner failing
+    async def owner_fails():
+        registry = AsyncSingleFlightRegistry()
+        async def fetch():
+            raise ValueError("custom_error")
+        with pytest.raises(ValueError, match="custom_error"):
+            await registry.execute("k2", fetch)
+        # finally block cleanup on failure: key is removed
+        assert not await registry.is_running("k2")
+    loop.run_until_complete(owner_fails())
+
+    # 3. Waiter receiving success
+    async def waiter_receives_success():
+        registry = AsyncSingleFlightRegistry()
+        barrier = asyncio.Event()
+
+        async def fetch():
+            await barrier.wait()
+            return "shared_value"
+
+        async def run_owner():
+            return await registry.execute("k3", fetch)
+
+        async def run_waiter():
+            # Wait a tiny bit to ensure leader task is registered
+            await asyncio.sleep(0.005)
+            return await registry.execute("k3", None)
+
+        task1 = asyncio.create_task(run_owner())
+        task2 = asyncio.create_task(run_waiter())
+
+        # Unblock the owner
+        await asyncio.sleep(0.01)
+        barrier.set()
+
+        res1, res2 = await asyncio.gather(task1, task2)
+        assert res1 == "shared_value"
+        assert res2 == "shared_value"
+        assert not await registry.is_running("k3")
+    loop.run_until_complete(waiter_receives_success())
+
+    # 4. Waiter receiving failure
+    async def waiter_receives_failure():
+        registry = AsyncSingleFlightRegistry()
+        barrier = asyncio.Event()
+
+        async def fetch():
+            await barrier.wait()
+            raise RuntimeError("shared_error")
+
+        async def run_owner():
+            return await registry.execute("k4", fetch)
+
+        async def run_waiter():
+            await asyncio.sleep(0.005)
+            return await registry.execute("k4", None)
+
+        task1 = asyncio.create_task(run_owner())
+        task2 = asyncio.create_task(run_waiter())
+
+        await asyncio.sleep(0.01)
+        barrier.set()
+
+        # Both owner and waiter should raise the same exception
+        with pytest.raises(RuntimeError, match="shared_error"):
+            await task1
+        with pytest.raises(RuntimeError, match="shared_error"):
+            await task2
+        assert not await registry.is_running("k4")
+    loop.run_until_complete(waiter_receives_failure())
+
+    # 5. Waiting timeout
+    async def waiter_timeout():
+        registry = AsyncSingleFlightRegistry()
+        async def fetch():
+            await asyncio.sleep(1.0)
+            return "never_reached"
+
+        async def run_waiter():
+            await asyncio.sleep(0.005)
+            # Timeout after 0.05 seconds while waiting for the leader
+            await asyncio.wait_for(registry.execute("k5", None), timeout=0.05)
+
+        task1 = asyncio.create_task(registry.execute("k5", fetch))
+        task2 = asyncio.create_task(run_waiter())
+
+        with pytest.raises(asyncio.TimeoutError):
+            await task2
+
+        # Clean up
+        task1.cancel()
+        try:
+            await task1
+        except asyncio.CancelledError:
+            pass
+    loop.run_until_complete(waiter_timeout())
+
+    # 7. Call cancelled
+    async def call_cancelled():
+        registry = AsyncSingleFlightRegistry()
+        fetch_cancelled = False
+
+        async def fetch():
+            nonlocal fetch_cancelled
+            try:
+                await asyncio.sleep(1.0)
+                return "completed"
+            except asyncio.CancelledError:
+                fetch_cancelled = True
+                raise
+
+        task = asyncio.create_task(registry.execute("k6", fetch))
+        await asyncio.sleep(0.005)
+        # Cancel the task
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        # Verify fetch coroutine was NOT cancelled if shielded
+        await asyncio.sleep(0.01) # let loop run
+        assert fetch_cancelled is False
+    loop.run_until_complete(call_cancelled())
+
 def test_warmup_periods_config(monkeypatch):
     from main import warm_up_dashboard_cache, dashboard_cache, generate_dashboard_cache_key
     from mock_data import MOCK_TRANSACTIONS
