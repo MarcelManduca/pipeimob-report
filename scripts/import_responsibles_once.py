@@ -261,7 +261,7 @@ def main():
 
             # Query deals matching this code
             deals = ContractsControlRepository.list_deals_by_property_code(db, code)
-            
+
             if len(deals) == 0:
                 unique_codes_not_found += 1
                 pending_items.append({
@@ -348,7 +348,7 @@ def main():
             # Create backup dir
             backup_dir = os.path.join("backups", f"import_once_{execution_id}")
             os.makedirs(backup_dir, exist_ok=True)
-            
+
             # Save pre-apply snapshot backup
             snapshot_backup = [
                 {
@@ -388,7 +388,7 @@ def main():
                         )
                         if not success:
                             raise ValueError(f"Optimistic lock conflict on transaction_id {tx_id}")
-                        
+
                         ContractsControlRepository.create_history_record(
                             write_db,
                             tx_id,
@@ -399,9 +399,9 @@ def main():
                             prev_ver + 1,
                             actor_sub
                         )
-                    
+
                     applied_count += 1
-                
+
                 # Commit ALL changes in a single atomic commit
                 write_db.commit()
                 print(f"SUCESSO: Transação atômica concluída. {applied_count} alterações aplicadas com sucesso.")

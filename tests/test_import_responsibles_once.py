@@ -55,10 +55,10 @@ MOCK_DEALS = [
 def setup_test_db(monkeypatch):
     monkeypatch.setattr(database, "SessionLocal", TestingSessionLocal)
     monkeypatch.setattr(database, "engine", test_engine)
-    
+
     Base.metadata.drop_all(bind=test_engine)
     Base.metadata.create_all(bind=test_engine)
-    
+
     db = TestingSessionLocal()
     resps = ["Guilherme", "Cristina", "Carol", "Laise"]
     for r in resps:
@@ -198,7 +198,7 @@ def test_ambiguous_property_code_blocking(tmp_path, monkeypatch):
     latest_report_dir = sorted(report_dirs)[-1]
     with open(os.path.join("reports", latest_report_dir, "report.json")) as f:
         data = json.load(f)
-    
+
     assert data["summary"]["database_matching_results"]["unique_codes_ambiguous"] == 1
     assert data["summary"]["database_matching_results"]["deals_eligible"] == 0
 
