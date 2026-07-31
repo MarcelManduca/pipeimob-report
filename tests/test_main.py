@@ -6644,3 +6644,208 @@ def test_contracts_control_creation_concurrency(client_with_db):
 
     finally:
         main.app.dependency_overrides.clear()
+
+
+def test_single_flight_diagnostics_scenarios():
+    import asyncio
+    import pytest
+    from main import single_flight_registry
+
+    # 1. Three parallel requests create exactly one task
+    calls = 0
+    async def fetch():
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(0.1)
+        return "result"
+
+    async def run_parallel():
+        tasks = [
+            single_flight_registry.execute("test_key", fetch),
+            single_flight_registry.execute("test_key", fetch),
+            single_flight_registry.execute("test_key", fetch),
+        ]
+        results = await asyncio.gather(*tasks)
+        return results
+
+    results = asyncio.run(run_parallel())
+    assert results == ["result", "result", "result"]
+    assert calls == 1
+
+    # 2. Owner cancelled does not cancel task
+    calls_cancelled = 0
+    task_started = None
+    async def fetch_cancelled():
+        nonlocal calls_cancelled
+        calls_cancelled += 1
+        task_started.set()
+        await asyncio.sleep(0.2)
+        return "finished"
+
+    async def run_cancelled_owner():
+        nonlocal task_started
+        task_started = asyncio.Event()
+        owner_coro = single_flight_registry.execute("cancel_key", fetch_cancelled)
+        owner_task = asyncio.create_task(owner_coro)
+        await task_started.wait()
+
+        owner_task.cancel()
+        try:
+            await owner_task
+        except asyncio.CancelledError:
+            pass
+
+        shared_task = single_flight_registry.in_flight.get("cancel_key")
+        assert shared_task is not None
+        res = await shared_task
+        assert res == "finished"
+        assert calls_cancelled == 1
+
+    asyncio.run(run_cancelled_owner())
+
+    # 3. Waiter receives same exception
+    async def fetch_fail():
+        await asyncio.sleep(0.05)
+        raise ValueError("fetch_error")
+
+    async def run_waiter_fail():
+        t1 = asyncio.create_task(single_flight_registry.execute("fail_key", fetch_fail))
+        t2 = asyncio.create_task(single_flight_registry.execute("fail_key", fetch_fail))
+        res1, res2 = None, None
+        try:
+            await t1
+        except ValueError as e:
+            res1 = str(e)
+        try:
+            await t2
+        except ValueError as e:
+            res2 = str(e)
+        assert res1 == "fetch_error"
+        assert res2 == "fetch_error"
+
+    asyncio.run(run_waiter_fail())
+
+    # 4. Waiter timeout does not cancel task
+    waiter_timeout_done = None
+    async def fetch_timeout():
+        await asyncio.sleep(0.2)
+        waiter_timeout_done.set()
+        return "timeout_success"
+
+    async def run_waiter_timeout():
+        nonlocal waiter_timeout_done
+        waiter_timeout_done = asyncio.Event()
+        t1 = asyncio.create_task(single_flight_registry.execute("timeout_key", fetch_timeout, timeout=0.05))
+        try:
+            await t1
+            assert False, "Should have timed out"
+        except asyncio.TimeoutError:
+            pass
+
+        assert "timeout_key" in single_flight_registry.in_flight
+        await waiter_timeout_done.wait()
+        assert "timeout_key" not in single_flight_registry.in_flight
+
+    asyncio.run(run_waiter_timeout())
+
+    assert "test_key" not in single_flight_registry.in_flight
+    assert "cancel_key" not in single_flight_registry.in_flight
+    assert "fail_key" not in single_flight_registry.in_flight
+    assert "timeout_key" not in single_flight_registry.in_flight
+
+
+def test_contracts_control_dataset_warming_response(client_with_db):
+    import os
+    from unittest.mock import patch
+    import main
+    from main import contracts_control_cache, generate_contracts_control_cache_key
+    from tests.test_main import client
+
+    old_env = dict(os.environ)
+    os.environ["PIPEIMOB_DATA_MODE"] = "live"
+    os.environ["PIPEIMOB_API_KEY"] = "mock_key"
+    os.environ["PIPEIMOB_SECRET_KEY"] = "mock_secret"
+    os.environ["CONTRACTS_CONTROL_WARMUP_WAIT_SECONDS"] = "0.1"
+    os.environ["CONTRACTS_CONTROL_RETRY_AFTER_SECONDS"] = "20"
+    os.environ["CONTRACTS_CONTROL_MAX_STALE_SECONDS"] = "1"
+
+    cache_key = generate_contracts_control_cache_key("2020-01-01")
+    contracts_control_cache.clear()
+
+    import time
+    def slow_fetch(*args, **kwargs):
+        time.sleep(0.5)
+        return [{"transacao_unique_id_pipeimob": "tx_1"}], 1
+
+    try:
+        with patch("main.fetch_all_pipeimob_transactions", side_effect=slow_fetch):
+            res = client.get("/api/contracts-control/summary?data_inicio=2026-01-01&data_fim=2026-07-30&scope=operations")
+            assert res.status_code == 503
+            assert res.headers.get("Retry-After") == "20"
+            body = res.json()
+            assert body["code"] == "dataset_warming"
+
+            import asyncio
+            async def wait_bg():
+                while "pipeimob:raw" in main.single_flight_registry.in_flight:
+                    await asyncio.sleep(0.05)
+            asyncio.run(wait_bg())
+
+            res2 = client.get("/api/contracts-control/summary?data_inicio=2026-01-01&data_fim=2026-07-30&scope=operations")
+            assert res2.status_code == 200
+
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
+        contracts_control_cache.clear()
+
+
+def test_contracts_control_max_stale_limit_and_fallback(client_with_db):
+    import os
+    import time
+    from unittest.mock import patch
+    import main
+    from main import contracts_control_cache, generate_contracts_control_cache_key
+    from tests.test_main import client
+
+    old_env = dict(os.environ)
+    os.environ["PIPEIMOB_DATA_MODE"] = "live"
+    os.environ["PIPEIMOB_API_KEY"] = "mock_key"
+    os.environ["PIPEIMOB_SECRET_KEY"] = "mock_secret"
+    os.environ["CONTRACTS_CONTROL_WARMUP_WAIT_SECONDS"] = "0.1"
+    os.environ["CONTRACTS_CONTROL_MAX_STALE_SECONDS"] = "2"
+
+    cache_key = generate_contracts_control_cache_key("2020-01-01")
+    contracts_control_cache.clear()
+
+    calls = 0
+    def mock_fetch(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            time.sleep(0.5)
+        return [{"transacao_unique_id_pipeimob": "tx_stale"}], 1
+
+    try:
+        with patch("main.fetch_all_pipeimob_transactions", side_effect=mock_fetch):
+            # First request: force refresh to execute fetch synchronously and warm the cache
+            res = client.get("/api/contracts-control/summary?data_inicio=2026-01-01&data_fim=2026-07-30&scope=operations&refresh=true")
+            assert res.status_code == 200
+
+            now = time.time()
+            contracts_control_cache.cache[cache_key] = (
+                ([{"transacao_unique_id_pipeimob": "tx_expired"}], 1),
+                now - 100,
+                now - 50,
+                now - 10
+            )
+            contracts_control_cache.clear_endpoint_caches()
+
+            res_expired = client.get("/api/contracts-control/summary?data_inicio=2026-01-01&data_fim=2026-07-30&scope=operations")
+            assert res_expired.status_code == 503
+            assert res_expired.json()["code"] == "dataset_warming"
+
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
+        contracts_control_cache.clear()

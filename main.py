@@ -80,27 +80,59 @@ DASHBOARD_CACHE_VERSION = "sales-cycle-v6-vgc-pending-unknown-fix"
 
 class AsyncSingleFlightRegistry:
     def __init__(self):
-        self.lock = asyncio.Lock()
-        self.in_flight = {} # key -> Future
+        self.in_flight = {}  # key -> Task
 
-    async def execute(self, key, fetch_coro, request_id=None, caller_endpoint=None):
+    def get_or_create_task(self, key, fetch_coro):
+        import logging
+        import json
+        logger = logging.getLogger(__name__)
+
+        if key in self.in_flight:
+            return self.in_flight[key]
+
+        async def wrapper():
+            try:
+                return await fetch_coro()
+            finally:
+                current_task = asyncio.current_task()
+                if self.in_flight.get(key) is current_task:
+                    self.in_flight.pop(key, None)
+
+        task = asyncio.create_task(wrapper())
+
+        def done_callback(t):
+            try:
+                exc = t.exception()
+                if exc and not isinstance(exc, asyncio.CancelledError):
+                    logger.error(json.dumps({
+                        "event": "singleflight_task_finished_exception",
+                        "key": str(key),
+                        "exception_class": type(exc).__name__,
+                        "sanitized_message": str(exc)
+                    }))
+            except asyncio.CancelledError:
+                logger.info(json.dumps({
+                    "event": "singleflight_task_finished_cancelled",
+                    "key": str(key)
+                }))
+            except Exception as cb_err:
+                logger.error(json.dumps({
+                    "event": "singleflight_callback_error",
+                    "error": str(cb_err)
+                }))
+
+        task.add_done_callback(done_callback)
+        self.in_flight[key] = task
+        return task
+
+    async def execute(self, key, fetch_coro, request_id=None, caller_endpoint=None, timeout=None):
         import time
         import json
         import logging
-        import sys
         logger = logging.getLogger(__name__)
 
-        future = None
-        is_leader = False
-
-        async with self.lock:
-            if key in self.in_flight:
-                future = self.in_flight[key]
-            else:
-                future = asyncio.get_event_loop().create_future()
-                self.in_flight[key] = future
-                is_leader = True
-
+        is_leader = key not in self.in_flight
+        task = self.get_or_create_task(key, fetch_coro)
         role = "owner" if is_leader else "waiter"
 
         logger.info(json.dumps({
@@ -110,42 +142,20 @@ class AsyncSingleFlightRegistry:
             "singleflight_role": role
         }))
 
-        if is_leader:
-            start_time = time.perf_counter()
-            try:
-                # Shield the fetch coroutine from client cancellation
-                result = await asyncio.shield(fetch_coro())
-                future.set_result((result, None))
-                return result
-            except Exception as e:
-                future.set_result((None, e))
-                raise e
-            finally:
-                duration_ms = (time.perf_counter() - start_time) * 1000
-                exc_type, exc_val, exc_tb = sys.exc_info()
-                logger.info(json.dumps({
-                    "event": "finally_cleanup",
-                    "request_id": request_id,
-                    "caller_endpoint": caller_endpoint,
-                    "singleflight_role": role,
-                    "total_duration_ms": duration_ms,
-                    "exception_class": exc_type.__name__ if exc_type else None,
-                    "sanitized_message": str(exc_val) if exc_val else None
-                }))
-                async with self.lock:
-                    if key in self.in_flight:
-                        del self.in_flight[key]
-        else:
-            # Followers await the shielded Future
-            start_wait = time.perf_counter()
-            logger.info(json.dumps({
-                "event": "singleflight_wait_start",
-                "request_id": request_id,
-                "caller_endpoint": caller_endpoint,
-                "singleflight_role": role
-            }))
+        start_wait = time.perf_counter()
+        logger.info(json.dumps({
+            "event": "singleflight_wait_start",
+            "request_id": request_id,
+            "caller_endpoint": caller_endpoint,
+            "singleflight_role": role,
+            "timeout_configured": timeout
+        }))
 
-            result, err = await asyncio.shield(future)
+        try:
+            if timeout is not None:
+                result = await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+            else:
+                result = await asyncio.shield(task)
 
             wait_duration = (time.perf_counter() - start_wait) * 1000
             logger.info(json.dumps({
@@ -154,16 +164,50 @@ class AsyncSingleFlightRegistry:
                 "caller_endpoint": caller_endpoint,
                 "singleflight_role": role,
                 "wait_duration_ms": wait_duration,
-                "exception_class": type(err).__name__ if err else None,
-                "sanitized_message": str(err) if err else None
+                "status": "success"
             }))
-            if err is not None:
-                raise err
             return result
+        except asyncio.TimeoutError as te:
+            wait_duration = (time.perf_counter() - start_wait) * 1000
+            logger.info(json.dumps({
+                "event": "singleflight_wait_end",
+                "request_id": request_id,
+                "caller_endpoint": caller_endpoint,
+                "singleflight_role": role,
+                "wait_duration_ms": wait_duration,
+                "status": "timeout"
+            }))
+            raise te
+        except asyncio.CancelledError as ce:
+            wait_duration = (time.perf_counter() - start_wait) * 1000
+            logger.info(json.dumps({
+                "event": "singleflight_wait_end",
+                "request_id": request_id,
+                "caller_endpoint": caller_endpoint,
+                "singleflight_role": role,
+                "wait_duration_ms": wait_duration,
+                "status": "cancelled"
+            }))
+            raise ce
+        except Exception as err:
+            wait_duration = (time.perf_counter() - start_wait) * 1000
+            logger.info(json.dumps({
+                "event": "singleflight_wait_end",
+                "request_id": request_id,
+                "caller_endpoint": caller_endpoint,
+                "singleflight_role": role,
+                "wait_duration_ms": wait_duration,
+                "status": "failure",
+                "exception_class": type(err).__name__,
+                "sanitized_message": str(err)
+            }))
+            raise err
+
+    def start_background(self, key, fetch_coro):
+        self.get_or_create_task(key, fetch_coro)
 
     async def is_running(self, key):
-        async with self.lock:
-            return key in self.in_flight
+        return key in self.in_flight
 
 single_flight_registry = AsyncSingleFlightRegistry()
 
@@ -289,6 +333,29 @@ async def integration_unavailable_exception_handler(request: Request, exc: Integ
             "error_code": exc.error_code,
             "data_mode": exc.data_mode,
             "pipeimob_connection": exc.pipeimob_connection
+        }
+    )
+
+from services.contracts_control_exceptions import InvalidSpreadsheetError, DatasetWarmingError
+
+@app.exception_handler(InvalidSpreadsheetError)
+async def invalid_spreadsheet_exception_handler(request: Request, exc: InvalidSpreadsheetError):
+    return JSONResponse(
+        status_code=400,
+        content={
+            "code": "invalid_spreadsheet",
+            "detail": "O arquivo XLSX é inválido ou está corrompido."
+        }
+    )
+
+@app.exception_handler(DatasetWarmingError)
+async def dataset_warming_exception_handler(request: Request, exc: DatasetWarmingError):
+    return JSONResponse(
+        status_code=503,
+        headers={"Retry-After": str(exc.retry_after)},
+        content={
+            "code": "dataset_warming",
+            "detail": "Os dados do Pipeimob estão sendo preparados. Tente novamente em instantes."
         }
     )
 
@@ -4742,12 +4809,20 @@ class ContractsControlCache:
     def get_status(self, key):
         with self.lock:
             if key in self.cache:
-                val, fresh_until, stale_until = self.cache[key]
+                entry = self.cache[key]
                 now = time.time()
+                if len(entry) == 4:
+                    val, fresh_until, stale_until, max_stale_until = entry
+                else:
+                    val, fresh_until, stale_until = entry
+                    max_stale_until = stale_until
+
                 if now <= fresh_until:
                     return val, "fresh"
                 elif now <= stale_until:
                     return val, "stale"
+                elif now <= max_stale_until:
+                    return val, "expired"
                 else:
                     del self.cache[key]
             return None, "miss"
@@ -4759,7 +4834,20 @@ class ContractsControlCache:
     def set(self, key, val, ttl=300):
         with self.lock:
             now = time.time()
-            self.cache[key] = (val, now + ttl, now + ttl + DASHBOARD_STALE_TTL_SECONDS)
+            max_stale_env = os.getenv("CONTRACTS_CONTROL_MAX_STALE_SECONDS")
+            try:
+                max_stale_seconds = int(max_stale_env) if max_stale_env else 86400
+            except ValueError:
+                max_stale_seconds = 86400
+            if max_stale_seconds <= 0:
+                max_stale_seconds = 86400
+
+            self.cache[key] = (
+                val,
+                now + ttl,
+                now + ttl + DASHBOARD_STALE_TTL_SECONDS,
+                now + ttl + max_stale_seconds
+            )
 
     def clear(self):
         with self.lock:
@@ -5080,6 +5168,83 @@ def classify_contracts_control_process(tx: dict, as_of_date_obj: date, end_date_
     res_dict.update(modality_info)
     return res_dict
 
+def _refresh_contracts_control_dataset(request_id=None, caller_endpoint=None):
+    import time
+    import json
+    import logging
+    import os
+    logger = logging.getLogger(__name__)
+    coverage_start = "2020-01-01"
+    cache_key = generate_contracts_control_cache_key(coverage_start)
+
+    api_key = os.getenv("PIPEIMOB_API_KEY").strip()
+    api_secret = os.getenv("PIPEIMOB_SECRET_KEY").strip()
+
+    logger.info(json.dumps({
+        "event": "external_call_start",
+        "request_id": request_id,
+        "caller_endpoint": caller_endpoint,
+        "timeout_configured": PIPEIMOB_HTTP_TIMEOUT_SECONDS
+    }))
+
+    ext_start = time.perf_counter()
+    try:
+        txs, pages = fetch_all_pipeimob_transactions(
+            api_key=api_key,
+            api_secret=api_secret,
+            data_inicio_criacao=coverage_start
+        )
+        ext_duration = (time.perf_counter() - ext_start) * 1000
+
+        logger.info(json.dumps({
+            "event": "external_call_end",
+            "request_id": request_id,
+            "caller_endpoint": caller_endpoint,
+            "external_duration_ms": ext_duration,
+            "external_status": "success",
+            "records_count": len(txs)
+        }))
+    except Exception as err:
+        ext_duration = (time.perf_counter() - ext_start) * 1000
+        logger.info(json.dumps({
+            "event": "external_call_end",
+            "request_id": request_id,
+            "caller_endpoint": caller_endpoint,
+            "external_duration_ms": ext_duration,
+            "external_status": "error",
+            "exception_class": type(err).__name__,
+            "sanitized_message": str(err)
+        }))
+        raise err
+
+    if not txs:
+        raise IntegrationUnavailableError(
+            status_code=503,
+            detail="Pipeimob CRM API returned empty transactions dataset.",
+            error_code="invalid_pipeimob_response",
+            data_mode="live",
+            pipeimob_connection="unavailable"
+        )
+
+    logger.info(json.dumps({
+        "event": "transformation_start",
+        "request_id": request_id,
+        "caller_endpoint": caller_endpoint
+    }))
+
+    trans_start = time.perf_counter()
+    trans_duration = (time.perf_counter() - trans_start) * 1000
+    logger.info(json.dumps({
+        "event": "transformation_end",
+        "request_id": request_id,
+        "caller_endpoint": caller_endpoint,
+        "records_count": len(txs),
+        "transformation_duration_ms": trans_duration
+    }))
+
+    contracts_control_cache.set(cache_key, (txs, pages))
+    return txs, pages
+
 async def load_contracts_control_dataset(
     request_id: Optional[str] = None,
     refresh: bool = False,
@@ -5150,75 +5315,22 @@ async def load_contracts_control_dataset(
     coverage_start = "2020-01-01"
     cache_key = generate_contracts_control_cache_key(coverage_start)
 
-    def sync_fetch():
-        import time as t
-        api_key = os.getenv("PIPEIMOB_API_KEY").strip()
-        api_secret = os.getenv("PIPEIMOB_SECRET_KEY").strip()
+    # Timeouts configuration
+    warmup_wait_env = os.getenv("CONTRACTS_CONTROL_WARMUP_WAIT_SECONDS")
+    try:
+        warmup_wait_seconds = float(warmup_wait_env) if warmup_wait_env else 5.0
+    except ValueError:
+        warmup_wait_seconds = 5.0
+    if warmup_wait_seconds <= 0:
+        warmup_wait_seconds = 5.0
 
-        logger.info(json.dumps({
-            "event": "external_call_start",
-            "request_id": request_id,
-            "caller_endpoint": caller_endpoint,
-            "timeout_configured": PIPEIMOB_HTTP_TIMEOUT_SECONDS
-        }))
-
-        ext_start = t.perf_counter()
-        try:
-            txs, pages = fetch_all_pipeimob_transactions(
-                api_key=api_key,
-                api_secret=api_secret,
-                data_inicio_criacao=coverage_start
-            )
-            ext_duration = (t.perf_counter() - ext_start) * 1000
-
-            logger.info(json.dumps({
-                "event": "external_call_end",
-                "request_id": request_id,
-                "caller_endpoint": caller_endpoint,
-                "external_duration_ms": ext_duration,
-                "external_status": "success",
-                "records_count": len(txs)
-            }))
-        except Exception as err:
-            ext_duration = (t.perf_counter() - ext_start) * 1000
-            logger.info(json.dumps({
-                "event": "external_call_end",
-                "request_id": request_id,
-                "caller_endpoint": caller_endpoint,
-                "external_duration_ms": ext_duration,
-                "external_status": "error",
-                "exception_class": type(err).__name__,
-                "sanitized_message": str(err)
-            }))
-            raise err
-
-        if not txs:
-            raise IntegrationUnavailableError(
-                status_code=503,
-                detail="Pipeimob CRM API returned empty transactions dataset.",
-                error_code="invalid_pipeimob_response",
-                data_mode="live",
-                pipeimob_connection="unavailable"
-            )
-
-        logger.info(json.dumps({
-            "event": "transformation_start",
-            "request_id": request_id,
-            "caller_endpoint": caller_endpoint
-        }))
-
-        trans_start = t.perf_counter()
-        trans_duration = (t.perf_counter() - trans_start) * 1000
-        logger.info(json.dumps({
-            "event": "transformation_end",
-            "request_id": request_id,
-            "caller_endpoint": caller_endpoint,
-            "records_count": len(txs),
-            "transformation_duration_ms": trans_duration
-        }))
-
-        contracts_control_cache.set(cache_key, (txs, pages))
-        return txs, pages
+    retry_after_env = os.getenv("CONTRACTS_CONTROL_RETRY_AFTER_SECONDS")
+    try:
+        retry_after_seconds = int(retry_after_env) if retry_after_env else 15
+    except ValueError:
+        retry_after_seconds = 15
+    if retry_after_seconds <= 0:
+        retry_after_seconds = 15
 
     if refresh:
         logger.info(json.dumps({
@@ -5227,9 +5339,16 @@ async def load_contracts_control_dataset(
             "caller_endpoint": caller_endpoint,
             "cache_status": "miss"
         }))
-        coro = lambda: asyncio.get_event_loop().run_in_executor(None, sync_fetch)
-        live_txs, pages_fetched = await single_flight_registry.execute(cache_key, coro, request_id, caller_endpoint)
-        cache_status = "miss"
+        coro = lambda: asyncio.get_event_loop().run_in_executor(
+            None, _refresh_contracts_control_dataset, request_id, caller_endpoint
+        )
+        try:
+            live_txs, pages_fetched = await single_flight_registry.execute(
+                cache_key, coro, request_id, caller_endpoint, timeout=warmup_wait_seconds
+            )
+            cache_status = "miss"
+        except asyncio.TimeoutError:
+            raise DatasetWarmingError(retry_after=retry_after_seconds)
     else:
         cached_val, status = contracts_control_cache.get_status(cache_key)
         logger.info(json.dumps({
@@ -5241,21 +5360,24 @@ async def load_contracts_control_dataset(
         if status == "fresh":
             live_txs, pages_fetched = cached_val
             cache_status = "fresh"
-        elif status == "stale":
+        elif status in ("stale", "expired"):
             live_txs, pages_fetched = cached_val
             cache_status = "stale"
-            if not await single_flight_registry.is_running(cache_key):
-                async def run_bg_refresh():
-                    try:
-                        c = lambda: asyncio.get_event_loop().run_in_executor(None, sync_fetch)
-                        await single_flight_registry.execute(cache_key, c, request_id, caller_endpoint)
-                    except Exception:
-                        pass
-                asyncio.create_task(run_bg_refresh())
+            coro = lambda: asyncio.get_event_loop().run_in_executor(
+                None, _refresh_contracts_control_dataset, "bg-warmup", "background_refresh"
+            )
+            single_flight_registry.start_background(cache_key, coro)
         else:
-            coro = lambda: asyncio.get_event_loop().run_in_executor(None, sync_fetch)
-            live_txs, pages_fetched = await single_flight_registry.execute(cache_key, coro, request_id, caller_endpoint)
-            cache_status = "miss"
+            coro = lambda: asyncio.get_event_loop().run_in_executor(
+                None, _refresh_contracts_control_dataset, request_id, caller_endpoint
+            )
+            try:
+                live_txs, pages_fetched = await single_flight_registry.execute(
+                    cache_key, coro, request_id, caller_endpoint, timeout=warmup_wait_seconds
+                )
+                cache_status = "miss"
+            except asyncio.TimeoutError:
+                raise DatasetWarmingError(retry_after=retry_after_seconds)
 
     duration_ms = (time.perf_counter() - start_time) * 1000
     logger.info(json.dumps({
@@ -5793,7 +5915,7 @@ async def get_contracts_control_summary(
             request_id=req_id, refresh=bool(refresh), caller_endpoint="/api/contracts-control/summary"
         )
     except Exception as e:
-        if isinstance(e, IntegrationUnavailableError) or isinstance(e, HTTPException):
+        if isinstance(e, (IntegrationUnavailableError, HTTPException, DatasetWarmingError)):
             raise e
         raise IntegrationUnavailableError(
             status_code=503,
@@ -6709,7 +6831,7 @@ async def post_import_responsibles_preview(
         raise HTTPException(status_code=400, detail=str(val_err))
     except Exception as e:
         db.rollback()
-        if isinstance(e, HTTPException):
+        if isinstance(e, (HTTPException, InvalidSpreadsheetError, DatasetWarmingError)):
             raise e
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
     finally:

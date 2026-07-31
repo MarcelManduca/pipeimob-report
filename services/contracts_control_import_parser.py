@@ -4,6 +4,7 @@ import openpyxl
 import hashlib
 import json
 from typing import List, Tuple, Dict, Any, Optional
+from services.contracts_control_exceptions import InvalidSpreadsheetError
 
 MAX_FILE_SIZE_BYTES = int(os.getenv("IMPORT_MAX_FILE_SIZE_BYTES", 5 * 1024 * 1024))
 MAX_SHEETS = int(os.getenv("IMPORT_MAX_SHEETS", 10))
@@ -63,13 +64,13 @@ def map_headers(headers: List[str]) -> Dict[str, Optional[int]]:
 def clean_cell_value(val: Any) -> Optional[str]:
     if val is None:
         return None
-    
+
     # Handle openpyxl float integer check (e.g. 39177.0 -> "39177")
     if isinstance(val, float):
         if val.is_integer():
             return str(int(val))
         return str(val)
-        
+
     s = str(val).strip()
     if s == "":
         return None
@@ -92,14 +93,26 @@ class ContractsControlImportParser:
             rows = ContractsControlImportParser._parse_xlsx(file_path)
         else:
             rows = ContractsControlImportParser._parse_csv(file_path)
-            
+
         return rows
 
     @staticmethod
     def _parse_xlsx(file_path: str) -> List[Dict[str, Any]]:
-        wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+        import zipfile
+        import openpyxl.utils.exceptions
+
+        try:
+            wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+        except (zipfile.BadZipFile, openpyxl.utils.exceptions.InvalidFileException):
+            raise InvalidSpreadsheetError()
+        except KeyError as e:
+            missing_key = str(e)
+            if any(k in missing_key for k in ["xl/workbook.xml", "xl/styles.xml", "[Content_Types].xml"]):
+                raise InvalidSpreadsheetError()
+            raise e
+
         sheets = wb.sheetnames
-        
+
         # Validation: Max sheets
         if len(sheets) > MAX_SHEETS:
             raise ValueError(f"Number of sheets {len(sheets)} exceeds limit of {MAX_SHEETS}.")
@@ -107,22 +120,22 @@ class ContractsControlImportParser:
         parsed_rows = []
         for sheet_name in sheets:
             sheet = wb[sheet_name]
-            
+
             # Validation: Max columns (approximate check by headers or first few rows)
             # Validation: Max rows check
             row_count = 0
             headers = []
             header_map = {}
-            
+
             for r_idx, row in enumerate(sheet.iter_rows(values_only=True), start=1):
                 row_count += 1
                 if row_count > MAX_ROWS:
                     raise ValueError(f"Sheet '{sheet_name}' exceeds the row limit of {MAX_ROWS}.")
-                
+
                 # Check column count
                 if len(row) > MAX_COLUMNS:
                     raise ValueError(f"Row {r_idx} in sheet '{sheet_name}' has {len(row)} columns, exceeding limit of {MAX_COLUMNS}.")
-                
+
                 if r_idx == 1:
                     headers = [str(x) if x is not None else "" for x in row]
                     header_map = map_headers(headers)
@@ -165,12 +178,12 @@ class ContractsControlImportParser:
             reader = csv.reader(f, delimiter=delim)
             row_count = 0
             header_map = {}
-            
+
             for r_idx, row in enumerate(reader, start=1):
                 row_count += 1
                 if row_count > MAX_ROWS:
                     raise ValueError(f"CSV file exceeds the row limit of {MAX_ROWS}.")
-                
+
                 if len(row) > MAX_COLUMNS:
                     raise ValueError(f"Row {r_idx} in CSV has {len(row)} columns, exceeding limit of {MAX_COLUMNS}.")
 

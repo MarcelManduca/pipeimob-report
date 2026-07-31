@@ -49,7 +49,7 @@ def setup_test_db():
             pass
     Base.metadata.create_all(bind=test_engine)
     db = TestingSessionLocal()
-    
+
     # Insert test responsibles
     guilherme = ContractsControlResponsible(
         id=uuid.uuid4(),
@@ -75,9 +75,9 @@ def setup_test_db():
         normalized_name=normalize_responsible_name("InactiveUser"),
         active=False
     )
-    
+
     db.add_all([guilherme, cristina, laise, inactive_resp])
-    
+
     # Insert some manual data for existing attributions
     # tx_sync already synchronized
     db.add(ContractsControlManualData(
@@ -103,7 +103,7 @@ def setup_test_db():
         created_by_sub="test_sub",
         updated_by_sub="test_sub"
     ))
-    
+
     db.commit()
     db.close()
     yield
@@ -226,12 +226,12 @@ def create_in_memory_xlsx(data_sheets: dict) -> bytes:
     wb = Workbook()
     # Remove default sheet
     wb.remove(wb.active)
-    
+
     for sheet_name, rows in data_sheets.items():
         ws = wb.create_sheet(title=sheet_name)
         for r in rows:
             ws.append(r)
-            
+
     out = io.BytesIO()
     wb.save(out)
     return out.getvalue()
@@ -267,22 +267,22 @@ def test_spreadsheet_import_preview_full_suite():
         ]
     }
     xlsx_bytes = create_in_memory_xlsx(sheets)
-    
+
     headers = {"Authorization": f"Bearer {mock_admin_token}"}
     response = client.post(
         "/api/contracts-control/imports/responsibles/preview",
         headers=headers,
         files={"file": ("import_test.xlsx", xlsx_bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
     )
-    
+
     assert response.status_code == 200
     res = response.json()
-    
+
     assert "preview_id" in res
     assert res["source_format"] == "xlsx"
     assert res["parser_version"] == "1.0"
     assert res["status"] == "ready"
-    
+
     summary = res["summary"]
     assert summary["source_rows_count"] == 6
     assert summary["unique_property_codes_count"] == 6
@@ -290,7 +290,7 @@ def test_spreadsheet_import_preview_full_suite():
     assert summary["already_synchronized_count"] == 1 # 10002
     assert summary["to_change_count"] == 1 # 10003
     assert summary["to_clear_count"] == 1 # 10004
-    
+
     items = res["items"]
     # Check that it returned page 1 items
     assert len(items) <= 25
@@ -303,18 +303,18 @@ def test_spreadsheet_import_csv():
         ["10006", "Laise", "Rodrigo"] # Ambiguous
     ]
     csv_bytes = create_in_memory_csv(csv_rows, delimiter=";")
-    
+
     headers = {"Authorization": f"Bearer {mock_admin_token}"}
     response = client.post(
         "/api/contracts-control/imports/responsibles/preview",
         headers=headers,
         files={"file": ("import_test.csv", csv_bytes, "text/csv")}
     )
-    
+
     assert response.status_code == 200
     res = response.json()
     assert res["source_format"] == "csv"
-    
+
     summary = res["summary"]
     assert summary["source_rows_count"] == 2
     assert summary["ambiguous_match_count"] == 1 # 10006
@@ -338,22 +338,22 @@ def test_spreadsheet_duplicate_same_and_conflict_rules():
         ]
     }
     xlsx_bytes = create_in_memory_xlsx(sheets)
-    
+
     headers = {"Authorization": f"Bearer {mock_admin_token}"}
     response = client.post(
         "/api/contracts-control/imports/responsibles/preview",
         headers=headers,
         files={"file": ("import_dup_test.xlsx", xlsx_bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
     )
-    
+
     assert response.status_code == 200
     res = response.json()
     summary = res["summary"]
-    
+
     # Overrides 39177 resolves to Guilherme (which matches mock crm candidate tx_override_39177_1)
     # Since 39177 was conflicting but resolved, duplicate_conflict_count handles it
     assert summary["duplicate_conflict_count"] >= 1
-    
+
     # Verify that duplicate conflict items are returned with status source_conflict
     items = res["items"]
     # Verify 10002 is source_conflict
@@ -372,20 +372,20 @@ def test_spreadsheet_ana_cristina_invalid_source_row():
         ]
     }
     xlsx_bytes = create_in_memory_xlsx(sheets)
-    
+
     headers = {"Authorization": f"Bearer {mock_admin_token}"}
     response = client.post(
         "/api/contracts-control/imports/responsibles/preview",
         headers=headers,
         files={"file": ("import_ana.xlsx", xlsx_bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
     )
-    
+
     assert response.status_code == 200
     res = response.json()
     summary = res["summary"]
-    
+
     assert summary["invalid_source_row_count"] >= 1
-    
+
     items = res["items"]
     item_ana = next(i for i in items if i["codigo_imovel"] == "10001")
     assert item_ana["decisao_proposta"] == "invalid_source_row"
@@ -402,21 +402,21 @@ def test_unregistered_and_inactive_responsibles():
         ]
     }
     xlsx_bytes = create_in_memory_xlsx(sheets)
-    
+
     headers = {"Authorization": f"Bearer {mock_admin_token}"}
     response = client.post(
         "/api/contracts-control/imports/responsibles/preview",
         headers=headers,
         files={"file": ("import_invalid_resps.xlsx", xlsx_bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
     )
-    
+
     assert response.status_code == 200
     res = response.json()
-    
+
     items = res["items"]
     item_nonexistent = next(i for i in items if i["codigo_imovel"] == "10001")
     assert item_nonexistent["decisao_proposta"] == "responsible_not_registered"
-    
+
     item_inactive = next(i for i in items if i["codigo_imovel"] == "10002")
     assert item_inactive["decisao_proposta"] == "responsible_inactive"
 
@@ -441,7 +441,7 @@ def test_import_expired_preview_410():
     # 11. Para preview expirado, usar HTTP 410 Gone
     db = TestingSessionLocal()
     from models.contracts_control import ContractsControlImportPreview
-    
+
     expired_preview = ContractsControlImportPreview(
         id=uuid.uuid4(),
         source_filename="expired.xlsx",
@@ -458,7 +458,7 @@ def test_import_expired_preview_410():
     db.commit()
     expired_id = str(expired_preview.id)
     db.close()
-    
+
     headers = {"Authorization": f"Bearer {mock_admin_token}"}
     response = client.get(
         f"/api/contracts-control/imports/responsibles/previews/{expired_id}",
@@ -471,7 +471,7 @@ def test_import_limits_excess():
     # sheets limit exceeds
     sheets_overflow = {f"Aba_{i}": [["CODIGO IMOVEL", "RESPONSÁVEL"]] for i in range(12)}
     xlsx_bytes = create_in_memory_xlsx(sheets_overflow)
-    
+
     headers = {"Authorization": f"Bearer {mock_admin_token}"}
     response = client.post(
         "/api/contracts-control/imports/responsibles/preview",
@@ -491,12 +491,12 @@ def test_import_no_write_and_bi_isolation():
         ]
     }
     xlsx_bytes = create_in_memory_xlsx(sheets)
-    
+
     db = TestingSessionLocal()
     manual_data_count_before = db.query(ContractsControlManualData).count()
     history_count_before = db.query(ContractsControlManualDataHistory).count()
     db.close()
-    
+
     headers = {"Authorization": f"Bearer {mock_admin_token}"}
     response = client.post(
         "/api/contracts-control/imports/responsibles/preview",
@@ -504,7 +504,7 @@ def test_import_no_write_and_bi_isolation():
         files={"file": ("import_no_write.xlsx", xlsx_bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
     )
     assert response.status_code == 200
-    
+
     db = TestingSessionLocal()
     manual_data_count_after = db.query(ContractsControlManualData).count()
     history_count_after = db.query(ContractsControlManualDataHistory).count()
@@ -606,3 +606,103 @@ def test_import_preview_cache_empty_warmup_failure(monkeypatch):
     )
     assert response.status_code == 503
     assert "Pipeimob CRM API returned empty" in response.json()["detail"]
+
+
+def test_xlsx_invalid_non_zip_file(monkeypatch):
+    from main import contracts_control_cache
+    contracts_control_cache.set(("pipeimob:raw", "contracts-control-v1-data-inicio-venda", "2020-01-01"), ([], 1))
+    mock_admin_token = "mock_admin_jwt"
+    monkeypatch.setattr("main.require_contracts_control_temporary_admin", lambda *args, **kwargs: "mock_sub")
+
+    headers = {"Authorization": f"Bearer {mock_admin_token}"}
+    response = client.post(
+        "/api/contracts-control/imports/responsibles/preview",
+        headers=headers,
+        files={"file": ("corrupted.xlsx", b"invalid file content", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
+    )
+    assert response.status_code == 400
+    body = response.json()
+    assert body["code"] == "invalid_spreadsheet"
+    assert "inválido ou está corrompido" in body["detail"]
+
+
+def test_xlsx_valid_zip_but_not_xlsx(monkeypatch):
+    import zipfile
+    from main import contracts_control_cache
+    contracts_control_cache.set(("pipeimob:raw", "contracts-control-v1-data-inicio-venda", "2020-01-01"), ([], 1))
+    mock_admin_token = "mock_admin_jwt"
+    monkeypatch.setattr("main.require_contracts_control_temporary_admin", lambda *args, **kwargs: "mock_sub")
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w") as zf:
+        zf.writestr("dummy.txt", "not a spreadsheet")
+
+    headers = {"Authorization": f"Bearer {mock_admin_token}"}
+    response = client.post(
+        "/api/contracts-control/imports/responsibles/preview",
+        headers=headers,
+        files={"file": ("valid_zip_bad_xlsx.xlsx", zip_buffer.getvalue(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
+    )
+    assert response.status_code == 400
+    body = response.json()
+    assert body["code"] == "invalid_spreadsheet"
+
+
+def test_keyerror_not_related_to_workbook_not_masked(monkeypatch):
+    from main import contracts_control_cache
+    contracts_control_cache.set(("pipeimob:raw", "contracts-control-v1-data-inicio-venda", "2020-01-01"), ([], 1))
+    mock_admin_token = "mock_admin_jwt"
+    monkeypatch.setattr("main.require_contracts_control_temporary_admin", lambda *args, **kwargs: "mock_sub")
+
+    def mock_load(*args, **kwargs):
+        raise KeyError("some_other_key")
+    monkeypatch.setattr("openpyxl.load_workbook", mock_load)
+
+    import zipfile
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w") as zf:
+        zf.writestr("dummy.txt", "not a spreadsheet")
+
+    headers = {"Authorization": f"Bearer {mock_admin_token}"}
+    response = client.post(
+        "/api/contracts-control/imports/responsibles/preview",
+        headers=headers,
+        files={"file": ("keyerror_test.xlsx", zip_buffer.getvalue(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
+    )
+    assert response.status_code == 500
+    assert "Unexpected error" in response.json()["detail"]
+
+
+def test_preview_does_not_persist(monkeypatch):
+    from main import contracts_control_cache
+    from models.contracts_control import ContractsControlResponsible, ContractsControlManualData
+
+    contracts_control_cache.set(("pipeimob:raw", "contracts-control-v1-data-inicio-venda", "2020-01-01"), ([], 1))
+    mock_admin_token = "mock_admin_jwt"
+    monkeypatch.setattr("main.require_contracts_control_temporary_admin", lambda *args, **kwargs: "mock_sub")
+
+    sheets = {
+        "Sheet1": [
+            ["CODIGO IMOVEL", "RESPONSÁVEL"],
+            ["10001", "Guilherme"]
+        ]
+    }
+    xlsx_bytes = create_in_memory_xlsx(sheets)
+
+    db = TestingSessionLocal()
+    try:
+        initial_responsibles = db.query(ContractsControlResponsible).count()
+        initial_manual_data = db.query(ContractsControlManualData).count()
+
+        headers = {"Authorization": f"Bearer {mock_admin_token}"}
+        response = client.post(
+            "/api/contracts-control/imports/responsibles/preview",
+            headers=headers,
+            files={"file": ("valid.xlsx", xlsx_bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
+        )
+        assert response.status_code == 200
+
+        assert db.query(ContractsControlResponsible).count() == initial_responsibles
+        assert db.query(ContractsControlManualData).count() == initial_manual_data
+    finally:
+        db.close()
