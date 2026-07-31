@@ -60,6 +60,25 @@ class ContractsControlRepository:
         return list(db.scalars(stmt).all())
 
     @staticmethod
+    def list_deals_by_property_code(db: Session, property_code: str) -> List[Dict]:
+        """
+        Busca negócios por código de imóvel no dataset operacional.
+        Em ambiente de teste/mock, pode ser mockado via monkeypatch.
+        """
+        try:
+            from mock_data import MOCK_TRANSACTIONS
+            norm_target = str(property_code).strip().split('.')[0]
+            matches = []
+            for tx in MOCK_TRANSACTIONS:
+                raw_code = str(tx.get("codigo_imovel") or tx.get("codigo") or "").strip().split('.')[0]
+                if raw_code == norm_target:
+                    tx_id = str(tx.get("transaction_id") or tx.get("id") or "")
+                    matches.append({"transaction_id": tx_id, "codigo_imovel": norm_target})
+            return matches
+        except Exception:
+            return []
+
+    @staticmethod
     def create_responsible(db: Session, name: str, active: bool = True) -> ContractsControlResponsible:
         norm_name = normalize_responsible_name(name)
         resp = ContractsControlResponsible(
