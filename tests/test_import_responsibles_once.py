@@ -8,6 +8,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -27,8 +28,6 @@ from scripts.import_responsibles_once import (
     calculate_file_sha256,
 )
 
-from sqlalchemy.pool import StaticPool
-
 SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
 test_engine = create_engine(
     SQLALCHEMY_DATABASE_URL,
@@ -42,7 +41,6 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
 
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
 
-# Mock deal dataset for testing property code matching via Pipeimob API dataset
 MOCK_PIPEIMOB_DATASET = [
     {"transaction_id": "tx_41170", "codigo_imovel": "41170"},
     {"transaction_id": "tx_40947", "codigo_imovel": "40947"},
@@ -76,7 +74,6 @@ def setup_test_db(monkeypatch):
     db.commit()
     db.close()
 
-    # Mock load_contracts_control_dataset to return MOCK_PIPEIMOB_DATASET
     async def mock_load_dataset(*args, **kwargs):
         return "demo", "synthetic_mock", MOCK_PIPEIMOB_DATASET, 1, "miss"
 
@@ -88,7 +85,7 @@ def setup_test_db(monkeypatch):
 
 
 # -----------------------------------------------------------------------------
-# 1. Test Normalization
+# 1. Test Normalization (.0)
 # -----------------------------------------------------------------------------
 def test_code_normalization():
     assert normalize_code("41170.0") == "41170"
@@ -150,9 +147,97 @@ def test_explicit_overrides_application(tmp_path):
 
 
 # -----------------------------------------------------------------------------
-# 5. Test Cold Cache Triggers Pipeimob Loading & Single Match
+# 5. Test Duplicate Codes Consolidation (Same Responsible)
 # -----------------------------------------------------------------------------
-def test_cold_cache_triggers_pipeimob_loading_and_single_match(tmp_path, monkeypatch):
+def test_duplicate_codes_same_responsible(tmp_path):
+    csv_file = tmp_path / "test_dup_same.csv"
+    csv_file.write_text(
+        "source_sheet,source_row,codigo_imovel,responsavel,gerente\n"
+        "1° TRIMESTRE,2,41170,Carol,GERENTE 1\n"
+        "2° TRIMESTRE,5,41170,Carol,GERENTE 1\n",
+        encoding="utf-8"
+    )
+    parsed = parse_consolidated_csv(str(csv_file))
+    assert parsed["proposed_by_code"]["41170"] == "Carol"
+    assert len(parsed["conflict_codes"]) == 0
+    assert parsed["source_counts"]["duplicate_occurrences"] == 1
+
+
+# -----------------------------------------------------------------------------
+# 6. Test Conflict Codes Blocking (Different Responsibles)
+# -----------------------------------------------------------------------------
+def test_conflict_codes_different_responsibles(tmp_path):
+    csv_file = tmp_path / "test_conflict.csv"
+    csv_file.write_text(
+        "source_sheet,source_row,codigo_imovel,responsavel,gerente\n"
+        "1° TRIMESTRE,2,41170,Carol,GERENTE 1\n"
+        "2° TRIMESTRE,5,41170,Cristina,GERENTE 2\n",
+        encoding="utf-8"
+    )
+    parsed = parse_consolidated_csv(str(csv_file))
+    assert "41170" not in parsed["proposed_by_code"]
+    assert len(parsed["conflict_codes"]) == 1
+    assert parsed["conflict_codes"][0]["codigo_imovel"] == "41170"
+
+
+# -----------------------------------------------------------------------------
+# 7. Test Cold Cache Triggers Pipeimob Loading
+# -----------------------------------------------------------------------------
+def test_cold_cache_triggers_pipeimob_loading(tmp_path, monkeypatch):
+    monkeypatch.setenv("APP_ENV", "staging")
+    csv_file = tmp_path / "test_cold.csv"
+    csv_file.write_text(
+        "source_sheet,source_row,codigo_imovel,responsavel,gerente\n"
+        "1° TRIMESTRE,2,41170,Carol,GERENTE 1\n",
+        encoding="utf-8"
+    )
+    called = False
+
+    async def mock_load_dataset(*args, **kwargs):
+        nonlocal called
+        called = True
+        return "demo", "synthetic_mock", MOCK_PIPEIMOB_DATASET, 1, "miss"
+
+    monkeypatch.setattr(main_module, "load_contracts_control_dataset", mock_load_dataset)
+
+    from scripts.import_responsibles_once import main as run_import
+    with patch("sys.argv", ["import_responsibles_once.py", "--file", str(csv_file), "--target", "staging"]):
+        run_import()
+
+    assert called is True
+
+
+# -----------------------------------------------------------------------------
+# 8. Test CLI Independent of Web Server Memory Cache
+# -----------------------------------------------------------------------------
+def test_cli_independent_of_web_server_cache(tmp_path, monkeypatch):
+    monkeypatch.setenv("APP_ENV", "staging")
+    csv_file = tmp_path / "test_indep.csv"
+    csv_file.write_text(
+        "source_sheet,source_row,codigo_imovel,responsavel,gerente\n"
+        "1° TRIMESTRE,2,41170,Carol,GERENTE 1\n",
+        encoding="utf-8"
+    )
+    # Ensure contracts_control_cache in main is cleared/empty
+    monkeypatch.setattr(main_module, "contracts_control_cache", MagicMock(get_status=lambda k: (None, "empty")))
+
+    from scripts.import_responsibles_once import main as run_import
+    with patch("sys.argv", ["import_responsibles_once.py", "--file", str(csv_file), "--target", "staging"]):
+        run_import()
+
+    report_dirs = [d for d in os.listdir("reports") if d.startswith("import_once_")]
+    latest_report_dir = sorted(report_dirs, key=lambda d: os.path.getctime(os.path.join("reports", d)))[-1]
+    with open(os.path.join("reports", latest_report_dir, "report.json")) as f:
+        data = json.load(f)
+
+    db_results = data["summary"]["database_matching_results"]
+    assert db_results["unique_codes_single_match"] == 1
+
+
+# -----------------------------------------------------------------------------
+# 9. Test Single Deal Matching
+# -----------------------------------------------------------------------------
+def test_matching_single_deal(tmp_path, monkeypatch):
     monkeypatch.setenv("APP_ENV", "staging")
     csv_file = tmp_path / "test_single.csv"
     csv_file.write_text(
@@ -176,9 +261,9 @@ def test_cold_cache_triggers_pipeimob_loading_and_single_match(tmp_path, monkeyp
 
 
 # -----------------------------------------------------------------------------
-# 6. Test Ambiguous Property Code Matching (>1 Deal)
+# 10. Test Ambiguous Deals Matching (>1 Deal)
 # -----------------------------------------------------------------------------
-def test_ambiguous_property_code_matching(tmp_path, monkeypatch):
+def test_matching_ambiguous_deals(tmp_path, monkeypatch):
     monkeypatch.setenv("APP_ENV", "staging")
     csv_file = tmp_path / "test_ambig.csv"
     csv_file.write_text(
@@ -201,7 +286,7 @@ def test_ambiguous_property_code_matching(tmp_path, monkeypatch):
 
 
 # -----------------------------------------------------------------------------
-# 7. Test Really Absent Property Code
+# 11. Test Really Absent Property Code
 # -----------------------------------------------------------------------------
 def test_really_absent_property_code(tmp_path, monkeypatch):
     monkeypatch.setenv("APP_ENV", "staging")
@@ -226,7 +311,7 @@ def test_really_absent_property_code(tmp_path, monkeypatch):
 
 
 # -----------------------------------------------------------------------------
-# 8. Test Dataset Extraction Failure Aborts Dry-Run (No Code Not Found Conversion)
+# 12. Test Dataset Extraction Failure Aborts Dry-Run
 # -----------------------------------------------------------------------------
 def test_dataset_extraction_failure_aborts_dry_run(tmp_path, monkeypatch):
     monkeypatch.setenv("APP_ENV", "staging")
@@ -250,7 +335,7 @@ def test_dataset_extraction_failure_aborts_dry_run(tmp_path, monkeypatch):
 
 
 # -----------------------------------------------------------------------------
-# 9. Test Unexpected Empty Dataset Aborts Execution
+# 13. Test Unexpected Empty Dataset Aborts Execution
 # -----------------------------------------------------------------------------
 def test_unexpected_empty_dataset_aborts(tmp_path, monkeypatch):
     monkeypatch.setenv("APP_ENV", "staging")
@@ -274,7 +359,7 @@ def test_unexpected_empty_dataset_aborts(tmp_path, monkeypatch):
 
 
 # -----------------------------------------------------------------------------
-# 10. Test Dry-Run Zero Writes
+# 14. Test Dry-Run Zero Writes
 # -----------------------------------------------------------------------------
 def test_dry_run_zero_writes(tmp_path, monkeypatch):
     monkeypatch.setenv("APP_ENV", "staging")
@@ -298,11 +383,82 @@ def test_dry_run_zero_writes(tmp_path, monkeypatch):
 
 
 # -----------------------------------------------------------------------------
-# 11. Test Rollback Monotonic Version & History
+# 15. Test APP_ENV Mismatch Abortion
 # -----------------------------------------------------------------------------
-def test_rollback_monotonic_version(tmp_path, monkeypatch):
+def test_app_env_mismatch_abortion(tmp_path, monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    csv_file = tmp_path / "test_env_mismatch.csv"
+    csv_file.write_text("source_sheet,source_row,codigo_imovel,responsavel,gerente\n", encoding="utf-8")
+
+    from scripts.import_responsibles_once import main as run_import
+    with patch("sys.argv", ["import_responsibles_once.py", "--file", str(csv_file), "--target", "staging"]):
+        with pytest.raises(SystemExit) as exc:
+            run_import()
+        assert exc.value.code == 1
+
+
+# -----------------------------------------------------------------------------
+# 16. Test APP_ENV Missing or Unknown Abortion
+# -----------------------------------------------------------------------------
+def test_app_env_missing_or_unknown_abortion(tmp_path, monkeypatch):
+    monkeypatch.delenv("APP_ENV", raising=False)
+    csv_file = tmp_path / "test_env_missing.csv"
+    csv_file.write_text("source_sheet,source_row,codigo_imovel,responsavel,gerente\n", encoding="utf-8")
+
+    from scripts.import_responsibles_once import main as run_import
+    with patch("sys.argv", ["import_responsibles_once.py", "--file", str(csv_file), "--target", "staging"]):
+        with pytest.raises(SystemExit) as exc:
+            run_import()
+        assert exc.value.code == 1
+
+
+# -----------------------------------------------------------------------------
+# 17. Test Hash Mismatch Abortion
+# -----------------------------------------------------------------------------
+def test_hash_mismatch_abortion(tmp_path, monkeypatch):
     monkeypatch.setenv("APP_ENV", "staging")
-    csv_file = tmp_path / "test_apply_rollback.csv"
+    csv_file = tmp_path / "test_hash_mismatch.csv"
+    csv_file.write_text("source_sheet,source_row,codigo_imovel,responsavel,gerente\n", encoding="utf-8")
+
+    from scripts.import_responsibles_once import main as run_import
+    with patch("sys.argv", [
+        "import_responsibles_once.py",
+        "--file", str(csv_file),
+        "--target", "staging",
+        "--apply",
+        "--expected-source-sha256", "0000000000000000000000000000000000000000000000000000000000000000"
+    ]):
+        with pytest.raises(SystemExit) as exc:
+            run_import()
+        assert exc.value.code == 1
+
+
+# -----------------------------------------------------------------------------
+# 18. Test Apply Missing Expected SHA256 Abortion
+# -----------------------------------------------------------------------------
+def test_apply_missing_expected_sha256_abortion(tmp_path, monkeypatch):
+    monkeypatch.setenv("APP_ENV", "staging")
+    csv_file = tmp_path / "test_apply_no_hash.csv"
+    csv_file.write_text("source_sheet,source_row,codigo_imovel,responsavel,gerente\n", encoding="utf-8")
+
+    from scripts.import_responsibles_once import main as run_import
+    with patch("sys.argv", [
+        "import_responsibles_once.py",
+        "--file", str(csv_file),
+        "--target", "staging",
+        "--apply"
+    ]):
+        with pytest.raises(SystemExit) as exc:
+            run_import()
+        assert exc.value.code == 1
+
+
+# -----------------------------------------------------------------------------
+# 19. Test Rollback Monotonic Version Full (v1 -> v2 -> v3)
+# -----------------------------------------------------------------------------
+def test_rollback_monotonic_version_full(tmp_path, monkeypatch):
+    monkeypatch.setenv("APP_ENV", "staging")
+    csv_file = tmp_path / "test_full_rollback.csv"
     csv_file.write_text(
         "source_sheet,source_row,codigo_imovel,responsavel,gerente\n"
         "1° TRIMESTRE,2,41170,Carol,GERENTE 1\n",
@@ -310,10 +466,28 @@ def test_rollback_monotonic_version(tmp_path, monkeypatch):
     )
     file_sha256 = calculate_file_sha256(str(csv_file))
 
+    # 1. Create pre-existing manual data record at version 1 (assigned to Guilherme)
+    db = TestingSessionLocal()
+    guilherme = db.query(ContractsControlResponsible).filter_by(name="Guilherme").first()
+    guilherme_id = guilherme.id
+    carol = db.query(ContractsControlResponsible).filter_by(name="Carol").first()
+    carol_id = carol.id
+
+    md = ContractsControlManualData(
+        transaction_id="tx_41170",
+        responsible_id=guilherme_id,
+        version=1,
+        created_by_sub="user_pre_existing",
+        updated_by_sub="user_pre_existing"
+    )
+    db.add(md)
+    db.commit()
+    db.close()
+
     from scripts.import_responsibles_once import main as run_import
     from scripts.rollback_responsibles_once import main as run_rollback
 
-    # 1. Apply import
+    # 2. Apply import -> updates responsible to Carol, bumps version to 2
     with patch("sys.argv", [
         "import_responsibles_once.py",
         "--file", str(csv_file),
@@ -324,16 +498,15 @@ def test_rollback_monotonic_version(tmp_path, monkeypatch):
         run_import()
 
     db = TestingSessionLocal()
-    md = db.query(ContractsControlManualData).filter_by(transaction_id="tx_41170").first()
-    assert md is not None
-    assert md.version == 1
-    applied_resp_id = str(md.responsible_id)
+    md_v2 = db.query(ContractsControlManualData).filter_by(transaction_id="tx_41170").first()
+    assert md_v2.responsible_id == carol_id
+    assert md_v2.version == 2
     db.close()
 
     backup_dirs = [d for d in os.listdir("backups") if d.startswith("import_once_")]
-    exec_id = sorted(backup_dirs)[-1].replace("import_once_", "")
+    exec_id = sorted(backup_dirs, key=lambda d: os.path.getctime(os.path.join("backups", d)))[-1].replace("import_once_", "")
 
-    # 2. Run Rollback
+    # 3. Run Rollback -> restores Guilherme, bumps version to 3 (v2 -> v3, never decrements!)
     with patch("sys.argv", [
         "rollback_responsibles_once.py",
         "--execution-id", exec_id,
@@ -343,22 +516,30 @@ def test_rollback_monotonic_version(tmp_path, monkeypatch):
         run_rollback()
 
     db = TestingSessionLocal()
-    md_after = db.query(ContractsControlManualData).filter_by(transaction_id="tx_41170").first()
-    assert md_after.responsible_id is None
-    assert md_after.version == 2
+    md_v3 = db.query(ContractsControlManualData).filter_by(transaction_id="tx_41170").first()
+    assert md_v3.responsible_id == guilherme_id # Restored Guilherme!
+    assert md_v3.version == 3 # Monotonic increment (2 -> 3)!
 
     hist_entries = db.query(ContractsControlManualDataHistory).filter_by(transaction_id="tx_41170").order_by(ContractsControlManualDataHistory.new_version).all()
     assert len(hist_entries) == 2
-    assert hist_entries[1].previous_version == 1
-    assert hist_entries[1].new_version == 2
-    assert hist_entries[1].previous_value == applied_resp_id
-    assert hist_entries[1].new_value is None
+
+    # Import history entry (v1 -> v2)
+    assert hist_entries[0].previous_version == 1
+    assert hist_entries[0].new_version == 2
+    assert hist_entries[0].previous_value == str(guilherme_id)
+    assert hist_entries[0].new_value == str(carol_id)
+
+    # Rollback history entry (v2 -> v3)
+    assert hist_entries[1].previous_version == 2
+    assert hist_entries[1].new_version == 3
+    assert hist_entries[1].previous_value == str(carol_id)
+    assert hist_entries[1].new_value == str(guilherme_id)
     assert hist_entries[1].changed_by_sub == f"rollback:{exec_id}"
     db.close()
 
 
 # -----------------------------------------------------------------------------
-# 12. Test Rollback Conflict On Subsequent Change
+# 20. Test Rollback Conflict On Subsequent Change
 # -----------------------------------------------------------------------------
 def test_rollback_conflict_on_subsequent_change(tmp_path, monkeypatch):
     monkeypatch.setenv("APP_ENV", "staging")
@@ -388,14 +569,14 @@ def test_rollback_conflict_on_subsequent_change(tmp_path, monkeypatch):
     guilherme_resp_id = guilherme_resp.id
     md = db.query(ContractsControlManualData).filter_by(transaction_id="tx_41170").first()
     md.responsible_id = guilherme_resp_id
-    md.version = 2
+    md.version = 2 # User modified responsible in UI to Guilherme after import
     db.commit()
     db.close()
 
     backup_dirs = [d for d in os.listdir("backups") if d.startswith("import_once_")]
-    exec_id = sorted(backup_dirs)[-1].replace("import_once_", "")
+    exec_id = sorted(backup_dirs, key=lambda d: os.path.getctime(os.path.join("backups", d)))[-1].replace("import_once_", "")
 
-    # 2. Run Rollback
+    # 2. Run Rollback -> Detects conflict and preserves user's modification!
     with patch("sys.argv", [
         "rollback_responsibles_once.py",
         "--execution-id", exec_id,
@@ -406,13 +587,13 @@ def test_rollback_conflict_on_subsequent_change(tmp_path, monkeypatch):
 
     db = TestingSessionLocal()
     md_after = db.query(ContractsControlManualData).filter_by(transaction_id="tx_41170").first()
-    assert md_after.responsible_id == guilherme_resp_id
-    assert md_after.version == 2
+    assert md_after.responsible_id == guilherme_resp_id # Preserved Guilherme!
+    assert md_after.version == 2 # Unchanged version!
     db.close()
 
 
 # -----------------------------------------------------------------------------
-# 13. Test Atomic Rollback On Write Failure
+# 21. Test Atomic Rollback On Write Failure
 # -----------------------------------------------------------------------------
 def test_atomic_rollback_on_write_failure(tmp_path, monkeypatch):
     monkeypatch.setenv("APP_ENV", "staging")
