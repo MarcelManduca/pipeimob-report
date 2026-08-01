@@ -71,6 +71,10 @@ def main():
         database.init_db(db_url)
 
     if database.engine and "sqlite" in str(database.engine.url):
+        from sqlalchemy import event
+        @event.listens_for(database.engine, "connect")
+        def set_sqlite_pragma(dbapi_connection, connection_record):
+            dbapi_connection.create_function("btrim", 1, lambda s: s.strip() if s is not None else None)
         from models.contracts_control import Base
         Base.metadata.create_all(bind=database.engine)
 

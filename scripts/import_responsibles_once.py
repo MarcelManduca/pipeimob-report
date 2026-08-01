@@ -264,14 +264,20 @@ def main():
         db_url = os.getenv("DATABASE_URL") or "sqlite:///test.db"
         database.init_db(db_url)
 
+    if database.engine and "sqlite" in str(database.engine.url):
+        from sqlalchemy import event
+        @event.listens_for(database.engine, "connect")
+        def set_sqlite_pragma(dbapi_connection, connection_record):
+            dbapi_connection.create_function("btrim", 1, lambda s: s.strip() if s is not None else None)
+        from models.contracts_control import Base
+        Base.metadata.create_all(bind=database.engine)
+
     db = database.SessionLocal()
     try:
         resp_name_to_id: Dict[str, uuid.UUID] = {}
         for r_name in VALID_RESPONSIBLES:
             resp_obj = ContractsControlRepository.get_responsible_by_normalized_name(db, normalize_responsible_name(r_name))
             if not resp_obj and "sqlite" in str(database.engine.url):
-                from models.contracts_control import Base
-                Base.metadata.create_all(bind=database.engine)
                 resp_obj = ContractsControlRepository.create_responsible(db, r_name, active=True)
                 db.commit()
             if resp_obj and resp_obj.active:
