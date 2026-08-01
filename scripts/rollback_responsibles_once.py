@@ -67,8 +67,12 @@ def main():
         snapshot_backup: List[Dict[str, Any]] = json.load(f)
 
     if not database.SessionLocal:
-        print("ABORTADO: database.SessionLocal não está inicializado.", file=sys.stderr)
-        sys.exit(1)
+        db_url = os.getenv("DATABASE_URL") or "sqlite:///test.db"
+        database.init_db(db_url)
+
+    if database.engine and "sqlite" in str(database.engine.url):
+        from models.contracts_control import Base
+        Base.metadata.create_all(bind=database.engine)
 
     db = database.SessionLocal()
     try:

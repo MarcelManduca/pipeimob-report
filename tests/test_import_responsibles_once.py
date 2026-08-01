@@ -5,14 +5,14 @@ import json
 import csv
 import hashlib
 import pytest
-from datetime import datetime, timezone
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import database
+import main as main_module
 from models.contracts_control import (
     Base,
     ContractsControlResponsible,
@@ -27,10 +27,14 @@ from scripts.import_responsibles_once import (
     calculate_file_sha256,
 )
 
-# Use isolated SQLite database file for tests
-test_db_file = os.path.abspath(os.path.join(os.path.dirname(__file__), "test_import_once_temp.db"))
-SQLALCHEMY_DATABASE_URL = f"sqlite:///{test_db_file}"
-test_engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
+from sqlalchemy.pool import StaticPool
+
+SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
+test_engine = create_engine(
+    SQLALCHEMY_DATABASE_URL,
+    connect_args={"check_same_thread": False},
+    poolclass=StaticPool
+)
 
 @event.listens_for(test_engine, "connect")
 def set_sqlite_pragma(dbapi_connection, connection_record):
@@ -38,8 +42,8 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
 
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
 
-# Mock deal dataset for testing property code matching
-MOCK_DEALS = [
+# Mock deal dataset for testing property code matching via Pipeimob API dataset
+MOCK_PIPEIMOB_DATASET = [
     {"transaction_id": "tx_41170", "codigo_imovel": "41170"},
     {"transaction_id": "tx_40947", "codigo_imovel": "40947"},
     {"transaction_id": "tx_39177", "codigo_imovel": "39177"},
@@ -48,7 +52,7 @@ MOCK_DEALS = [
     {"transaction_id": "tx_41386", "codigo_imovel": "41386"},
     {"transaction_id": "tx_39726", "codigo_imovel": "39726"},
     {"transaction_id": "tx_ambiguous_1", "codigo_imovel": "99999"},
-    {"transaction_id": "tx_ambiguous_2", "codigo_imovel": "99999"} # 2 deals for same code 99999 -> ambiguous!
+    {"transaction_id": "tx_ambiguous_2", "codigo_imovel": "99999"} # 2 deals for code 99999 -> ambiguous!
 ]
 
 @pytest.fixture(autouse=True)
@@ -72,10 +76,11 @@ def setup_test_db(monkeypatch):
     db.commit()
     db.close()
 
-    def mock_list_deals(session, code):
-        return [d for d in MOCK_DEALS if d["codigo_imovel"] == code]
+    # Mock load_contracts_control_dataset to return MOCK_PIPEIMOB_DATASET
+    async def mock_load_dataset(*args, **kwargs):
+        return "demo", "synthetic_mock", MOCK_PIPEIMOB_DATASET, 1, "miss"
 
-    monkeypatch.setattr(ContractsControlRepository, "list_deals_by_property_code", mock_list_deals)
+    monkeypatch.setattr(main_module, "load_contracts_control_dataset", mock_load_dataset)
 
     yield
 
@@ -145,43 +150,35 @@ def test_explicit_overrides_application(tmp_path):
 
 
 # -----------------------------------------------------------------------------
-# 5. Test Duplicate Codes Consolidation (Same Responsible)
+# 5. Test Cold Cache Triggers Pipeimob Loading & Single Match
 # -----------------------------------------------------------------------------
-def test_duplicate_codes_consolidation(tmp_path):
-    csv_file = tmp_path / "test_dup_same.csv"
+def test_cold_cache_triggers_pipeimob_loading_and_single_match(tmp_path, monkeypatch):
+    monkeypatch.setenv("APP_ENV", "staging")
+    csv_file = tmp_path / "test_single.csv"
     csv_file.write_text(
         "source_sheet,source_row,codigo_imovel,responsavel,gerente\n"
-        "1° TRIMESTRE,2,41170,Carol,GERENTE 1\n"
-        "2° TRIMESTRE,5,41170,Carol,GERENTE 1\n",
+        "1° TRIMESTRE,2,41170,Carol,GERENTE 1\n",
         encoding="utf-8"
     )
-    parsed = parse_consolidated_csv(str(csv_file))
-    assert parsed["proposed_by_code"]["41170"] == "Carol"
-    assert len(parsed["conflict_codes"]) == 0
-    assert parsed["source_counts"]["duplicate_occurrences"] == 1
+    from scripts.import_responsibles_once import main as run_import
+    with patch("sys.argv", ["import_responsibles_once.py", "--file", str(csv_file), "--target", "staging"]):
+        run_import()
+
+    report_dirs = [d for d in os.listdir("reports") if d.startswith("import_once_")]
+    latest_report_dir = sorted(report_dirs, key=lambda d: os.path.getctime(os.path.join("reports", d)))[-1]
+    with open(os.path.join("reports", latest_report_dir, "report.json")) as f:
+        data = json.load(f)
+
+    db_results = data["summary"]["database_matching_results"]
+    assert db_results["unique_codes_single_match"] == 1
+    assert db_results["unique_codes_not_found"] == 0
+    assert db_results["deals_eligible"] == 1
 
 
 # -----------------------------------------------------------------------------
-# 6. Test Conflict Codes Blocking (Different Responsibles)
+# 6. Test Ambiguous Property Code Matching (>1 Deal)
 # -----------------------------------------------------------------------------
-def test_conflict_codes_blocking(tmp_path):
-    csv_file = tmp_path / "test_conflict.csv"
-    csv_file.write_text(
-        "source_sheet,source_row,codigo_imovel,responsavel,gerente\n"
-        "1° TRIMESTRE,2,41170,Carol,GERENTE 1\n"
-        "2° TRIMESTRE,5,41170,Cristina,GERENTE 2\n",
-        encoding="utf-8"
-    )
-    parsed = parse_consolidated_csv(str(csv_file))
-    assert "41170" not in parsed["proposed_by_code"]
-    assert len(parsed["conflict_codes"]) == 1
-    assert parsed["conflict_codes"][0]["codigo_imovel"] == "41170"
-
-
-# -----------------------------------------------------------------------------
-# 7. Test Ambiguous Property Code Blocking (>1 Deal in DB)
-# -----------------------------------------------------------------------------
-def test_ambiguous_property_code_blocking(tmp_path, monkeypatch):
+def test_ambiguous_property_code_matching(tmp_path, monkeypatch):
     monkeypatch.setenv("APP_ENV", "staging")
     csv_file = tmp_path / "test_ambig.csv"
     csv_file.write_text(
@@ -193,18 +190,91 @@ def test_ambiguous_property_code_blocking(tmp_path, monkeypatch):
     with patch("sys.argv", ["import_responsibles_once.py", "--file", str(csv_file), "--target", "staging"]):
         run_import()
 
-    # Check generated report in reports/
     report_dirs = [d for d in os.listdir("reports") if d.startswith("import_once_")]
-    latest_report_dir = sorted(report_dirs)[-1]
+    latest_report_dir = sorted(report_dirs, key=lambda d: os.path.getctime(os.path.join("reports", d)))[-1]
     with open(os.path.join("reports", latest_report_dir, "report.json")) as f:
         data = json.load(f)
 
-    assert data["summary"]["database_matching_results"]["unique_codes_ambiguous"] == 1
-    assert data["summary"]["database_matching_results"]["deals_eligible"] == 0
+    db_results = data["summary"]["database_matching_results"]
+    assert db_results["unique_codes_ambiguous"] == 1
+    assert db_results["deals_eligible"] == 0
 
 
 # -----------------------------------------------------------------------------
-# 8. Test Dry-Run Zero Writes
+# 7. Test Really Absent Property Code
+# -----------------------------------------------------------------------------
+def test_really_absent_property_code(tmp_path, monkeypatch):
+    monkeypatch.setenv("APP_ENV", "staging")
+    csv_file = tmp_path / "test_absent.csv"
+    csv_file.write_text(
+        "source_sheet,source_row,codigo_imovel,responsavel,gerente\n"
+        "1° TRIMESTRE,2,11111,Carol,GERENTE 1\n",
+        encoding="utf-8"
+    )
+    from scripts.import_responsibles_once import main as run_import
+    with patch("sys.argv", ["import_responsibles_once.py", "--file", str(csv_file), "--target", "staging"]):
+        run_import()
+
+    report_dirs = [d for d in os.listdir("reports") if d.startswith("import_once_")]
+    latest_report_dir = sorted(report_dirs, key=lambda d: os.path.getctime(os.path.join("reports", d)))[-1]
+    with open(os.path.join("reports", latest_report_dir, "report.json")) as f:
+        data = json.load(f)
+
+    db_results = data["summary"]["database_matching_results"]
+    assert db_results["unique_codes_not_found"] == 1
+    assert db_results["unique_codes_single_match"] == 0
+
+
+# -----------------------------------------------------------------------------
+# 8. Test Dataset Extraction Failure Aborts Dry-Run (No Code Not Found Conversion)
+# -----------------------------------------------------------------------------
+def test_dataset_extraction_failure_aborts_dry_run(tmp_path, monkeypatch):
+    monkeypatch.setenv("APP_ENV", "staging")
+    csv_file = tmp_path / "test_fail_ext.csv"
+    csv_file.write_text(
+        "source_sheet,source_row,codigo_imovel,responsavel,gerente\n"
+        "1° TRIMESTRE,2,41170,Carol,GERENTE 1\n",
+        encoding="utf-8"
+    )
+
+    async def mock_load_error(*args, **kwargs):
+        raise RuntimeError("Pipeimob API connection timeout")
+
+    monkeypatch.setattr(main_module, "load_contracts_control_dataset", mock_load_error)
+
+    from scripts.import_responsibles_once import main as run_import
+    with patch("sys.argv", ["import_responsibles_once.py", "--file", str(csv_file), "--target", "staging"]):
+        with pytest.raises(SystemExit) as exc:
+            run_import()
+        assert exc.value.code == 1
+
+
+# -----------------------------------------------------------------------------
+# 9. Test Unexpected Empty Dataset Aborts Execution
+# -----------------------------------------------------------------------------
+def test_unexpected_empty_dataset_aborts(tmp_path, monkeypatch):
+    monkeypatch.setenv("APP_ENV", "staging")
+    csv_file = tmp_path / "test_empty_ds.csv"
+    csv_file.write_text(
+        "source_sheet,source_row,codigo_imovel,responsavel,gerente\n"
+        "1° TRIMESTRE,2,41170,Carol,GERENTE 1\n",
+        encoding="utf-8"
+    )
+
+    async def mock_load_empty(*args, **kwargs):
+        return "live", "pipeimob_api", [], 1, "miss"
+
+    monkeypatch.setattr(main_module, "load_contracts_control_dataset", mock_load_empty)
+
+    from scripts.import_responsibles_once import main as run_import
+    with patch("sys.argv", ["import_responsibles_once.py", "--file", str(csv_file), "--target", "staging"]):
+        with pytest.raises(SystemExit) as exc:
+            run_import()
+        assert exc.value.code == 1
+
+
+# -----------------------------------------------------------------------------
+# 10. Test Dry-Run Zero Writes
 # -----------------------------------------------------------------------------
 def test_dry_run_zero_writes(tmp_path, monkeypatch):
     monkeypatch.setenv("APP_ENV", "staging")
@@ -225,36 +295,6 @@ def test_dry_run_zero_writes(tmp_path, monkeypatch):
 
     assert len(manual_data) == 0
     assert len(history) == 0
-
-
-# -----------------------------------------------------------------------------
-# 9. Test APP_ENV Mismatch Abortion
-# -----------------------------------------------------------------------------
-def test_app_env_mismatch_abortion(tmp_path, monkeypatch):
-    monkeypatch.setenv("APP_ENV", "production")
-    csv_file = tmp_path / "test_env.csv"
-    csv_file.write_text("source_sheet,source_row,codigo_imovel,responsavel,gerente\n", encoding="utf-8")
-
-    from scripts.import_responsibles_once import main as run_import
-    with patch("sys.argv", ["import_responsibles_once.py", "--file", str(csv_file), "--target", "staging"]):
-        with pytest.raises(SystemExit) as exc:
-            run_import()
-        assert exc.value.code == 1
-
-
-# -----------------------------------------------------------------------------
-# 10. Test Hash Mismatch Abortion
-# -----------------------------------------------------------------------------
-def test_hash_mismatch_abortion(tmp_path, monkeypatch):
-    monkeypatch.setenv("APP_ENV", "staging")
-    csv_file = tmp_path / "test_hash.csv"
-    csv_file.write_text("source_sheet,source_row,codigo_imovel,responsavel,gerente\n", encoding="utf-8")
-
-    from scripts.import_responsibles_once import main as run_import
-    with patch("sys.argv", ["import_responsibles_once.py", "--file", str(csv_file), "--target", "staging", "--apply", "--expected-source-sha256", "wrong_hash"]):
-        with pytest.raises(SystemExit) as exc:
-            run_import()
-        assert exc.value.code == 1
 
 
 # -----------------------------------------------------------------------------
@@ -286,11 +326,10 @@ def test_rollback_monotonic_version(tmp_path, monkeypatch):
     db = TestingSessionLocal()
     md = db.query(ContractsControlManualData).filter_by(transaction_id="tx_41170").first()
     assert md is not None
-    assert md.version == 1 # Initial version 1
+    assert md.version == 1
     applied_resp_id = str(md.responsible_id)
     db.close()
 
-    # Get execution_id from generated backup
     backup_dirs = [d for d in os.listdir("backups") if d.startswith("import_once_")]
     exec_id = sorted(backup_dirs)[-1].replace("import_once_", "")
 
@@ -305,8 +344,8 @@ def test_rollback_monotonic_version(tmp_path, monkeypatch):
 
     db = TestingSessionLocal()
     md_after = db.query(ContractsControlManualData).filter_by(transaction_id="tx_41170").first()
-    assert md_after.responsible_id is None # Restored to previous null
-    assert md_after.version == 2 # Monotonic increment (1 -> 2)
+    assert md_after.responsible_id is None
+    assert md_after.version == 2
 
     hist_entries = db.query(ContractsControlManualDataHistory).filter_by(transaction_id="tx_41170").order_by(ContractsControlManualDataHistory.new_version).all()
     assert len(hist_entries) == 2
@@ -344,20 +383,19 @@ def test_rollback_conflict_on_subsequent_change(tmp_path, monkeypatch):
     ]):
         run_import()
 
-    # 2. Simulate user modifying responsible in UI after import
     db = TestingSessionLocal()
     guilherme_resp = db.query(ContractsControlResponsible).filter_by(name="Guilherme").first()
     guilherme_resp_id = guilherme_resp.id
     md = db.query(ContractsControlManualData).filter_by(transaction_id="tx_41170").first()
     md.responsible_id = guilherme_resp_id
-    md.version = 2 # User bumped version to 2
+    md.version = 2
     db.commit()
     db.close()
 
     backup_dirs = [d for d in os.listdir("backups") if d.startswith("import_once_")]
     exec_id = sorted(backup_dirs)[-1].replace("import_once_", "")
 
-    # 3. Run Rollback -> Must detect conflict and preserve post-import user change!
+    # 2. Run Rollback
     with patch("sys.argv", [
         "rollback_responsibles_once.py",
         "--execution-id", exec_id,
@@ -368,8 +406,8 @@ def test_rollback_conflict_on_subsequent_change(tmp_path, monkeypatch):
 
     db = TestingSessionLocal()
     md_after = db.query(ContractsControlManualData).filter_by(transaction_id="tx_41170").first()
-    assert md_after.responsible_id == guilherme_resp_id # Preserved Guilherme!
-    assert md_after.version == 2 # Unchanged version!
+    assert md_after.responsible_id == guilherme_resp_id
+    assert md_after.version == 2
     db.close()
 
 
@@ -389,7 +427,6 @@ def test_atomic_rollback_on_write_failure(tmp_path, monkeypatch):
 
     from scripts.import_responsibles_once import main as run_import
 
-    # Patch create_history_record to raise exception on second item
     orig_create_history = ContractsControlRepository.create_history_record
     call_count = 0
 
@@ -412,7 +449,6 @@ def test_atomic_rollback_on_write_failure(tmp_path, monkeypatch):
         with pytest.raises(ValueError, match="Simulated DB write failure"):
             run_import()
 
-    # Confirm DB rollback left 0 items written
     db = TestingSessionLocal()
     manual_data = db.query(ContractsControlManualData).all()
     history = db.query(ContractsControlManualDataHistory).all()

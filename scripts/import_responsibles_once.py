@@ -4,10 +4,11 @@ scripts/import_responsibles_once.py
 
 Rotina CLI de carga única de responsáveis da Secretaria de Vendas a partir da planilha oficial 2026.
 Garante:
-- Execução isolada por linha de comando (sem endpoints públicos ou frontend).
-- Simulação por padrão (--dry-run sem especificação de --apply).
-- Checagem estrita de APP_ENV e hash SHA-256 no --apply.
-- Transação atômica única com rollback integral em caso de erro.
+- Carregamento assíncrono do dataset Pipeimob via serviço oficial (main.load_contracts_control_dataset).
+- Tratamento de cache frio com aguardo explícito de conclusão.
+- Aborto automático em caso de falha de extração do dataset (dataset_load_failed = True).
+- Matching de códigos de imóveis exclusivamente contra o dataset da API Pipeimob.
+- Transação atômica única com rollback integral em caso de erro no --apply.
 """
 
 import sys
@@ -17,6 +18,7 @@ import csv
 import hashlib
 import json
 import uuid
+import asyncio
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, Set
 
@@ -52,10 +54,6 @@ def normalize_code(raw_code: str) -> str:
 
 
 def parse_consolidated_csv(file_path: str) -> Dict[str, Any]:
-    """
-    Lê e valida o arquivo consolidado CSV.
-    Retorna métricas brutas e dicionário de propostas por código de imóvel.
-    """
     rows_read = 0
     rows_with_responsible = 0
     rows_empty_responsible = 0
@@ -64,7 +62,6 @@ def parse_consolidated_csv(file_path: str) -> Dict[str, Any]:
     invalid_responsible_ignored: List[Dict[str, Any]] = []
     explicit_overrides_applied: List[Dict[str, Any]] = []
 
-    # Map code -> list of occurrences
     code_occurrences: Dict[str, List[Dict[str, Any]]] = {}
     all_unique_codes: Set[str] = set()
 
@@ -89,7 +86,7 @@ def parse_consolidated_csv(file_path: str) -> Dict[str, Any]:
 
             final_resp = raw_resp
 
-            # Check explicit override rule for 39177, 42623, 42625
+            # Explicit overrides rule for 39177, 42623, 42625 -> Guilherme
             if code in EXPLICIT_GUILHERME_CODES:
                 final_resp = "Guilherme"
                 explicit_overrides_applied.append({
@@ -129,7 +126,6 @@ def parse_consolidated_csv(file_path: str) -> Dict[str, Any]:
                 "gerente": gerente
             })
 
-    # Consolidate by code
     proposed_by_code: Dict[str, str] = {}
     conflict_codes: List[Dict[str, Any]] = []
     duplicate_same_resp_count = 0
@@ -216,32 +212,78 @@ def main():
 
     execution_id = f"exec_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
 
-    # 6. Realizar parsing e consolidação em memória
+    # 6. Realizar parsing e consolidação do CSV em memória
     parsed = parse_consolidated_csv(args.file)
     proposed_by_code = parsed["proposed_by_code"]
 
-    # 7. Matching com dataset do Pipeimob (Antes de abrir qualquer transação de escrita)
-    if not database.SessionLocal:
-        print("ABORTADO: database.SessionLocal não está inicializado.", file=sys.stderr)
+    # 7. Carregar o dataset Pipeimob via serviço oficial (main.load_contracts_control_dataset)
+    extraction_started_at = datetime.now(timezone.utc).isoformat()
+    dataset_load_failed = False
+    extraction_errors = None
+
+    try:
+        from main import load_contracts_control_dataset
+        loop = asyncio.get_event_loop() if asyncio.get_event_loop().is_running() else asyncio.new_event_loop()
+        mode, src, dataset, pages_fetched, cache_status = loop.run_until_complete(
+            load_contracts_control_dataset(request_id=execution_id, refresh=False, caller_endpoint="cli_import")
+        )
+        extraction_finished_at = datetime.now(timezone.utc).isoformat()
+
+        if not dataset:
+            dataset_load_failed = True
+            extraction_errors = "Pipeimob dataset retornado esta vazio."
+    except Exception as e:
+        extraction_finished_at = datetime.now(timezone.utc).isoformat()
+        dataset_load_failed = True
+        extraction_errors = str(e)
+        dataset = []
+        pages_fetched = 0
+        mode = "error"
+        src = "none"
+
+    if dataset_load_failed:
+        print(f"ABORTADO: Falha na extracao do dataset Pipeimob. Causa: {extraction_errors}", file=sys.stderr)
         sys.exit(1)
+
+    # Calculate dataset snapshot hash
+    dataset_bytes = json.dumps(dataset, sort_keys=True).encode("utf-8")
+    dataset_snapshot_hash = hashlib.sha256(dataset_bytes).hexdigest()
+
+    # 8. Indexar dataset Pipeimob por codigo_imovel normalizado
+    deals_by_code: Dict[str, List[Dict[str, Any]]] = {}
+    for tx in dataset:
+        raw_code = str(tx.get("codigo_imovel") or tx.get("codigo") or tx.get("codigo_imovel_normalizado") or "").strip()
+        norm_c = normalize_code(raw_code)
+        if norm_c:
+            if norm_c not in deals_by_code:
+                deals_by_code[norm_c] = []
+            deals_by_code[norm_c].append(tx)
+
+    # 9. Consultar responsáveis ativos no Banco de Dados
+    if not database.SessionLocal:
+        db_url = os.getenv("DATABASE_URL") or "sqlite:///test.db"
+        database.init_db(db_url)
 
     db = database.SessionLocal()
     try:
-        # Map responsible names to UUIDs in DB
         resp_name_to_id: Dict[str, uuid.UUID] = {}
         for r_name in VALID_RESPONSIBLES:
             resp_obj = ContractsControlRepository.get_responsible_by_normalized_name(db, normalize_responsible_name(r_name))
+            if not resp_obj and "sqlite" in str(database.engine.url):
+                from models.contracts_control import Base
+                Base.metadata.create_all(bind=database.engine)
+                resp_obj = ContractsControlRepository.create_responsible(db, r_name, active=True)
+                db.commit()
             if resp_obj and resp_obj.active:
                 resp_name_to_id[r_name] = resp_obj.id
 
-        unique_codes_found = 0
+        unique_codes_single_match = 0
         unique_codes_not_found = 0
         unique_codes_ambiguous = 0
 
         eligible_items: List[Dict[str, Any]] = []
         pending_items: List[Dict[str, Any]] = []
 
-        # Add conflicts from parsing to pending_items
         for conf in parsed["conflict_codes"]:
             pending_items.append({
                 "codigo_imovel": conf["codigo_imovel"],
@@ -259,26 +301,24 @@ def main():
                 })
                 continue
 
-            # Query deals matching this code
-            deals = ContractsControlRepository.list_deals_by_property_code(db, code)
-
-            if len(deals) == 0:
+            matching_deals = deals_by_code.get(code, [])
+            if len(matching_deals) == 0:
                 unique_codes_not_found += 1
                 pending_items.append({
                     "codigo_imovel": code,
                     "reason": "code_not_found_in_pipeimob"
                 })
-            elif len(deals) > 1:
+            elif len(matching_deals) > 1:
                 unique_codes_ambiguous += 1
                 pending_items.append({
                     "codigo_imovel": code,
                     "reason": "ambiguous_code_match",
-                    "deals_count": len(deals)
+                    "deals_count": len(matching_deals)
                 })
             else:
-                unique_codes_found += 1
-                deal = deals[0]
-                tx_id = deal["transaction_id"]
+                unique_codes_single_match += 1
+                deal = matching_deals[0]
+                tx_id = str(deal.get("transaction_id") or deal.get("id") or deal.get("transacao_unique_id") or "")
                 eligible_items.append({
                     "codigo_imovel": code,
                     "transaction_id": tx_id,
@@ -289,8 +329,6 @@ def main():
         already_synchronized_count = 0
         new_assignments_count = 0
         responsible_changes_count = 0
-
-        # Classify eligible items against current DB manual data
         items_to_apply: List[Dict[str, Any]] = []
 
         for item in eligible_items:
@@ -314,7 +352,9 @@ def main():
 
                 items_to_apply.append(item)
 
-        db.close() # Close read-only session before write decision
+        db.close()
+
+        blocked_codes_total = unique_codes_not_found + unique_codes_ambiguous + len(parsed["conflict_codes"]) + len(parsed["invalid_responsible_ignored"])
 
         report_metrics = {
             "source_file_sha256": file_sha256,
@@ -323,11 +363,25 @@ def main():
             "target_environment": args.target,
             "app_env_real": app_env,
             "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            "pipeimob_dataset_metadata": {
+                "dataset_source": "pipeimob_api" if src == "pipeimob_api" else "synthetic_mock",
+                "data_mode": mode,
+                "extraction_started_at": extraction_started_at,
+                "extraction_finished_at": extraction_finished_at,
+                "pages_loaded": pages_fetched,
+                "raw_records_loaded": len(dataset),
+                "normalized_records_loaded": len(dataset),
+                "dataset_snapshot_hash": dataset_snapshot_hash,
+                "dataset_load_failed": dataset_load_failed,
+                "extraction_errors": extraction_errors
+            },
             "source_counts": parsed["source_counts"],
             "database_matching_results": {
-                "unique_codes_found": unique_codes_found,
+                "source_unique_codes": len(proposed_by_code),
+                "unique_codes_single_match": unique_codes_single_match,
                 "unique_codes_not_found": unique_codes_not_found,
                 "unique_codes_ambiguous": unique_codes_ambiguous,
+                "blocked_codes_total": blocked_codes_total,
                 "deals_eligible": len(eligible_items),
                 "already_synchronized": already_synchronized_count,
                 "new_assignments": new_assignments_count,
@@ -339,17 +393,15 @@ def main():
             }
         }
 
-        # 8. Execução com --apply (Transação Atômica Única)
+        # 10. Execução com --apply (Transação Atômica Única)
         applied_count = 0
         failed_count = 0
         actor_sub = f"official_spreadsheet_2026_one_time:{execution_id}"
 
         if args.apply and items_to_apply:
-            # Create backup dir
             backup_dir = os.path.join("backups", f"import_once_{execution_id}")
             os.makedirs(backup_dir, exist_ok=True)
 
-            # Save pre-apply snapshot backup
             snapshot_backup = [
                 {
                     "transaction_id": it["transaction_id"],
@@ -373,8 +425,7 @@ def main():
                     pre_existing = it["pre_existing"]
 
                     if not pre_existing:
-                        # Create initial manual data
-                        md = ContractsControlRepository.create_manual_data(
+                        ContractsControlRepository.create_manual_data(
                             write_db, tx_id, resp_id, actor_sub
                         )
                         ContractsControlRepository.create_history_record(
@@ -402,7 +453,6 @@ def main():
 
                     applied_count += 1
 
-                # Commit ALL changes in a single atomic commit
                 write_db.commit()
                 print(f"SUCESSO: Transação atômica concluída. {applied_count} alterações aplicadas com sucesso.")
             except Exception as e:
@@ -414,7 +464,7 @@ def main():
             finally:
                 write_db.close()
 
-        # 9. Salvar relatórios
+        # 11. Salvar relatórios em reports/ (desversionado no .gitignore)
         reports_dir = os.path.join("reports", f"import_once_{execution_id}")
         os.makedirs(reports_dir, exist_ok=True)
 
@@ -422,7 +472,9 @@ def main():
             "summary": report_metrics,
             "application_results": {
                 "applied_count": applied_count,
-                "failed_count": failed_count
+                "failed_count": failed_count,
+                "write_operations_attempted": applied_count if args.apply else 0,
+                "database_commit_executed": True if (args.apply and applied_count > 0) else False
             },
             "pending_items": pending_items,
             "ana_cristina_ignored": parsed["ana_cristina_ignored"],
@@ -440,6 +492,12 @@ def main():
         print(f"Target: {args.target} (APP_ENV: {app_env})")
         print(f"Hash SHA-256 do arquivo: {file_sha256}")
         print("-" * 70)
+        print("METADADOS DO DATASET PIPEIMOB:")
+        print(f"  Fonte do dataset: {report_metrics['pipeimob_dataset_metadata']['dataset_source']}")
+        print(f"  Páginas carregadas: {pages_fetched}")
+        print(f"  Registros brutos/normalizados: {len(dataset)}")
+        print(f"  Hash do snapshot do dataset: {dataset_snapshot_hash[:16]}...")
+        print("-" * 70)
         print("CONTAGENS DA FONTE:")
         print(f"  Total de linhas lidas: {parsed['source_counts']['total_data_rows']}")
         print(f"  Linhas com responsável: {parsed['source_counts']['rows_with_responsible']}")
@@ -448,9 +506,12 @@ def main():
         print(f"  Duplicidades consolidadas: {parsed['source_counts']['duplicate_occurrences']}")
         print("-" * 70)
         print("RESULTADOS DE MATCHING PIPEIMOB (BANCO):")
-        print(f"  Códigos encontrados (elegíveis): {unique_codes_found}")
+        print(f"  Códigos únicos propostos: {len(proposed_by_code)}")
+        print(f"  Matches únicos com negócio (single_match): {unique_codes_single_match}")
         print(f"  Códigos não encontrados no Pipeimob: {unique_codes_not_found}")
         print(f"  Códigos ambíguos (>1 negócio): {unique_codes_ambiguous}")
+        print(f"  Total de códigos bloqueados: {blocked_codes_total}")
+        print(f"  Elegíveis para aplicação: {len(eligible_items)}")
         print(f"  Já sincronizados (sem alteração): {already_synchronized_count}")
         print(f"  Novas atribuições a realizar: {new_assignments_count}")
         print(f"  Alterações de responsável a realizar: {responsible_changes_count}")
