@@ -1034,13 +1034,15 @@ def test_supabase_jwt_validation_claims_and_unsafe_jwks():
     # 3. JWKS empty / unavailable -> HTTP 503 Service Unavailable
     os.environ["SUPABASE_JWKS_URL"] = "https://mock.supabase.co/auth/v1/.well-known/jwks.json"
     try:
-        jwks_client = TestClient(app, headers={"Authorization": f"Bearer {mock_token}"})
+        rs256_mock_token = "eyJhbGciOiJSUzI1NiIsImtpZCI6Im1vY2tfa2lkIn0.eyJzdWIiOiJ1c2VyLTEyMyIsInJvbGUiOiJhdXRoZW50aWNhdGVkIiwiZW1haWwiOiJ0ZXN0QHRlc3QuY29tIiwiZXhwIjo5OTk5OTk5OTk5fQ.c2lnbmF0dXJl"
+        jwks_client = TestClient(app, headers={"Authorization": f"Bearer {rs256_mock_token}"})
         res = jwks_client.get("/api/dashboard/summary")
         assert res.status_code == 503
         assert res.json()["detail"] == "Supabase project does not expose asymmetric JWT signing keys."
         assert res.json()["error_code"] == "supabase_jwks_unavailable"
     finally:
         os.environ.pop("SUPABASE_JWKS_URL", None)
+
 
     # 4. Missing sub claim -> HTTP 401
     no_sub_token = create_mock_jwt(sub=None)
@@ -1074,13 +1076,14 @@ def test_disallowed_algorithm_returns_401(mock_get_jwk_client):
         mock_jwk_client.get_signing_key_from_jwt.return_value = mock_key
         mock_get_jwk_client.return_value = mock_jwk_client
 
-        # Create token signed with HS256
-        hs256_token = create_mock_jwt(alg="HS256")
-        hs256_client = TestClient(app, headers={"Authorization": f"Bearer {hs256_token}"})
+        # Create token signed with disallowed algorithm HS512
+        disallowed_token = create_mock_jwt(alg="HS512")
+        disallowed_client = TestClient(app, headers={"Authorization": f"Bearer {disallowed_token}"})
 
-        res = hs256_client.get("/api/dashboard/summary")
+        res = disallowed_client.get("/api/dashboard/summary")
         assert res.status_code == 401
         assert "Invalid or expired access token." in res.json()["detail"]
+
     finally:
         os.environ.pop("SUPABASE_JWKS_URL", None)
 
@@ -1130,19 +1133,21 @@ def test_antifallback_production_mode_imports_mock():
 
 @patch("main.get_jwk_client")
 def test_jwt_kid_desconhecido_retorna_401(mock_get_jwk_client):
+    if verify_backend_api_key in app.dependency_overrides:
+        del app.dependency_overrides[verify_backend_api_key]
     os.environ["SUPABASE_JWKS_URL"] = "https://mock.supabase.co/auth/v1/.well-known/jwks.json"
     os.environ["PIPEIMOB_DATA_MODE"] = "demo"
     try:
-        mock_client = MagicMock()
-        mock_key = MagicMock()
-        mock_key.kid = "some_valid_kid"
         mock_jwk_set = MagicMock()
+        mock_key = MagicMock()
+        mock_key.kid = "other_kid"
         mock_jwk_set.keys = [mock_key]
+        mock_client = MagicMock()
         mock_client.get_jwk_set.return_value = mock_jwk_set
         mock_client.get_signing_key_from_jwt.side_effect = Exception("Signing key not found")
         mock_get_jwk_client.return_value = mock_client
 
-        token = create_mock_jwt()
+        token = "eyJhbGciOiJSUzI1NiIsImtpZCI6InVua25vd25fa2lkIn0.eyJzdWIiOiJ1c2VyLTEyMyIsInJvbGUiOiJhdXRoZW50aWNhdGVkIiwiZW1haWwiOiJ0ZXN0QHRlc3QuY29tIiwiZXhwIjo5OTk5OTk5OTk5fQ.c2lnbmF0dXJl"
         test_client = TestClient(app, headers={"Authorization": f"Bearer {token}"})
         res = test_client.get("/api/dashboard/summary")
         assert res.status_code == 401
@@ -1151,6 +1156,8 @@ def test_jwt_kid_desconhecido_retorna_401(mock_get_jwk_client):
         os.environ.pop("SUPABASE_JWKS_URL", None)
 
 def test_jwt_token_aleatorio_retorna_401():
+    if verify_backend_api_key in app.dependency_overrides:
+        del app.dependency_overrides[verify_backend_api_key]
     os.environ["SUPABASE_JWKS_URL"] = "https://mock.supabase.co/auth/v1/.well-known/jwks.json"
     try:
         test_client = TestClient(app, headers={"Authorization": "Bearer random_string_xyz"})
@@ -1162,19 +1169,21 @@ def test_jwt_token_aleatorio_retorna_401():
 
 @patch("main.get_jwk_client")
 def test_jwt_assinatura_invalida_retorna_401(mock_get_jwk_client):
+    if verify_backend_api_key in app.dependency_overrides:
+        del app.dependency_overrides[verify_backend_api_key]
     os.environ["SUPABASE_JWKS_URL"] = "https://mock.supabase.co/auth/v1/.well-known/jwks.json"
     try:
-        mock_client = MagicMock()
+        mock_jwk_set = MagicMock()
         mock_key = MagicMock()
         mock_key.kid = "mock_kid"
         mock_key.key = "dummy_public_key_which_fails_verification"
-        mock_jwk_set = MagicMock()
         mock_jwk_set.keys = [mock_key]
+        mock_client = MagicMock()
         mock_client.get_jwk_set.return_value = mock_jwk_set
         mock_client.get_signing_key_from_jwt.return_value = mock_key
         mock_get_jwk_client.return_value = mock_client
 
-        token = create_mock_jwt()
+        token = "eyJhbGciOiJSUzI1NiIsImtpZCI6Im1vY2tfa2lkIn0.eyJzdWIiOiJ1c2VyLTEyMyIsInJvbGUiOiJhdXRoZW50aWNhdGVkIiwiZW1haWwiOiJ0ZXN0QHRlc3QuY29tIiwiZXhwIjo5OTk5OTk5OTk5fQ.c2lnbmF0dXJl"
         test_client = TestClient(app, headers={"Authorization": f"Bearer {token}"})
         res = test_client.get("/api/dashboard/summary")
         assert res.status_code == 401
@@ -1184,6 +1193,8 @@ def test_jwt_assinatura_invalida_retorna_401(mock_get_jwk_client):
 
 @patch("main.get_jwk_client")
 def test_jwks_offline_retorna_503(mock_get_jwk_client):
+    if verify_backend_api_key in app.dependency_overrides:
+        del app.dependency_overrides[verify_backend_api_key]
     from jwt.exceptions import PyJWKClientConnectionError
     os.environ["SUPABASE_JWKS_URL"] = "https://mock.supabase.co/auth/v1/.well-known/jwks.json"
     try:
@@ -1191,7 +1202,7 @@ def test_jwks_offline_retorna_503(mock_get_jwk_client):
         mock_client.get_jwk_set.side_effect = PyJWKClientConnectionError("Connection timed out")
         mock_get_jwk_client.return_value = mock_client
 
-        token = create_mock_jwt()
+        token = "eyJhbGciOiJSUzI1NiIsImtpZCI6Im1vY2tfa2lkIn0.eyJzdWIiOiJ1c2VyLTEyMyIsInJvbGUiOiJhdXRoZW50aWNhdGVkIiwiZW1haWwiOiJ0ZXN0QHRlc3QuY29tIiwiZXhwIjo5OTk5OTk5OTk5fQ.c2lnbmF0dXJl"
         test_client = TestClient(app, headers={"Authorization": f"Bearer {token}"})
         res = test_client.get("/api/dashboard/summary")
         assert res.status_code == 503
@@ -1201,6 +1212,8 @@ def test_jwks_offline_retorna_503(mock_get_jwk_client):
 
 @patch("main.get_jwk_client")
 def test_jwks_vazio_retorna_503(mock_get_jwk_client):
+    if verify_backend_api_key in app.dependency_overrides:
+        del app.dependency_overrides[verify_backend_api_key]
     os.environ["SUPABASE_JWKS_URL"] = "https://mock.supabase.co/auth/v1/.well-known/jwks.json"
     try:
         mock_client = MagicMock()
@@ -1209,7 +1222,7 @@ def test_jwks_vazio_retorna_503(mock_get_jwk_client):
         mock_client.get_jwk_set.return_value = mock_jwk_set
         mock_get_jwk_client.return_value = mock_client
 
-        token = create_mock_jwt()
+        token = "eyJhbGciOiJSUzI1NiIsImtpZCI6Im1vY2tfa2lkIn0.eyJzdWIiOiJ1c2VyLTEyMyIsInJvbGUiOiJhdXRoZW50aWNhdGVkIiwiZW1haWwiOiJ0ZXN0QHRlc3QuY29tIiwiZXhwIjo5OTk5OTk5OTk5fQ.c2lnbmF0dXJl"
         test_client = TestClient(app, headers={"Authorization": f"Bearer {token}"})
         res = test_client.get("/api/dashboard/summary")
         assert res.status_code == 503
@@ -1220,6 +1233,8 @@ def test_jwks_vazio_retorna_503(mock_get_jwk_client):
 @patch("main.get_jwk_client")
 @patch("jwt.decode")
 def test_jwt_valido_retorna_200(mock_jwt_decode, mock_get_jwk_client):
+    if verify_backend_api_key in app.dependency_overrides:
+        del app.dependency_overrides[verify_backend_api_key]
     os.environ["SUPABASE_JWKS_URL"] = "https://mock.supabase.co/auth/v1/.well-known/jwks.json"
     os.environ["PIPEIMOB_DATA_MODE"] = "demo"
     try:
@@ -1242,7 +1257,7 @@ def test_jwt_valido_retorna_200(mock_jwt_decode, mock_get_jwk_client):
             "exp": time.time() + 3600
         }
 
-        token = create_mock_jwt()
+        token = "eyJhbGciOiJSUzI1NiIsImtpZCI6Im1vY2tfa2lkIn0.eyJzdWIiOiJ1c2VyLTEyMyIsInJvbGUiOiJhdXRoZW50aWNhdGVkIiwiZW1haWwiOiJ0ZXN0QHRlc3QuY29tIiwiZXhwIjo5OTk5OTk5OTk5fQ.c2lnbmF0dXJl"
         test_client = TestClient(app, headers={"Authorization": f"Bearer {token}"})
         res = test_client.get("/api/dashboard/summary")
         assert res.status_code == 200
@@ -1250,16 +1265,22 @@ def test_jwt_valido_retorna_200(mock_jwt_decode, mock_get_jwk_client):
         os.environ.pop("SUPABASE_JWKS_URL", None)
 
 def test_jwt_sem_kid_retorna_401():
+    if verify_backend_api_key in app.dependency_overrides:
+        del app.dependency_overrides[verify_backend_api_key]
     os.environ["SUPABASE_JWKS_URL"] = "https://mock.supabase.co/auth/v1/.well-known/jwks.json"
     try:
-        # Create token without kid header
-        token = create_mock_jwt(headers={})
+        # Create token without kid header for RS256
+        token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyLTEyMyIsInJvbGUiOiJhdXRoZW50aWNhdGVkIiwiZW1haWwiOiJ0ZXN0QHRlc3QuY29tIiwiZXhwIjo5OTk5OTk5OTk5fQ.c2lnbmF0dXJl"
         test_client = TestClient(app, headers={"Authorization": f"Bearer {token}"})
         res = test_client.get("/api/dashboard/summary")
         assert res.status_code == 401
         assert "Invalid or expired access token." in res.json()["detail"]
     finally:
         os.environ.pop("SUPABASE_JWKS_URL", None)
+
+
+
+
 
 
 def test_sequential_pagination_10_pages_and_decimal_precision():
@@ -6784,6 +6805,8 @@ def test_contracts_control_dataset_warming_response(client_with_db):
             assert res.headers.get("Retry-After") == "20"
             body = res.json()
             assert body["code"] == "dataset_warming"
+            assert body["error_code"] == "dataset_warming"
+            assert body["retry_after_seconds"] == 20
 
             import asyncio
             async def wait_bg():
@@ -6798,6 +6821,153 @@ def test_contracts_control_dataset_warming_response(client_with_db):
         os.environ.clear()
         os.environ.update(old_env)
         contracts_control_cache.clear()
+
+
+def test_verify_backend_api_key_hs256_and_jwks():
+    import os
+    import jwt
+    import time
+    import pytest
+    import main
+    from main import verify_backend_api_key, AuthException, app
+
+    if verify_backend_api_key in app.dependency_overrides:
+        del app.dependency_overrides[verify_backend_api_key]
+
+    secret = "super_secret_jwt_key_for_testing_32_bytes_long"
+    payload = {
+        "sub": "user_123",
+        "email": "test@gralhaimoveis.com.br",
+        "role": "authenticated",
+        "iss": os.getenv("SUPABASE_ISSUER", "https://mock.supabase.co/auth/v1"),
+        "aud": "authenticated",
+        "exp": int(time.time()) + 3600
+    }
+    valid_token = jwt.encode(payload, secret, algorithm="HS256")
+
+    old_env = dict(os.environ)
+    os.environ["SUPABASE_JWT_SECRET"] = secret
+    os.environ["APP_ENV"] = "production"
+
+    try:
+        import asyncio
+        decoded = asyncio.run(verify_backend_api_key(f"Bearer {valid_token}"))
+        assert decoded["sub"] == "user_123"
+        assert decoded["email"] == "test@gralhaimoveis.com.br"
+
+        # Invalid token signature
+        bad_token = jwt.encode(payload, "wrong_secret_key_32_bytes_long_12345", algorithm="HS256")
+        with pytest.raises(AuthException) as exc_info:
+            asyncio.run(verify_backend_api_key(f"Bearer {bad_token}"))
+        assert exc_info.value.status_code == 401
+        assert exc_info.value.error_code == "invalid_access_token"
+
+        # Missing Auth Header
+        with pytest.raises(AuthException) as exc_info_no_auth:
+            asyncio.run(verify_backend_api_key(None))
+        assert exc_info_no_auth.value.status_code == 401
+        assert exc_info_no_auth.value.error_code == "authentication_required"
+
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
+
+
+def test_verify_backend_api_key_claims_and_algorithms():
+    import os
+    import jwt
+    import time
+    import pytest
+    import main
+    from main import verify_backend_api_key, AuthException, app
+
+    if verify_backend_api_key in app.dependency_overrides:
+        del app.dependency_overrides[verify_backend_api_key]
+
+    secret = "super_secret_jwt_key_for_testing_32_bytes_long"
+    now = int(time.time())
+    base_payload = {
+        "sub": "user_123",
+        "email": "test@gralhaimoveis.com.br",
+        "role": "authenticated",
+        "iss": "https://expected.supabase.co/auth/v1",
+        "aud": "authenticated",
+        "exp": now + 3600
+    }
+
+    old_env = dict(os.environ)
+    os.environ["SUPABASE_JWT_SECRET"] = secret
+    os.environ["SUPABASE_ISSUER"] = "https://expected.supabase.co/auth/v1"
+    os.environ["SUPABASE_JWT_AUDIENCE"] = "authenticated"
+    os.environ["APP_ENV"] = "production"
+
+    import asyncio
+
+    try:
+        # 1. Invalid issuer
+        payload_bad_iss = dict(base_payload, iss="https://wrong.supabase.co/auth/v1")
+        token_bad_iss = jwt.encode(payload_bad_iss, secret, algorithm="HS256")
+        with pytest.raises(AuthException) as exc:
+            asyncio.run(verify_backend_api_key(f"Bearer {token_bad_iss}"))
+        assert exc.value.status_code == 401
+
+        # 2. Invalid audience
+        payload_bad_aud = dict(base_payload, aud="wrong_audience")
+        token_bad_aud = jwt.encode(payload_bad_aud, secret, algorithm="HS256")
+        with pytest.raises(AuthException) as exc:
+            asyncio.run(verify_backend_api_key(f"Bearer {token_bad_aud}"))
+        assert exc.value.status_code == 401
+
+        # 3. Expired token
+        payload_expired = dict(base_payload, exp=now - 3600)
+        token_expired = jwt.encode(payload_expired, secret, algorithm="HS256")
+        with pytest.raises(AuthException) as exc:
+            asyncio.run(verify_backend_api_key(f"Bearer {token_expired}"))
+        assert exc.value.status_code == 401
+
+        # 4. Incorrect role
+        payload_bad_role = dict(base_payload, role="anon")
+        token_bad_role = jwt.encode(payload_bad_role, secret, algorithm="HS256")
+        with pytest.raises(AuthException) as exc:
+            asyncio.run(verify_backend_api_key(f"Bearer {token_bad_role}"))
+        assert exc.value.status_code == 401
+
+        # 5. Missing email
+        payload_no_email = dict(base_payload)
+        del payload_no_email["email"]
+        token_no_email = jwt.encode(payload_no_email, secret, algorithm="HS256")
+        with pytest.raises(AuthException) as exc:
+            asyncio.run(verify_backend_api_key(f"Bearer {token_no_email}"))
+        assert exc.value.status_code == 401
+
+        # 6. Missing sub
+        payload_no_sub = dict(base_payload)
+        del payload_no_sub["sub"]
+        token_no_sub = jwt.encode(payload_no_sub, secret, algorithm="HS256")
+        with pytest.raises(AuthException) as exc:
+            asyncio.run(verify_backend_api_key(f"Bearer {token_no_sub}"))
+        assert exc.value.status_code == 401
+
+        # 7. Disallowed algorithm ("none")
+        token_none = jwt.encode(base_payload, "", algorithm="none")
+        with pytest.raises(AuthException) as exc:
+            asyncio.run(verify_backend_api_key(f"Bearer {token_none}"))
+        assert exc.value.status_code == 401
+
+        # 8. RS256 token without kid header
+        token_rs256_nokid = jwt.encode(base_payload, "fake_rsa_key", algorithm="HS256")
+        parts = token_rs256_nokid.split(".")
+        fake_rs_token = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9." + parts[1] + "." + parts[2]
+        with pytest.raises(AuthException) as exc:
+            asyncio.run(verify_backend_api_key(f"Bearer {fake_rs_token}"))
+        assert exc.value.status_code == 401
+
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
+
+
+
 
 
 def test_contracts_control_max_stale_limit_and_fallback(client_with_db):
@@ -6848,4 +7018,79 @@ def test_contracts_control_max_stale_limit_and_fallback(client_with_db):
     finally:
         os.environ.clear()
         os.environ.update(old_env)
+        contracts_control_cache.clear()
+
+
+def test_responsibles_decoupled_from_pipeimob_cache_and_warming():
+    from fastapi import HTTPException
+    from fastapi.testclient import TestClient
+    from main import app, contracts_control_cache
+    from models.contracts_control import Base, ContractsControlResponsible
+    import database
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from sqlalchemy.pool import StaticPool
+
+    test_engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool
+    )
+    from sqlalchemy import event
+    @event.listens_for(test_engine, "connect")
+    def set_sqlite_pragma(dbapi_connection, connection_record):
+        dbapi_connection.create_function("btrim", 1, lambda s: s.strip() if s is not None else None)
+
+    Base.metadata.create_all(bind=test_engine)
+    TestingSessionLocal = sessionmaker(bind=test_engine)
+
+    # Seed active responsibles in test DB
+    db = TestingSessionLocal()
+    resps = ["Guilherme", "Cristina", "Carol", "Laise"]
+    for r in resps:
+        db.add(ContractsControlResponsible(name=r, normalized_name=r.lower(), active=True))
+    db.commit()
+    db.close()
+
+    def get_test_db():
+        session = TestingSessionLocal()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    import main as main_module
+
+    app.dependency_overrides[main_module.get_db_session] = get_test_db
+    contracts_control_cache.clear()
+    client = TestClient(app)
+
+    auth_headers = {"Authorization": "Bearer mock_jwt_token"}
+
+    try:
+        # 1. Unauthenticated request to /responsibles should return 401
+        res_unauth = client.get("/api/contracts-control/responsibles")
+        assert res_unauth.status_code == 401
+
+        # 2. When Pipeimob cache is cold, /responsibles returns 200 with 4 active responsibles
+        main_module.app.dependency_overrides[main_module.verify_backend_api_key] = lambda: {
+            "sub": "test-user-id",
+            "role": "authenticated",
+            "email": "test@gralhaimoveis.com.br"
+        }
+        with patch("main.load_contracts_control_dataset", side_effect=RuntimeError("load_contracts_control_dataset should NOT be called by /responsibles")):
+            res_resp = client.get("/api/contracts-control/responsibles", headers=auth_headers)
+            assert res_resp.status_code == 200
+            data = res_resp.json()
+            names = [r["name"] for r in data["responsibles"]]
+            assert sorted(names) == ["Carol", "Cristina", "Guilherme", "Laise"]
+
+        # 3. include_inactive=true requires admin credentials
+        with patch("main.require_contracts_control_temporary_admin", side_effect=HTTPException(status_code=403, detail="Forbidden")):
+            res_admin = client.get("/api/contracts-control/responsibles?include_inactive=true", headers=auth_headers)
+            assert res_admin.status_code == 403
+
+    finally:
+        app.dependency_overrides.clear()
         contracts_control_cache.clear()
