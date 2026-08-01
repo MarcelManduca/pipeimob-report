@@ -235,7 +235,7 @@ def main():
     except Exception as e:
         extraction_finished_at = datetime.now(timezone.utc).isoformat()
         dataset_load_failed = True
-        extraction_errors = str(e)
+        extraction_errors = str(e) or repr(e)
         dataset = []
         pages_fetched = 0
         mode = "error"
