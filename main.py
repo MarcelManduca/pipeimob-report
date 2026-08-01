@@ -3563,12 +3563,15 @@ _jwk_client = None
 
 def get_jwk_client():
     global _jwk_client
-    if _jwk_client is None:
-        jwks_url = os.getenv("SUPABASE_JWKS_URL")
-        if jwks_url:
-            from jwt import PyJWKClient
-            _jwk_client = PyJWKClient(jwks_url)
+    jwks_url = os.getenv("SUPABASE_JWKS_URL")
+    if not jwks_url:
+        _jwk_client = None
+        return None
+    if _jwk_client is None or getattr(_jwk_client, "uri", None) != jwks_url:
+        from jwt import PyJWKClient
+        _jwk_client = PyJWKClient(jwks_url)
     return _jwk_client
+
 
 authorization_role_status = "unresolved"
 
@@ -3595,10 +3598,78 @@ def get_db_session():
     finally:
         db.close()
 
+@app.exception_handler(DatasetWarmingError)
+async def dataset_warming_exception_handler(request: Request, exc: DatasetWarmingError):
+    return JSONResponse(
+        status_code=503,
+        headers={"Retry-After": str(exc.retry_after)},
+        content={
+            "code": "dataset_warming",
+            "error_code": "dataset_warming",
+            "retry_after_seconds": exc.retry_after,
+            "detail": "O dataset do Pipeimob está sendo carregado no servidor. Por favor, tente novamente em alguns segundos."
+        }
+    )
+
+class AuthException(Exception):
+    def __init__(self, status_code: int, detail: str, error_code: str):
+        self.status_code = status_code
+        self.detail = detail
+        self.error_code = error_code
+
+@app.exception_handler(AuthException)
+async def auth_exception_handler(request: Request, exc: AuthException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "detail": exc.detail,
+            "error_code": exc.error_code
+        }
+    )
+
+# CORS Configuration
+allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "")
+allowed_origins: List[str] = []
+if allowed_origins_env:
+    allowed_origins = [o.strip() for o in allowed_origins_env.split(",") if o.strip()]
+else:
+    allowed_origins = ["*"]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_origin_regex=r"https://.*--happy-data-hugger\.lovable\.app",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.get(
+    "/api/version",
+    summary="Get Service Build Version Info",
+    description="Returns the deployed commit hash and environment."
+)
+async def get_version():
+    commit_hash = os.getenv("RENDER_GIT_COMMIT") or "unknown"
+    app_env = os.getenv("APP_ENV", "production").lower()
+    res = {
+        "commit_hash": commit_hash,
+        "app_env": app_env
+    }
+    if app_env != "production":
+        branch = os.getenv("RENDER_GIT_BRANCH")
+        if branch:
+            res["branch"] = branch
+    return res
+
+
+
 async def verify_backend_api_key(
     authorization: Optional[str] = Header(None)
 ):
     import jwt
+    import time
 
     if not authorization:
         raise AuthException(
@@ -3619,24 +3690,52 @@ async def verify_backend_api_key(
     try:
         app_env = os.getenv("APP_ENV", "production").lower()
         jwks_url = os.getenv("SUPABASE_JWKS_URL")
+        jwt_secret = os.getenv("SUPABASE_JWT_SECRET") or ("secret" if app_env not in ["production", "staging"] else None)
+        expected_aud = os.getenv("SUPABASE_JWT_AUDIENCE", "authenticated")
+        expected_iss = os.getenv("SUPABASE_ISSUER")
 
-        if not jwks_url and app_env == "production":
+        if app_env in ["production", "staging"] and not expected_iss:
+            raise HTTPException(
+                status_code=500,
+                detail="Server configuration error: SUPABASE_ISSUER environment variable is required in production and staging."
+            )
+
+        try:
+            header = jwt.get_unverified_header(token)
+            alg = header.get("alg")
+        except Exception:
             raise AuthException(
                 status_code=401,
                 detail="Invalid or expired access token.",
                 error_code="invalid_access_token"
             )
 
-        if jwks_url:
-            # 1. Pre-verify token structure and kid header if JWKS is used
+        ALLOWED_ALGORITHMS = ["HS256", "RS256", "ES256"]
+        if not alg or alg not in ALLOWED_ALGORITHMS:
+            raise AuthException(
+                status_code=401,
+                detail="Invalid or expired access token.",
+                error_code="invalid_access_token"
+            )
+
+        if alg == "HS256":
+            if not jwt_secret:
+                raise AuthException(
+                    status_code=401,
+                    detail="Invalid or expired access token.",
+                    error_code="invalid_access_token"
+                )
             try:
-                header = jwt.get_unverified_header(token)
-                if not isinstance(header, dict) or "kid" not in header:
-                    raise AuthException(
-                        status_code=401,
-                        detail="Invalid or expired access token.",
-                        error_code="invalid_access_token"
-                    )
+                payload = jwt.decode(
+                    token,
+                    jwt_secret,
+                    algorithms=["HS256"],
+                    audience=expected_aud,
+                    issuer=expected_iss,
+                    options={"require": ["exp", "sub"]}
+                )
+            except AuthException:
+                raise
             except Exception:
                 raise AuthException(
                     status_code=401,
@@ -3644,79 +3743,66 @@ async def verify_backend_api_key(
                     error_code="invalid_access_token"
                 )
 
-            from jwt.exceptions import PyJWKClientConnectionError
+        elif alg in ["RS256", "ES256"]:
+            # Require 'kid' header for asymmetric tokens
+            if not isinstance(header, dict) or "kid" not in header or not header["kid"]:
+                raise AuthException(
+                    status_code=401,
+                    detail="Invalid or expired access token.",
+                    error_code="invalid_access_token"
+                )
+
+            if not jwks_url:
+                raise AuthException(
+                    status_code=401,
+                    detail="Invalid or expired access token.",
+                    error_code="invalid_access_token"
+                )
+
+            from jwt.exceptions import PyJWKClientConnectionError, PyJWKSetError
             client = get_jwk_client()
             try:
                 jwk_set = client.get_jwk_set()
             except PyJWKClientConnectionError:
                 raise AuthException(
                     status_code=503,
-                    detail="Supabase project does not expose asymmetric JWT signing keys.",
+                    detail="Supabase JWKS service is temporarily unavailable.",
                     error_code="supabase_jwks_unavailable"
                 )
             except Exception:
                 raise AuthException(
                     status_code=503,
-                    detail="Supabase project does not expose asymmetric JWT signing keys.",
-                    error_code="supabase_jwks_unavailable"
+                    detail="Supabase JWKS response is malformed or invalid.",
+                    error_code="supabase_jwks_invalid"
                 )
 
-            if not jwk_set.keys:
+            if not jwk_set or not hasattr(jwk_set, "keys") or not jwk_set.keys:
                 raise AuthException(
                     status_code=503,
-                    detail="Supabase project does not expose asymmetric JWT signing keys.",
-                    error_code="supabase_jwks_unavailable"
+                    detail="Supabase JWKS response is empty or invalid.",
+                    error_code="supabase_jwks_invalid"
                 )
+
 
             try:
                 signing_key = client.get_signing_key_from_jwt(token)
-            except Exception:
+                payload = jwt.decode(
+                    token,
+                    signing_key.key,
+                    algorithms=[alg],
+                    audience=expected_aud,
+                    issuer=expected_iss,
+                    options={"require": ["exp", "sub"]}
+                )
+            except AuthException:
+                raise
+            except (PyJWKSetError, Exception):
                 raise AuthException(
                     status_code=401,
                     detail="Invalid or expired access token.",
                     error_code="invalid_access_token"
                 )
 
-            aud = os.getenv("SUPABASE_JWT_AUDIENCE", "authenticated")
-            iss = os.getenv("SUPABASE_ISSUER")
-
-            payload = jwt.decode(
-                token,
-                signing_key.key,
-                algorithms=["RS256", "ES256"],
-                audience=aud,
-                issuer=iss,
-                options={"require": ["exp", "iss", "aud", "sub"]}
-            )
-        else:
-            # Dev/Test fallback: decode without signature verification
-            # but manually validate claims to align with production checks
-            payload = jwt.decode(
-                token,
-                options={"verify_signature": False}
-            )
-
-            # Explicit exp check
-            if "exp" in payload:
-                import time
-                if payload["exp"] < time.time():
-                    raise jwt.ExpiredSignatureError("Token has expired")
-            else:
-                raise jwt.MissingRequiredClaimError("exp")
-
-            # Explicit iss check
-            expected_iss = os.getenv("SUPABASE_ISSUER")
-            if expected_iss and payload.get("iss") != expected_iss:
-                raise jwt.InvalidIssuerError("Invalid issuer")
-
-            # Explicit aud check
-            expected_aud = os.getenv("SUPABASE_JWT_AUDIENCE", "authenticated")
-            if payload.get("aud") != expected_aud:
-                raise jwt.InvalidAudienceError("Invalid audience")
-
-            # Explicit sub check
-            if not payload.get("sub"):
-                raise jwt.MissingRequiredClaimError("sub")
 
         # Additional required claims validation (both JWKS & Dev)
         # 1. role must be authenticated
@@ -3735,8 +3821,35 @@ async def verify_backend_api_key(
                 error_code="invalid_access_token"
             )
 
+        # 3. sub must be present
+        if not payload.get("sub") or not isinstance(payload.get("sub"), str):
+            raise AuthException(
+                status_code=401,
+                detail="Invalid or expired access token.",
+                error_code="invalid_access_token"
+            )
+
+        # 4. issuer check if expected
+        if expected_iss and payload.get("iss") != expected_iss:
+            raise AuthException(
+                status_code=401,
+                detail="Invalid or expired access token.",
+                error_code="invalid_access_token"
+            )
+
+        # 5. audience check
+        if expected_aud and payload.get("aud") != expected_aud:
+            raise AuthException(
+                status_code=401,
+                detail="Invalid or expired access token.",
+                error_code="invalid_access_token"
+            )
+
     except AuthException:
         raise
+    except HTTPException:
+        raise
+
     except jwt.ExpiredSignatureError:
         raise AuthException(
             status_code=401,
@@ -3761,6 +3874,8 @@ async def verify_backend_api_key(
             detail="Invalid or expired access token.",
             error_code="invalid_access_token"
         )
+
+
 
     user_email = payload.get("email")
     user_email = user_email.lower().strip()
@@ -5326,11 +5441,11 @@ async def load_contracts_control_dataset(
 
     retry_after_env = os.getenv("CONTRACTS_CONTROL_RETRY_AFTER_SECONDS")
     try:
-        retry_after_seconds = int(retry_after_env) if retry_after_env else 15
+        retry_after_seconds = int(retry_after_env) if retry_after_env else 30
     except ValueError:
-        retry_after_seconds = 15
+        retry_after_seconds = 30
     if retry_after_seconds <= 0:
-        retry_after_seconds = 15
+        retry_after_seconds = 30
 
     if refresh:
         logger.info(json.dumps({
@@ -6331,8 +6446,7 @@ async def get_contracts_control_deals(
     "/api/contracts-control/responsibles",
     response_model=ContractsControlResponsiblesResponse,
     responses={**RESPONSES_503, **RESPONSES_AUTH},
-    summary="Get list of responsibles",
-    dependencies=[Depends(verify_backend_api_key)]
+    summary="Get list of responsibles"
 )
 async def get_contracts_control_responsibles(
     include_inactive: bool = Query(False),
