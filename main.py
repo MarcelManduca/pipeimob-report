@@ -3645,6 +3645,22 @@ app.add_middleware(
 )
 
 
+@app.get(
+    "/api/version",
+    summary="Get Service Build Version Info",
+    description="Returns the deployed commit hash, branch, and environment."
+)
+async def get_version():
+    commit_hash = os.getenv("RENDER_GIT_COMMIT", "aa576313175bd3101c5eb95cf78bbbf120d5754f")
+    branch = os.getenv("RENDER_GIT_BRANCH", "fix/contracts-control-auth-and-retry-contract")
+    app_env = os.getenv("APP_ENV", "production")
+    return {
+        "commit_hash": commit_hash,
+        "branch": branch,
+        "app_env": app_env
+    }
+
+
 async def verify_backend_api_key(
     authorization: Optional[str] = Header(None)
 ):
@@ -3670,9 +3686,15 @@ async def verify_backend_api_key(
     try:
         app_env = os.getenv("APP_ENV", "production").lower()
         jwks_url = os.getenv("SUPABASE_JWKS_URL")
-        jwt_secret = os.getenv("SUPABASE_JWT_SECRET") or ("secret" if app_env != "production" else None)
+        jwt_secret = os.getenv("SUPABASE_JWT_SECRET") or ("secret" if app_env not in ["production", "staging"] else None)
         expected_aud = os.getenv("SUPABASE_JWT_AUDIENCE", "authenticated")
         expected_iss = os.getenv("SUPABASE_ISSUER")
+
+        if app_env in ["production", "staging"] and not expected_iss:
+            raise HTTPException(
+                status_code=500,
+                detail="Server configuration error: SUPABASE_ISSUER environment variable is required in production and staging."
+            )
 
         try:
             header = jwt.get_unverified_header(token)
@@ -3683,6 +3705,7 @@ async def verify_backend_api_key(
                 detail="Invalid or expired access token.",
                 error_code="invalid_access_token"
             )
+
 
         ALLOWED_ALGORITHMS = ["HS256", "RS256", "ES256"]
         if not alg or alg not in ALLOWED_ALGORITHMS:
@@ -3820,6 +3843,9 @@ async def verify_backend_api_key(
 
     except AuthException:
         raise
+    except HTTPException:
+        raise
+
     except jwt.ExpiredSignatureError:
         raise AuthException(
             status_code=401,

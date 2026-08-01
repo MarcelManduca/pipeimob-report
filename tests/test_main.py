@@ -6967,6 +6967,85 @@ def test_verify_backend_api_key_claims_and_algorithms():
         os.environ.update(old_env)
 
 
+def test_strategy_isolation_suite():
+    import os
+    import jwt
+    import time
+    import pytest
+    from unittest.mock import patch, MagicMock
+    import main
+    from main import verify_backend_api_key, AuthException, app
+    from fastapi import HTTPException
+
+    if verify_backend_api_key in app.dependency_overrides:
+        del app.dependency_overrides[verify_backend_api_key]
+
+    old_env = dict(os.environ)
+    secret = "super_secret_jwt_key_for_testing_32_bytes_long"
+    now = int(time.time())
+    base_payload = {
+        "sub": "user_123",
+        "email": "test@gralhaimoveis.com.br",
+        "role": "authenticated",
+        "iss": "https://mock.supabase.co/auth/v1",
+        "aud": "authenticated",
+        "exp": now + 3600
+    }
+
+    try:
+        os.environ["SUPABASE_JWT_SECRET"] = secret
+        os.environ["SUPABASE_ISSUER"] = "https://mock.supabase.co/auth/v1"
+        os.environ["SUPABASE_JWT_AUDIENCE"] = "authenticated"
+        os.environ["APP_ENV"] = "production"
+
+        import asyncio
+
+        # 1. HS256 valid token does NOT call get_jwk_client
+        hs256_valid = jwt.encode(base_payload, secret, algorithm="HS256")
+        with patch("main.get_jwk_client") as mock_jwk:
+            res = asyncio.run(verify_backend_api_key(f"Bearer {hs256_valid}"))
+            assert res["sub"] == "user_123"
+            mock_jwk.assert_not_called()
+
+        # 2. HS256 invalid signature returns 401 and does NOT call get_jwk_client
+        hs256_invalid = jwt.encode(base_payload, "wrong_secret_32_bytes_long_12345", algorithm="HS256")
+        with patch("main.get_jwk_client") as mock_jwk:
+            with pytest.raises(AuthException) as exc:
+                asyncio.run(verify_backend_api_key(f"Bearer {hs256_invalid}"))
+            assert exc.value.status_code == 401
+            mock_jwk.assert_not_called()
+
+        # 3. RS256 token requires JWKS and does NOT use SUPABASE_JWT_SECRET
+        os.environ["SUPABASE_JWKS_URL"] = "https://mock.supabase.co/auth/v1/.well-known/jwks.json"
+        rs256_token = "eyJhbGciOiJSUzI1NiIsImtpZCI6Im1vY2tfa2lkIn0.eyJzdWIiOiJ1c2VyLTEyMyIsInJvbGUiOiJhdXRoZW50aWNhdGVkIiwiZW1haWwiOiJ0ZXN0QHRlc3QuY29tIiwiaXNzIjoiaHR0cHM6Ly9tb2NrLnN1cGFiYXNlLmNvL2F1dGgvdjEiLCJhdWQiOiJhdXRoZW50aWNhdGVkIiwiZXhwIjo5OTk5OTk5OTk5fQ.c2lnbmF0dXJl"
+        mock_client = MagicMock()
+        mock_key = MagicMock()
+        mock_key.kid = "mock_kid"
+        mock_key.key = "public_rsa_key"
+        mock_jwk_set = MagicMock()
+        mock_jwk_set.keys = [mock_key]
+        mock_client.get_jwk_set.return_value = mock_jwk_set
+        mock_client.get_signing_key_from_jwt.return_value = mock_key
+
+        with patch("main.get_jwk_client", return_value=mock_client):
+            with patch("jwt.decode", return_value=base_payload):
+                res = asyncio.run(verify_backend_api_key(f"Bearer {rs256_token}"))
+                assert res["sub"] == "user_123"
+
+
+        # 4. Missing SUPABASE_ISSUER in production raises 500
+        os.environ.pop("SUPABASE_ISSUER", None)
+        with pytest.raises(HTTPException) as exc_500:
+            asyncio.run(verify_backend_api_key(f"Bearer {hs256_valid}"))
+        assert exc_500.value.status_code == 500
+        assert "SUPABASE_ISSUER environment variable is required" in exc_500.value.detail
+
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
+
+
+
 
 
 
