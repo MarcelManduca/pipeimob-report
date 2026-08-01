@@ -3651,15 +3651,18 @@ app.add_middleware(
     description="Returns the deployed commit hash and environment."
 )
 async def get_version():
-    commit_hash = os.getenv("RENDER_GIT_COMMIT", "7e48bc4b6cbde9d0ff62657e2c9ef387cbeecdf0")
+    commit_hash = os.getenv("RENDER_GIT_COMMIT") or "unknown"
     app_env = os.getenv("APP_ENV", "production").lower()
     res = {
         "commit_hash": commit_hash,
         "app_env": app_env
     }
     if app_env != "production":
-        res["branch"] = os.getenv("RENDER_GIT_BRANCH", "fix/contracts-control-auth-and-retry-contract")
+        branch = os.getenv("RENDER_GIT_BRANCH")
+        if branch:
+            res["branch"] = branch
     return res
+
 
 
 async def verify_backend_api_key(

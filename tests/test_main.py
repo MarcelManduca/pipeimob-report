@@ -7046,6 +7046,57 @@ def test_strategy_isolation_suite():
         os.environ.update(old_env)
 
 
+def test_version_endpoint_suite():
+    import os
+    from tests.test_main import client
+
+    old_env = dict(os.environ)
+
+    try:
+        # 1. Production mode never returns branch
+        os.environ["APP_ENV"] = "production"
+        os.environ["RENDER_GIT_COMMIT"] = "commit123"
+        os.environ["RENDER_GIT_BRANCH"] = "main"
+        res = client.get("/api/version")
+        assert res.status_code == 200
+        body = res.json()
+        assert body["commit_hash"] == "commit123"
+        assert body["app_env"] == "production"
+        assert "branch" not in body
+
+        # 2. Staging mode returns branch when RENDER_GIT_BRANCH exists
+        os.environ["APP_ENV"] = "staging"
+        os.environ["RENDER_GIT_COMMIT"] = "commit456"
+        os.environ["RENDER_GIT_BRANCH"] = "feature-branch"
+        res = client.get("/api/version")
+        assert res.status_code == 200
+        body = res.json()
+        assert body["commit_hash"] == "commit456"
+        assert body["app_env"] == "staging"
+        assert body["branch"] == "feature-branch"
+
+        # 3. Staging mode omits branch when RENDER_GIT_BRANCH is missing
+        os.environ.pop("RENDER_GIT_BRANCH", None)
+        res = client.get("/api/version")
+        assert res.status_code == 200
+        body = res.json()
+        assert body["commit_hash"] == "commit456"
+        assert body["app_env"] == "staging"
+        assert "branch" not in body
+
+        # 4. Absence of RENDER_GIT_COMMIT returns "unknown"
+        os.environ.pop("RENDER_GIT_COMMIT", None)
+        res = client.get("/api/version")
+        assert res.status_code == 200
+        body = res.json()
+        assert body["commit_hash"] == "unknown"
+
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
+
+
+
 
 
 
