@@ -3576,20 +3576,43 @@ def get_jwk_client():
 authorization_role_status = "unresolved"
 
 def get_db_session():
+    app_env = os.getenv("APP_ENV", "production").lower()
+    database_url = os.getenv("DATABASE_URL")
+
+    if not database_url and app_env in ["production", "staging"]:
+        raise HTTPException(
+            status_code=500,
+            detail="Server configuration error: DATABASE_URL environment variable is required in production and staging."
+        )
+
     try:
         from database import SessionLocal
         if not SessionLocal:
             session_factory = None
         else:
             session_factory = SessionLocal
-    except Exception:
+    except Exception as e:
+        logger.error(f"Failed to import database SessionLocal: {type(e).__name__} - {e}")
         session_factory = None
 
     if session_factory is None:
+        if app_env in ["production", "staging"]:
+            raise HTTPException(
+                status_code=503,
+                detail="Database session unavailable."
+            )
         yield None
         return
 
-    db = session_factory()
+    try:
+        db = session_factory()
+    except Exception as e:
+        logger.error(f"Failed to instantiate database session: {type(e).__name__} - {e}")
+        raise HTTPException(
+            status_code=503,
+            detail="Database session unavailable."
+        )
+
     try:
         yield db
     except Exception:
@@ -3597,6 +3620,7 @@ def get_db_session():
         raise
     finally:
         db.close()
+
 
 @app.exception_handler(DatasetWarmingError)
 async def dataset_warming_exception_handler(request: Request, exc: DatasetWarmingError):
@@ -6456,8 +6480,9 @@ async def get_contracts_control_responsibles(
     if include_inactive:
         await require_contracts_control_temporary_admin(payload)
 
-    if not db:
+    if db is None:
         raise HTTPException(status_code=503, detail="Database session unavailable.")
+
 
     from services.contracts_control_manual_service import ContractsControlManualService
     resps = ContractsControlManualService.list_responsibles(db, include_inactive)

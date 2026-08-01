@@ -7096,6 +7096,39 @@ def test_version_endpoint_suite():
         os.environ.update(old_env)
 
 
+def test_database_hardening_suite():
+    import os
+    import pytest
+    from fastapi import HTTPException
+    import main
+    from main import get_db_session
+
+    old_env = dict(os.environ)
+
+    try:
+        # 1. Missing DATABASE_URL in production raises 500 in get_db_session
+        os.environ["APP_ENV"] = "production"
+        os.environ.pop("DATABASE_URL", None)
+        gen = get_db_session()
+        with pytest.raises(HTTPException) as exc_500:
+            next(gen)
+        assert exc_500.value.status_code == 500
+        assert "DATABASE_URL environment variable is required" in exc_500.value.detail
+
+        # 2. Local environment allows missing DATABASE_URL and yields None when SessionLocal is None
+        os.environ["APP_ENV"] = "development"
+        with patch("database.SessionLocal", None):
+            gen_local = get_db_session()
+            res = next(gen_local)
+            assert res is None
+
+
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
+
+
+
 
 
 
