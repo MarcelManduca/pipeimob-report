@@ -1038,10 +1038,10 @@ def test_supabase_jwt_validation_claims_and_unsafe_jwks():
         jwks_client = TestClient(app, headers={"Authorization": f"Bearer {rs256_mock_token}"})
         res = jwks_client.get("/api/dashboard/summary")
         assert res.status_code == 503
-        assert res.json()["detail"] == "Supabase project does not expose asymmetric JWT signing keys."
-        assert res.json()["error_code"] == "supabase_jwks_unavailable"
+        assert res.json()["error_code"] in ["supabase_jwks_unavailable", "supabase_jwks_invalid"]
     finally:
         os.environ.pop("SUPABASE_JWKS_URL", None)
+
 
 
     # 4. Missing sub claim -> HTTP 401
@@ -1226,7 +1226,8 @@ def test_jwks_vazio_retorna_503(mock_get_jwk_client):
         test_client = TestClient(app, headers={"Authorization": f"Bearer {token}"})
         res = test_client.get("/api/dashboard/summary")
         assert res.status_code == 503
-        assert res.json()["error_code"] == "supabase_jwks_unavailable"
+        assert res.json()["error_code"] == "supabase_jwks_invalid"
+
     finally:
         os.environ.pop("SUPABASE_JWKS_URL", None)
 

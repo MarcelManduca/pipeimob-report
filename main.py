@@ -3648,17 +3648,18 @@ app.add_middleware(
 @app.get(
     "/api/version",
     summary="Get Service Build Version Info",
-    description="Returns the deployed commit hash, branch, and environment."
+    description="Returns the deployed commit hash and environment."
 )
 async def get_version():
-    commit_hash = os.getenv("RENDER_GIT_COMMIT", "aa576313175bd3101c5eb95cf78bbbf120d5754f")
-    branch = os.getenv("RENDER_GIT_BRANCH", "fix/contracts-control-auth-and-retry-contract")
-    app_env = os.getenv("APP_ENV", "production")
-    return {
+    commit_hash = os.getenv("RENDER_GIT_COMMIT", "7e48bc4b6cbde9d0ff62657e2c9ef387cbeecdf0")
+    app_env = os.getenv("APP_ENV", "production").lower()
+    res = {
         "commit_hash": commit_hash,
-        "branch": branch,
         "app_env": app_env
     }
+    if app_env != "production":
+        res["branch"] = os.getenv("RENDER_GIT_BRANCH", "fix/contracts-control-auth-and-retry-contract")
+    return res
 
 
 async def verify_backend_api_key(
@@ -3705,7 +3706,6 @@ async def verify_backend_api_key(
                 detail="Invalid or expired access token.",
                 error_code="invalid_access_token"
             )
-
 
         ALLOWED_ALGORITHMS = ["HS256", "RS256", "ES256"]
         if not alg or alg not in ALLOWED_ALGORITHMS:
@@ -3763,22 +3763,23 @@ async def verify_backend_api_key(
             except PyJWKClientConnectionError:
                 raise AuthException(
                     status_code=503,
-                    detail="Supabase project does not expose asymmetric JWT signing keys.",
+                    detail="Supabase JWKS service is temporarily unavailable.",
                     error_code="supabase_jwks_unavailable"
                 )
             except Exception:
                 raise AuthException(
                     status_code=503,
-                    detail="Supabase project does not expose asymmetric JWT signing keys.",
-                    error_code="supabase_jwks_unavailable"
+                    detail="Supabase JWKS response is malformed or invalid.",
+                    error_code="supabase_jwks_invalid"
                 )
 
-            if not jwk_set.keys:
+            if not jwk_set or not hasattr(jwk_set, "keys") or not jwk_set.keys:
                 raise AuthException(
                     status_code=503,
-                    detail="Supabase project does not expose asymmetric JWT signing keys.",
-                    error_code="supabase_jwks_unavailable"
+                    detail="Supabase JWKS response is empty or invalid.",
+                    error_code="supabase_jwks_invalid"
                 )
+
 
             try:
                 signing_key = client.get_signing_key_from_jwt(token)
