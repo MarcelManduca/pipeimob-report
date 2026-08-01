@@ -33,14 +33,14 @@ class ContractsControlImportService:
         created_by_sub: str,
         dataset: List[Dict[str, Any]]
     ) -> ContractsControlImportPreview:
-        
+
         # 1. Clean up expired previews
         now_dt = datetime.now(timezone.utc)
         ContractsControlImportRepository.delete_expired_previews(db, now_dt)
 
         # 2. Parse file
         parsed_rows = ContractsControlImportParser.parse_file(file_path, filename)
-        
+
         # 3. Calculate source_hash of normalized contents
         # Sort parsed rows semantically to ensure deterministic hashing
         normalized_data_for_hash = []
@@ -55,7 +55,7 @@ class ContractsControlImportService:
                 "data_cadastro": r.get("data_cadastro"),
                 "data_assinatura_ccv": r.get("data_assinatura_ccv")
             })
-            
+
         sorted_for_hash = sorted(
             normalized_data_for_hash,
             key=lambda x: (x.get("aba") or "", x.get("linha") or 0, x.get("codigo_imovel") or "")
@@ -66,7 +66,7 @@ class ContractsControlImportService:
         # Group rows by property code to detect duplicates/conflicts
         grouped_rows = {}
         invalid_source_rows = []
-        
+
         for r in parsed_rows:
             code = r.get("codigo_imovel")
             if not code:
@@ -101,7 +101,7 @@ class ContractsControlImportService:
                 tid = tx.get("transacao_unique_id_pipeimob")
                 if tid:
                     all_tx_ids.append(tid)
-                    
+
         db_manual_data = ContractsControlRepository.get_manual_data_by_transaction_ids(db, all_tx_ids)
         manual_data_map = {md.transaction_id: md for md in db_manual_data}
 
@@ -134,7 +134,7 @@ class ContractsControlImportService:
                 summary["rows_with_responsible_count"] += 1
             else:
                 summary["rows_without_responsible_count"] += 1
-                
+
             preview_items.append(ContractsControlImportPreviewItem(
                 id=uuid.uuid4(),
                 preview_id=preview_id,
@@ -175,13 +175,13 @@ class ContractsControlImportService:
             # Check duplicate conflict rules
             is_conflict = False
             target_resp_name = None
-            
+
             if len(occurrences) > 1:
                 # Get unique responsibles (non-empty)
                 resps_present = [o["responsavel_planilha"] for o in occurrences if o["responsavel_planilha"]]
                 unique_resps_norm = list(set(normalize_responsible_name(r) for r in resps_present))
                 has_empty = any(o["responsavel_planilha"] is None for o in occurrences)
-                
+
                 if code in EXPLICIT_OVERRIDES:
                     target_resp_name = EXPLICIT_OVERRIDES[code]
                     summary["duplicate_conflict_count"] += 1 # Pre-override conflict is counted
@@ -221,13 +221,13 @@ class ContractsControlImportService:
                 decisao_proposta = "invalid_source_row"
                 motivo = "Responsável 'Ana Cristina' deve ser ignorado na importação oficial."
                 summary["invalid_source_row_count"] += 1
-            
+
             # 2. Source Conflict check
             elif is_conflict:
                 decisao_proposta = "source_conflict"
                 motivo = "Conflito de responsabilidade entre linhas duplicadas da planilha."
                 summary["duplicate_conflict_count"] += 1
-                
+
             else:
                 # 3. Match against Pipeimob
                 tx_candidates = transactions_by_code.get(str(code), [])
@@ -252,14 +252,14 @@ class ContractsControlImportService:
                     # Unique Match found!
                     summary["unique_match_count"] += 1
                     transaction_id = matched_tx.get("transacao_unique_id_pipeimob")
-                    
+
                     # Fetch current manual attribution
                     current_md = manual_data_map.get(transaction_id)
                     if current_md:
                         versao_manual_atual = current_md.version
                         if current_md.responsible:
                             responsavel_atual_secretaria = current_md.responsible.name
-                    
+
                     # 4. Responsible Validation
                     if not target_resp_name:
                         # Empty responsible -> Propose Ready to Clear or Already Synchronized
@@ -330,8 +330,8 @@ class ContractsControlImportService:
             created_at=datetime.now(timezone.utc),
             expires_at=datetime.now(timezone.utc) + timedelta(hours=24)
         )
-        
+
         ContractsControlImportRepository.create_preview(db, preview)
         ContractsControlImportRepository.create_preview_items(db, preview_items)
-        
+
         return preview

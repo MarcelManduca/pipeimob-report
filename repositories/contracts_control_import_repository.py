@@ -50,19 +50,19 @@ class ContractsControlImportRepository:
         # Apply filters
         if filters.get("status"):
             stmt = stmt.where(ContractsControlImportPreviewItem.decisao_proposta == filters["status"])
-            
+
         if filters.get("responsavel"):
             # Case insensitive check on responsavel_planilha
             resp_filter = str(filters["responsavel"]).strip()
             stmt = stmt.where(func.lower(ContractsControlImportPreviewItem.responsavel_planilha) == resp_filter.lower())
-            
+
         if filters.get("codigo"):
             code_filter = str(filters["codigo"]).strip()
             stmt = stmt.where(ContractsControlImportPreviewItem.codigo_imovel == code_filter)
-            
+
         if filters.get("aba"):
             stmt = stmt.where(ContractsControlImportPreviewItem.aba == filters["aba"])
-            
+
         if filters.get("only_pending"):
             pending_statuses = ['ready_to_assign', 'ready_to_change', 'ready_to_clear']
             stmt = stmt.where(ContractsControlImportPreviewItem.decisao_proposta.in_(pending_statuses))

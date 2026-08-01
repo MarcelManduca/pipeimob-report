@@ -24,11 +24,11 @@ def parse_date(d_val: Any) -> Optional[date]:
         if isinstance(d_val, datetime):
             return d_val.date()
         return d_val
-        
+
     s = str(d_val).strip()
     if not s:
         return None
-        
+
     # Standard BR format: DD/MM/YYYY
     m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", s)
     if m:
@@ -36,7 +36,7 @@ def parse_date(d_val: Any) -> Optional[date]:
             return date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
         except ValueError:
             pass
-            
+
     # Standard BR format two digit year: DD/MM/YY
     m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{2})$", s)
     if m:
@@ -46,7 +46,7 @@ def parse_date(d_val: Any) -> Optional[date]:
             return date(yr, int(m.group(2)), int(m.group(1)))
         except ValueError:
             pass
-            
+
     # ISO format: YYYY-MM-DD
     m = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})(?:T.*)?$", s)
     if m:
@@ -54,7 +54,7 @@ def parse_date(d_val: Any) -> Optional[date]:
             return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
         except ValueError:
             pass
-            
+
     return None
 
 class ContractsControlImportMatcher:
@@ -67,7 +67,7 @@ class ContractsControlImportMatcher:
         data_cadastro: Optional[str] = None,
         data_assinatura_ccv: Optional[str] = None
     ) -> Tuple[Optional[Dict[str, Any]], str, Optional[str]]:
-        
+
         # If no candidates at all
         if not transactions_by_code:
             return None, "not_found", "Código do imóvel não localizado no Pipeimob."
@@ -78,7 +78,7 @@ class ContractsControlImportMatcher:
 
         # Multiple candidates found -> Apply deterministic filtering
         candidates = list(transactions_by_code)
-        
+
         # 1. Filter by data_cadastro / data_criacao
         p_data_cadastro = parse_date(data_cadastro)
         if p_data_cadastro is not None:
