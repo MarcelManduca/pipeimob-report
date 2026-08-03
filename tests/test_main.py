@@ -2774,9 +2774,9 @@ def test_data_quality_aggregation_scenarios(monkeypatch):
     res = compute_dashboard_aggregates(txs)
     assert res["data_quality"]["summary"]["status"] == "attention"
 
-    # 14. zero transactions
+    # 14. zero transactions (Data Quality status is no_data when no transactions sample exists)
     res = compute_dashboard_aggregates([])
-    assert res["data_quality"]["summary"]["status"] == "ok"
+    assert res["data_quality"]["summary"]["status"] == "no_data"
     assert res["data_quality"]["summary"]["distinct_agents_count"] == 0
     assert res["data_quality"]["summary"]["agent_compliance_ratio"] == 0.0
     assert res["data_quality"]["summary"]["transaction_compliance_ratio"] == 0.0
@@ -7225,3 +7225,245 @@ def test_responsibles_decoupled_from_pipeimob_cache_and_warming():
     finally:
         app.dependency_overrides.clear()
         contracts_control_cache.clear()
+
+
+def test_bi_dashboard_empty_transactions_period():
+    from fastapi.testclient import TestClient
+    from unittest.mock import patch, MagicMock
+    import main as main_module
+    import json
+    import os
+
+    client = TestClient(main_module.app)
+
+    auth_headers = {"Authorization": "Bearer mock_jwt_token"}
+    main_module.app.dependency_overrides[main_module.verify_backend_api_key] = lambda: {
+        "sub": "test-user-id",
+        "role": "authenticated",
+        "email": "test@gralhaimoveis.com.br"
+    }
+
+    empty_upstream_payload = {
+        "success": True,
+        "data": {
+            "transacoes": []
+        },
+        "meta": {
+            "pagination": {
+                "total": 0,
+                "count": 0,
+                "per_page": 50,
+                "current_page": 1,
+                "total_pages": 1,
+                "links": {}
+            }
+        }
+    }
+
+    mock_tx_res = MagicMock()
+    mock_tx_res.read.return_value = json.dumps(empty_upstream_payload).encode('utf-8')
+    mock_cm = MagicMock()
+    mock_cm.__enter__.return_value = mock_tx_res
+
+    with patch.dict(os.environ, {"PIPEIMOB_DATA_MODE": "live", "PIPEIMOB_API_KEY": "dummy_key", "PIPEIMOB_SECRET_KEY": "dummy_secret"}):
+        main_module.dashboard_cache.clear()
+        with patch("main.get_auth_token", return_value="mock_token"):
+            with patch("urllib.request.urlopen", return_value=mock_cm):
+                res = client.get(
+                    "/api/dashboard/full?data_inicio_ccv=2026-08-01&data_fim_ccv=2026-08-03",
+                    headers=auth_headers
+                )
+                assert res.status_code == 200
+                data = res.json()
+                assert data["data_mode"] == "live"
+                assert data["transaction_count"] == 0
+                assert data["summary"]["total_sales"] == 0.0
+                assert data["summary"]["total_commissions"] == 0.0
+                assert data["summary"]["avg_commission_rate"] == 0.0
+                assert data["origins"] == []
+                assert data["stages"] == []
+                assert data["managers"] == []
+                assert data["payments"]["financed_count"] == 0
+                assert data["payments"]["cash_count"] == 0
+                assert data["payments"]["banks"] == []
+                assert data["timeline"] == [
+                    {
+                        "month": "2026-08",
+                        "label": "Ago/26",
+                        "transaction_count": 0,
+                        "total_sales": "0.00",
+                        "total_commissions": "0.00"
+                    }
+                ]
+                assert data["sales_cycle"]["transaction_count"] == 0
+                assert data["sales_cycle"]["fastest_sale"] is None
+                assert data["sales_cycle"]["longest_sale"] is None
+                assert data["data_quality"]["summary"]["status"] == "no_data"
+                assert data["data_quality"]["summary"]["agent_compliance_ratio"] == 0.0
+                assert data["data_quality"]["summary"]["transaction_compliance_ratio"] == 0.0
+
+    main_module.app.dependency_overrides.clear()
+    main_module.dashboard_cache.clear()
+
+
+def test_bi_dashboard_empty_transactions_caching():
+    from fastapi.testclient import TestClient
+    from unittest.mock import patch, MagicMock
+    import main as main_module
+    import json
+    import os
+
+    client = TestClient(main_module.app)
+    auth_headers = {"Authorization": "Bearer mock_jwt_token"}
+    main_module.app.dependency_overrides[main_module.verify_backend_api_key] = lambda: {
+        "sub": "test-user-id",
+        "role": "authenticated"
+    }
+
+    empty_upstream_payload = {
+        "success": True,
+        "data": {
+            "transacoes": []
+        },
+        "meta": {
+            "pagination": {
+                "total": 0,
+                "count": 0,
+                "per_page": 50,
+                "current_page": 1,
+                "total_pages": 1
+            }
+        }
+    }
+
+    mock_tx_res = MagicMock()
+    mock_tx_res.read.return_value = json.dumps(empty_upstream_payload).encode('utf-8')
+    mock_cm = MagicMock()
+    mock_cm.__enter__.return_value = mock_tx_res
+
+    with patch.dict(os.environ, {"PIPEIMOB_DATA_MODE": "live", "PIPEIMOB_API_KEY": "dummy_key", "PIPEIMOB_SECRET_KEY": "dummy_secret"}):
+        main_module.dashboard_cache.clear()
+        with patch("main.get_auth_token", return_value="mock_token"):
+            with patch("urllib.request.urlopen", return_value=mock_cm) as mock_url:
+                res1 = client.get(
+                    "/api/dashboard/full?data_inicio_ccv=2026-08-01&data_fim_ccv=2026-08-03",
+                    headers=auth_headers
+                )
+                assert res1.status_code == 200
+                assert res1.headers.get("X-Cache") == "miss"
+                assert mock_url.call_count == 1
+
+                # Second request should be served directly from cache (hit/fresh)
+                res2 = client.get(
+                    "/api/dashboard/full?data_inicio_ccv=2026-08-01&data_fim_ccv=2026-08-03",
+                    headers=auth_headers
+                )
+                assert res2.status_code == 200
+                assert res2.headers.get("X-Cache") == "fresh"
+                assert mock_url.call_count == 1
+
+    main_module.app.dependency_overrides.clear()
+    main_module.dashboard_cache.clear()
+
+
+def test_pipeimob_strict_payload_validation_errors():
+    from fastapi.testclient import TestClient
+    from unittest.mock import patch, MagicMock
+    import main as main_module
+    import json
+    import os
+
+    client = TestClient(main_module.app)
+    auth_headers = {"Authorization": "Bearer mock_jwt_token"}
+    main_module.app.dependency_overrides[main_module.verify_backend_api_key] = lambda: {
+        "sub": "test-user-id",
+        "role": "authenticated"
+    }
+
+    # Scenario A: transacoes field missing
+    payload_missing_trans = {"success": True, "data": {}, "meta": {"pagination": {"total": 0, "count": 0, "total_pages": 1}}}
+    mock_res_a = MagicMock()
+    mock_res_a.read.return_value = json.dumps(payload_missing_trans).encode('utf-8')
+    cm_a = MagicMock()
+    cm_a.__enter__.return_value = mock_res_a
+
+    with patch.dict(os.environ, {"PIPEIMOB_DATA_MODE": "live", "PIPEIMOB_API_KEY": "k", "PIPEIMOB_SECRET_KEY": "s"}):
+        main_module.dashboard_cache.clear()
+        with patch("main.get_auth_token", return_value="mock_token"):
+            with patch("urllib.request.urlopen", return_value=cm_a):
+                res = client.get("/api/dashboard/full?data_inicio_ccv=2026-08-01&data_fim_ccv=2026-08-03", headers=auth_headers)
+                assert res.status_code == 503
+                assert res.json()["error_code"] == "invalid_pipeimob_response"
+
+    # Scenario B: transacoes is not a list (e.g. string)
+    payload_bad_type = {"success": True, "data": {"transacoes": "invalid_type"}, "meta": {"pagination": {"total": 0, "count": 0, "total_pages": 1}}}
+    mock_res_b = MagicMock()
+    mock_res_b.read.return_value = json.dumps(payload_bad_type).encode('utf-8')
+    cm_b = MagicMock()
+    cm_b.__enter__.return_value = mock_res_b
+
+    with patch.dict(os.environ, {"PIPEIMOB_DATA_MODE": "live", "PIPEIMOB_API_KEY": "k", "PIPEIMOB_SECRET_KEY": "s"}):
+        main_module.dashboard_cache.clear()
+        with patch("main.get_auth_token", return_value="mock_token"):
+            with patch("urllib.request.urlopen", return_value=cm_b):
+                res = client.get("/api/dashboard/full?data_inicio_ccv=2026-08-01&data_fim_ccv=2026-08-03", headers=auth_headers)
+                assert res.status_code == 503
+                assert res.json()["error_code"] == "invalid_pipeimob_response"
+
+    # Scenario C: transacoes empty but total > 0 (contradiction)
+    payload_contradict = {"success": True, "data": {"transacoes": []}, "meta": {"pagination": {"total": 10, "count": 0, "total_pages": 1}}}
+    mock_res_c = MagicMock()
+    mock_res_c.read.return_value = json.dumps(payload_contradict).encode('utf-8')
+    cm_c = MagicMock()
+    cm_c.__enter__.return_value = mock_res_c
+
+    with patch.dict(os.environ, {"PIPEIMOB_DATA_MODE": "live", "PIPEIMOB_API_KEY": "k", "PIPEIMOB_SECRET_KEY": "s"}):
+        main_module.dashboard_cache.clear()
+        with patch("main.get_auth_token", return_value="mock_token"):
+            with patch("urllib.request.urlopen", return_value=cm_c):
+                res = client.get("/api/dashboard/full?data_inicio_ccv=2026-08-01&data_fim_ccv=2026-08-03", headers=auth_headers)
+                assert res.status_code == 503
+                assert res.json()["error_code"] == "invalid_pipeimob_response"
+
+    main_module.app.dependency_overrides.clear()
+    main_module.dashboard_cache.clear()
+
+
+def test_contracts_control_global_empty_dataset_rejected():
+    from unittest.mock import patch, MagicMock
+    import pytest
+    import main as main_module
+    import json
+    import os
+
+    empty_upstream_payload = {
+        "success": True,
+        "data": {
+            "transacoes": []
+        },
+        "meta": {
+            "pagination": {
+                "total": 0,
+                "count": 0,
+                "per_page": 50,
+                "current_page": 1,
+                "total_pages": 1
+            }
+        }
+    }
+    mock_tx_res = MagicMock()
+    mock_tx_res.read.return_value = json.dumps(empty_upstream_payload).encode('utf-8')
+    mock_cm = MagicMock()
+    mock_cm.__enter__.return_value = mock_tx_res
+
+    with patch.dict(os.environ, {"PIPEIMOB_DATA_MODE": "live", "PIPEIMOB_API_KEY": "k", "PIPEIMOB_SECRET_KEY": "s"}):
+        main_module.contracts_control_cache.clear()
+        with patch("main.get_auth_token", return_value="mock_token"):
+            with patch("urllib.request.urlopen", return_value=mock_cm):
+                with pytest.raises(main_module.IntegrationUnavailableError) as excinfo:
+                    main_module._refresh_contracts_control_dataset(request_id="test", caller_endpoint="test")
+                assert excinfo.value.status_code == 503
+                assert excinfo.value.error_code == "invalid_pipeimob_response"
+                assert "empty transactions dataset for global contracts control" in excinfo.value.detail
+
+    main_module.contracts_control_cache.clear()

@@ -533,11 +533,31 @@ def fetch_all_pipeimob_transactions(
         )
         try:
             with urllib.request.urlopen(req, context=ssl_context, timeout=PIPEIMOB_HTTP_TIMEOUT_SECONDS) as response:
-                res_body = json.loads(response.read().decode('utf-8'))
-                if not res_body.get("success"):
+                raw_body = response.read().decode('utf-8')
+                try:
+                    res_body = json.loads(raw_body)
+                except Exception as json_err:
                     raise IntegrationUnavailableError(
                         status_code=503,
-                        detail="Pipeimob transactions API returned success=False.",
+                        detail=f"Invalid JSON format from Pipeimob: {json_err}",
+                        error_code="invalid_pipeimob_response",
+                        data_mode="live",
+                        pipeimob_connection="unavailable"
+                    )
+
+                if not isinstance(res_body, dict):
+                    raise IntegrationUnavailableError(
+                        status_code=503,
+                        detail="Pipeimob response is not a valid JSON object.",
+                        error_code="invalid_pipeimob_response",
+                        data_mode="live",
+                        pipeimob_connection="unavailable"
+                    )
+
+                if res_body.get("success") is not True:
+                    raise IntegrationUnavailableError(
+                        status_code=503,
+                        detail="Pipeimob transactions API returned success=False or missing success field.",
                         error_code="invalid_pipeimob_response",
                         data_mode="live",
                         pipeimob_connection="unavailable"
@@ -587,22 +607,32 @@ def fetch_all_pipeimob_transactions(
         res_body = request_with_retry(url)
         pages_fetched += 1
 
-        txs = res_body.get("data", {}).get("transacoes", []) if isinstance(res_body.get("data"), dict) else []
+        data_obj = res_body.get("data")
+        if not isinstance(data_obj, dict):
+            raise IntegrationUnavailableError(
+                status_code=503,
+                detail="Pipeimob response data field is missing or not an object.",
+                error_code="invalid_pipeimob_response",
+                data_mode="live",
+                pipeimob_connection="unavailable"
+            )
 
-        for tx in txs:
-            tx_id = tx.get("transacao_unique_id_pipeimob")
-            if tx_id:
-                if tx_id not in seen_ids:
-                    seen_ids.add(tx_id)
-                    all_transactions.append(tx)
-            else:
-                all_transactions.append(tx)
+        if "transacoes" not in data_obj or not isinstance(data_obj.get("transacoes"), list):
+            raise IntegrationUnavailableError(
+                status_code=503,
+                detail="Pipeimob response transacoes field is missing or not a list.",
+                error_code="invalid_pipeimob_response",
+                data_mode="live",
+                pipeimob_connection="unavailable"
+            )
+
+        txs = data_obj["transacoes"]
 
         meta_p = None
-        if "meta" in res_body and isinstance(res_body["meta"], dict) and "pagination" in res_body["meta"]:
+        if "meta" in res_body and isinstance(res_body["meta"], dict) and "pagination" in res_body["meta"] and isinstance(res_body["meta"]["pagination"], dict):
             meta_p = res_body["meta"]["pagination"]
-        elif "data" in res_body and isinstance(res_body["data"], dict) and "meta" in res_body["data"] and isinstance(res_body["data"]["meta"], dict) and "pagination" in res_body["data"]["meta"]:
-            meta_p = res_body["data"]["meta"]["pagination"]
+        elif "meta" in data_obj and isinstance(data_obj["meta"], dict) and "pagination" in data_obj["meta"] and isinstance(data_obj["meta"]["pagination"], dict):
+            meta_p = data_obj["meta"]["pagination"]
 
         if meta_p is None:
             raise IntegrationUnavailableError(
@@ -612,6 +642,47 @@ def fetch_all_pipeimob_transactions(
                 data_mode="live",
                 pipeimob_connection="unavailable"
             )
+
+        total = meta_p.get("total")
+
+        # Strict pagination coherency validation
+        if current_page == 1:
+            if len(txs) == 0 and total is not None and total > 0:
+                raise IntegrationUnavailableError(
+                    status_code=503,
+                    detail="Pipeimob pagination metadata total > 0 but transacoes array is empty.",
+                    error_code="invalid_pipeimob_response",
+                    data_mode="live",
+                    pipeimob_connection="unavailable"
+                )
+            if len(txs) > 0 and total == 0:
+                raise IntegrationUnavailableError(
+                    status_code=503,
+                    detail="Pipeimob pagination metadata total == 0 but transacoes array has items.",
+                    error_code="invalid_pipeimob_response",
+                    data_mode="live",
+                    pipeimob_connection="unavailable"
+                )
+
+        for tx in txs:
+            if not isinstance(tx, dict):
+                raise IntegrationUnavailableError(
+                    status_code=503,
+                    detail="Transaction element in Pipeimob response is not a valid dictionary.",
+                    error_code="invalid_pipeimob_response",
+                    data_mode="live",
+                    pipeimob_connection="unavailable"
+                )
+            tx_id = tx.get("transacao_unique_id_pipeimob")
+            if tx_id:
+                if tx_id not in seen_ids:
+                    seen_ids.add(tx_id)
+                    all_transactions.append(tx)
+            else:
+                all_transactions.append(tx)
+
+        if total == 0:
+            break
 
         last_page = meta_p.get("total_pages") or 1
 
@@ -1020,15 +1091,6 @@ async def load_transactions_dataset(
             codigo_contrato=codigo_contrato,
             transacao_unique_id=transacao_unique_id
         )
-
-        if not txs:
-            raise IntegrationUnavailableError(
-                status_code=503,
-                detail="Pipeimob CRM API returned empty transactions dataset.",
-                error_code="invalid_pipeimob_response",
-                data_mode="live",
-                pipeimob_connection="unavailable"
-            )
 
         for tx in txs:
             _, vgc_gralha, _ = calculate_vgc_split(tx)
@@ -2392,7 +2454,9 @@ def compute_dashboard_aggregates(
         if len(filtered) > 0 else 0.0
     )
 
-    if affected_agents_count == 0 and review_only_agents_count == 0 and unassigned_manager_transactions_count == 0 and review_only_transactions_count == 0:
+    if len(filtered) == 0:
+        overall_status = "no_data"
+    elif affected_agents_count == 0 and review_only_agents_count == 0 and unassigned_manager_transactions_count == 0 and review_only_transactions_count == 0:
         overall_status = "ok"
     else:
         if distinct_agents_count > 0 and (affected_agents_count / distinct_agents_count) > 0.30:
@@ -5335,7 +5399,7 @@ def _refresh_contracts_control_dataset(request_id=None, caller_endpoint=None):
     if not txs:
         raise IntegrationUnavailableError(
             status_code=503,
-            detail="Pipeimob CRM API returned empty transactions dataset.",
+            detail="Pipeimob CRM API returned empty transactions dataset for global contracts control.",
             error_code="invalid_pipeimob_response",
             data_mode="live",
             pipeimob_connection="unavailable"
