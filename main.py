@@ -5,8 +5,8 @@ import urllib.request
 import json
 import ssl
 import time
-from datetime import datetime, timezone
-from typing import List, Optional, Union
+from datetime import datetime, date, timezone
+from typing import List, Optional, Union, Any
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 from fastapi import FastAPI, Header, Query, HTTPException, Response, Request, Depends, File, UploadFile
@@ -76,7 +76,7 @@ class DashboardCache:
 dashboard_cache = DashboardCache()
 dashboard_cache.clear()
 
-DASHBOARD_CACHE_VERSION = "sales-cycle-v6-vgc-pending-unknown-fix"
+DASHBOARD_CACHE_VERSION = "v2"
 
 class AsyncSingleFlightRegistry:
     def __init__(self):
@@ -220,15 +220,20 @@ def generate_dashboard_cache_key(
     data_arquivamento_fim: Optional[str] = None,
     codigo_imovel: Optional[str] = None,
     codigo_contrato: Optional[str] = None,
-    transacao_unique_id: Optional[str] = None
+    transacao_unique_id: Optional[str] = None,
+    requested_granularity: Optional[str] = None,
+    applied_granularity: Optional[str] = None
 ) -> tuple:
+    req_g = requested_granularity or "month"
+    app_g = applied_granularity or req_g
     return (
         "bi",
         DASHBOARD_CACHE_VERSION,
         data_inicio_criacao, data_fim_criacao,
         data_inicio_ccv, data_fim_ccv,
         data_arquivamento_inicio, data_arquivamento_fim,
-        codigo_imovel, codigo_contrato, transacao_unique_id
+        codigo_imovel, codigo_contrato, transacao_unique_id,
+        req_g, app_g
     )
 
 def parse_official_team_groups() -> tuple[str, bool, dict, list[str]]:
@@ -367,6 +372,22 @@ class AuthException(Exception):
 
 @app.exception_handler(AuthException)
 async def auth_exception_handler(request: Request, exc: AuthException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "detail": exc.detail,
+            "error_code": exc.error_code
+        }
+    )
+
+class GranularityException(Exception):
+    def __init__(self, status_code: int, detail: str, error_code: str):
+        self.status_code = status_code
+        self.detail = detail
+        self.error_code = error_code
+
+@app.exception_handler(GranularityException)
+async def granularity_exception_handler(request: Request, exc: GranularityException):
     return JSONResponse(
         status_code=exc.status_code,
         content={
@@ -1001,7 +1022,9 @@ async def load_transactions_dataset(
     transacao_unique_id: Optional[str] = None,
     pagina: Optional[int] = None,
     request_id: Optional[str] = None,
-    refresh: bool = False
+    refresh: bool = False,
+    requested_granularity: Optional[str] = None,
+    applied_granularity: Optional[str] = None
 ) -> tuple:
     import time
     start_time = time.perf_counter()
@@ -1071,7 +1094,8 @@ async def load_transactions_dataset(
         data_inicio_criacao, data_fim_criacao,
         data_inicio_ccv, data_fim_ccv,
         data_arquivamento_inicio, data_arquivamento_fim,
-        codigo_imovel, codigo_contrato, transacao_unique_id
+        codigo_imovel, codigo_contrato, transacao_unique_id,
+        requested_granularity, applied_granularity
     )
 
     def sync_fetch():
@@ -1272,12 +1296,234 @@ def parse_date_to_year_month(date_str: str) -> Optional[tuple]:
             pass
     return None
 
+def parse_date_to_date_obj(val: Any) -> Optional[date]:
+    if val is None:
+        return None
+    date_str = str(val).strip()
+    if date_str == "" or date_str.lower() in ("none", "null"):
+        return None
+
+    import re
+    from datetime import datetime, timezone, timedelta
+    from zoneinfo import ZoneInfo
+    sp_tz = ZoneInfo("America/Sao_Paulo")
+
+    # 1. Try ISO datetime format with time component (e.g. "2026-07-06T01:30:00Z", "2026-07-06T20:30:00-03:00", "2026-07-06 20:30:00")
+    iso_datetime_pattern = r"^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?(?:(Z)|([+-]\d{2}):?(\d{2}))?"
+    match_dt = re.match(iso_datetime_pattern, date_str)
+    if match_dt:
+        try:
+            year, month, day = int(match_dt.group(1)), int(match_dt.group(2)), int(match_dt.group(3))
+            hour, minute = int(match_dt.group(4)), int(match_dt.group(5))
+            second = int(match_dt.group(6)) if match_dt.group(6) else 0
+            microsecond = int(match_dt.group(7)[:6].ljust(6, '0')) if match_dt.group(7) else 0
+
+            is_z = match_dt.group(8)
+            tz_h = match_dt.group(9)
+            tz_m = match_dt.group(10)
+
+            if is_z:
+                tz = timezone.utc
+            elif tz_h is not None:
+                offset_sign = -1 if tz_h.startswith('-') else 1
+                offset_mins = (abs(int(tz_h)) * 60 + (int(tz_m) if tz_m else 0)) * offset_sign
+                tz = timezone(timedelta(minutes=offset_mins))
+            else:
+                tz = sp_tz
+
+            dt_obj = datetime(year, month, day, hour, minute, second, microsecond, tzinfo=tz)
+            dt_sp = dt_obj.astimezone(sp_tz)
+            return dt_sp.date()
+        except Exception:
+            pass
+
+    # 2. Try YYYY-MM-DD (date only)
+    match_iso = re.match(r"^(\d{4})-(\d{2})-(\d{2})$", date_str)
+    if match_iso:
+        try:
+            return date(int(match_iso.group(1)), int(match_iso.group(2)), int(match_iso.group(3)))
+        except ValueError:
+            pass
+
+    # 3. Try DD/MM/YYYY (date only)
+    match_br = re.match(r"^(\d{2})/(\d{2})/(\d{4})$", date_str)
+    if match_br:
+        try:
+            return date(int(match_br.group(3)), int(match_br.group(2)), int(match_br.group(1)))
+        except ValueError:
+            pass
+
+    return None
+
+def build_timeline_buckets(
+    filtered: list,
+    start_date: date,
+    end_date: date,
+    applied_granularity: str
+) -> tuple[list[dict], dict]:
+    from decimal import Decimal
+    import calendar
+    from datetime import timedelta
+
+    months_pt_short = {1: "jan", 2: "fev", 3: "mar", 4: "abr", 5: "mai", 6: "jun", 7: "jul", 8: "ago", 9: "set", 10: "out", 11: "nov", 12: "dez"}
+    months_pt_title = {1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun", 7: "Jul", 8: "Ago", 9: "Set", 10: "Out", 11: "Nov", 12: "Dez"}
+
+    buckets = []
+
+    if applied_granularity == "day":
+        curr = start_date
+        while curr <= end_date:
+            dt_str = curr.strftime("%Y-%m-%d")
+            buckets.append({
+                "bucket_key": dt_str,
+                "period_start_date": curr,
+                "period_end_date": curr,
+                "period_start": dt_str,
+                "period_end": dt_str,
+                "label": f"{curr.day:02d}/{curr.month:02d}",
+                "month": None,
+                "count": 0,
+                "sales": Decimal("0.0"),
+                "commissions": Decimal("0.0")
+            })
+            curr += timedelta(days=1)
+
+    elif applied_granularity == "week":
+        curr_start = start_date
+        while curr_start <= end_date:
+            days_to_sunday = 6 - curr_start.weekday()
+            week_sunday = curr_start + timedelta(days=days_to_sunday)
+            curr_end = min(week_sunday, end_date)
+
+            p_start_str = curr_start.strftime("%Y-%m-%d")
+            p_end_str = curr_end.strftime("%Y-%m-%d")
+            bucket_key = f"{p_start_str}_{p_end_str}"
+
+            if curr_start.year != curr_end.year:
+                label = f"{curr_start.day:02d} {months_pt_short[curr_start.month]} {curr_start.year}–{curr_end.day:02d} {months_pt_short[curr_end.month]} {curr_end.year}"
+            elif curr_start.month != curr_end.month:
+                label = f"{curr_start.day:02d} {months_pt_short[curr_start.month]}–{curr_end.day:02d} {months_pt_short[curr_end.month]}"
+            else:
+                label = f"{curr_start.day:02d}–{curr_end.day:02d} {months_pt_short[curr_start.month]}"
+
+            buckets.append({
+                "bucket_key": bucket_key,
+                "period_start_date": curr_start,
+                "period_end_date": curr_end,
+                "period_start": p_start_str,
+                "period_end": p_end_str,
+                "label": label,
+                "month": None,
+                "count": 0,
+                "sales": Decimal("0.0"),
+                "commissions": Decimal("0.0")
+            })
+            curr_start = curr_end + timedelta(days=1)
+
+    else:  # "month"
+        curr_start = start_date
+        while curr_start <= end_date:
+            _, last_day = calendar.monthrange(curr_start.year, curr_start.month)
+            month_end = date(curr_start.year, curr_start.month, last_day)
+            curr_end = min(month_end, end_date)
+
+            p_start_str = curr_start.strftime("%Y-%m-%d")
+            p_end_str = curr_end.strftime("%Y-%m-%d")
+            month_key = f"{curr_start.year}-{curr_start.month:02d}"
+
+            label = f"{months_pt_title[curr_start.month]}/{str(curr_start.year)[-2:]}"
+
+            buckets.append({
+                "bucket_key": month_key,
+                "period_start_date": curr_start,
+                "period_end_date": curr_end,
+                "period_start": p_start_str,
+                "period_end": p_end_str,
+                "label": label,
+                "month": month_key,
+                "count": 0,
+                "sales": Decimal("0.0"),
+                "commissions": Decimal("0.0")
+            })
+            curr_start = curr_end + timedelta(days=1)
+
+    unclassified = {
+        "count": 0,
+        "sales": Decimal("0.0"),
+        "commissions": Decimal("0.0"),
+        "missing_date_count": 0,
+        "invalid_date_count": 0,
+        "out_of_range_count": 0
+    }
+
+    for tx in filtered:
+        dt_str = extract_transaction_date(tx)
+        tx_date = parse_date_to_date_obj(dt_str) if dt_str else None
+
+        val_sales = Decimal(str(tx.get("valor_contrato") or "0.0"))
+        val_comm = Decimal(str(tx.get("total_comissao") or "0.0"))
+
+        if tx_date:
+            matched = False
+            for b in buckets:
+                if b["period_start_date"] <= tx_date <= b["period_end_date"]:
+                    b["count"] += 1
+                    b["sales"] += val_sales
+                    b["commissions"] += val_comm
+                    matched = True
+                    break
+            if not matched:
+                unclassified["count"] += 1
+                unclassified["sales"] += val_sales
+                unclassified["commissions"] += val_comm
+                unclassified["out_of_range_count"] += 1
+        else:
+            unclassified["count"] += 1
+            unclassified["sales"] += val_sales
+            unclassified["commissions"] += val_comm
+            if dt_str is None:
+                unclassified["missing_date_count"] += 1
+            else:
+                unclassified["invalid_date_count"] += 1
+
+    formatted_timeline = []
+    for b in buckets:
+        if b["sales"] > Decimal("0.0"):
+            rate = float(round((b["commissions"] / b["sales"]) * Decimal("100"), 2))
+        else:
+            rate = 0.0
+
+        formatted_timeline.append({
+            "bucket_key": b["bucket_key"],
+            "period_start": b["period_start"],
+            "period_end": b["period_end"],
+            "label": b["label"],
+            "month": b["month"],
+            "transaction_count": b["count"],
+            "total_sales": f"{b['sales']:.2f}",
+            "total_commissions": f"{b['commissions']:.2f}",
+            "average_commission_rate": rate
+        })
+
+    formatted_unclassified = {
+        "transaction_count": unclassified["count"],
+        "total_sales": f"{unclassified['sales']:.2f}",
+        "total_commissions": f"{unclassified['commissions']:.2f}",
+        "missing_date_count": unclassified["missing_date_count"],
+        "invalid_date_count": unclassified["invalid_date_count"],
+        "out_of_range_count": unclassified["out_of_range_count"]
+    }
+
+    return formatted_timeline, formatted_unclassified
+
 def compute_dashboard_aggregates(
     filtered: list,
     data_inicio_ccv: Optional[str] = None,
     data_fim_ccv: Optional[str] = None,
     data_inicio_criacao: Optional[str] = None,
-    data_fim_criacao: Optional[str] = None
+    data_fim_criacao: Optional[str] = None,
+    requested_granularity: str = "month",
+    applied_granularity: str = "month"
 ) -> dict:
     from decimal import Decimal
 
@@ -1293,7 +1539,7 @@ def compute_dashboard_aggregates(
         total_sales += Decimal(str(tx.get("valor_contrato") or "0.0"))
         total_commissions += Decimal(str(tx.get("total_comissao") or "0.0"))
 
-    avg_rate = float(round((total_commissions / total_sales) * 100, 2)) if total_sales > 0 else 0.0
+    avg_rate = float(round((total_commissions / total_sales) * Decimal("100"), 2)) if total_sales > Decimal("0.0") else 0.0
 
     summary = {
         "total_sales": float(round(total_sales, 2)),
@@ -1376,7 +1622,7 @@ def compute_dashboard_aggregates(
             method_groups[m_name] = method_groups.get(m_name, Decimal("0.0")) + m_val
 
     total_deals = financed_count + cash_count
-    ratio = float(round((financed_count / total_deals) * 100, 2)) if total_deals > 0 else 0.0
+    ratio = float(round((Decimal(str(financed_count)) / Decimal(str(total_deals))) * Decimal("100"), 2)) if total_deals > 0 else 0.0
     banks = [
         {"bank": b, "count": stats["count"], "volume": float(round(stats["volume"], 2))}
         for b, stats in bank_groups.items()
@@ -1402,7 +1648,7 @@ def compute_dashboard_aggregates(
     for tx in filtered:
         val = Decimal(str(tx.get("valor_contrato") or "0.0"))
         comm = Decimal(str(tx.get("total_comissao") or "0.0"))
-        rate = float(round((comm / val) * 100, 2)) if val > 0 else 0.0
+        rate = float(round((comm / val) * Decimal("100"), 2)) if val > Decimal("0.0") else 0.0
         total_comm += comm
         total_sales_comm += val
         commissions.append({
@@ -1413,7 +1659,7 @@ def compute_dashboard_aggregates(
             "rate": rate,
             "manager": tx.get("agente_gestor") or "Sem Gestor"
         })
-    avg_rate_comm = float(round((total_comm / total_sales_comm) * 100, 2)) if total_sales_comm > 0 else 0.0
+    avg_rate_comm = float(round((total_comm / total_sales_comm) * Decimal("100"), 2)) if total_sales_comm > Decimal("0.0") else 0.0
     expose_raw = os.getenv("EXPOSE_RAW_TRANSACTIONS", "false").strip().lower() == "true"
     commissions_payload = {
         "total_commissions": float(round(total_comm, 2)),
@@ -1425,156 +1671,45 @@ def compute_dashboard_aggregates(
     start_str = data_inicio_ccv or data_inicio_criacao
     end_str = data_fim_ccv or data_fim_criacao
 
-    start_ym = parse_date_to_year_month(start_str) if start_str else None
-    end_ym = parse_date_to_year_month(end_str) if end_str else None
+    start_date_obj = parse_date_to_date_obj(start_str) if start_str else None
+    end_date_obj = parse_date_to_date_obj(end_str) if end_str else None
 
-    if not start_ym or not end_ym:
-        dataset_yms = []
+    if not start_date_obj or not end_date_obj:
+        dataset_dates = []
         for tx in filtered:
             dt_str = extract_transaction_date(tx)
-            ym = parse_date_to_year_month(dt_str)
-            if ym:
-                dataset_yms.append(ym)
-        if dataset_yms:
-            if not start_ym:
-                start_ym = min(dataset_yms)
-            if not end_ym:
-                end_ym = max(dataset_yms)
+            d = parse_date_to_date_obj(dt_str)
+            if d:
+                dataset_dates.append(d)
+        if dataset_dates:
+            if not start_date_obj:
+                start_date_obj = min(dataset_dates)
+            if not end_date_obj:
+                end_date_obj = max(dataset_dates)
         else:
-            now = datetime.now()
-            if not start_ym:
-                start_ym = (now.year, now.month)
-            if not end_ym:
-                end_ym = (now.year, now.month)
+            today = datetime.now(ZoneInfo("America/Sao_Paulo")).date()
+            if not start_date_obj:
+                start_date_obj = today.replace(day=1)
+            if not end_date_obj:
+                end_date_obj = today
 
-    start_year, start_month = start_ym
-    end_year, end_month = end_ym
+    if start_date_obj > end_date_obj:
+        start_date_obj, end_date_obj = end_date_obj, start_date_obj
 
-    if (start_year, start_month) > (end_year, end_month):
-        start_year, start_month, end_year, end_month = end_year, end_month, start_year, start_month
-
-    months_range = []
-    curr_year, curr_month = start_year, start_month
-    while (curr_year, curr_month) <= (end_year, end_month):
-        months_range.append((curr_year, curr_month))
-        if curr_month == 12:
-            curr_month = 1
-            curr_year += 1
-        else:
-            curr_month += 1
-
-    timeline_groups = {}
-    for y, m in months_range:
-        key = f"{y}-{m:02d}"
-        timeline_groups[key] = {
-            "count": 0,
-            "sales": Decimal("0.0"),
-            "commissions": Decimal("0.0")
-        }
-
-    registros_com_data = 0
-    registros_sem_data = 0
-    datas_invalidas = 0
-    found_fields = set()
-
-    unclassified_groups = {
-        "count": 0,
-        "sales": Decimal("0.0"),
-        "commissions": Decimal("0.0"),
-        "missing_date_count": 0,
-        "invalid_date_count": 0,
-        "out_of_range_count": 0
-    }
-
-    for tx in filtered:
-        dt_str = extract_transaction_date(tx)
-        ym = None
-        is_missing = False
-        is_invalid = False
-
-        if dt_str:
-            ym = parse_date_to_year_month(dt_str)
-            if not ym:
-                datas_invalidas += 1
-                is_invalid = True
-        else:
-            registros_sem_data += 1
-            is_missing = True
-
-        priority_keys = [
-            "data_assinatura_ccv",
-            "data_ccv",
-            "data_assinatura",
-            "data_contrato",
-            "data_criacao",
-            "created_at"
-        ]
-        found_key = "other"
-        for pk in priority_keys:
-            if tx.get(pk) is not None:
-                found_key = pk
-                break
-        found_fields.add(found_key)
-
-        val_sales = Decimal(str(tx.get("valor_contrato") or "0.0"))
-        val_comm = Decimal(str(tx.get("total_comissao") or "0.0"))
-
-        if ym:
-            registros_com_data += 1
-            y, m = ym
-            key = f"{y}-{m:02d}"
-
-            if key in timeline_groups:
-                timeline_groups[key]["count"] += 1
-                timeline_groups[key]["sales"] += val_sales
-                timeline_groups[key]["commissions"] += val_comm
-            else:
-                unclassified_groups["count"] += 1
-                unclassified_groups["sales"] += val_sales
-                unclassified_groups["commissions"] += val_comm
-                unclassified_groups["out_of_range_count"] += 1
-        else:
-            unclassified_groups["count"] += 1
-            unclassified_groups["sales"] += val_sales
-            unclassified_groups["commissions"] += val_comm
-            if is_missing:
-                unclassified_groups["missing_date_count"] += 1
-            if is_invalid:
-                unclassified_groups["invalid_date_count"] += 1
-
-    log_data = {
-        "event": "timeline_computed",
-        "registros_com_data": registros_com_data,
-        "registros_sem_data": registros_sem_data,
-        "datas_invalidas": datas_invalidas,
-        "campos_data_encontrados": list(found_fields),
-        "quantidade_por_mes": {k: v["count"] for k, v in timeline_groups.items()},
-        "quantidade_nao_classificada": unclassified_groups["count"]
-    }
-    print(f"SECURE_LOG: {json.dumps(log_data)}")
-
-    timeline = []
-    for key in sorted(timeline_groups.keys()):
-        parts = key.split("-")
-        y = parts[0]
-        m = parts[1]
-        label = f"{months_pt.get(m, m)}/{y[-2:]}"
-        stats = timeline_groups[key]
-        timeline.append({
-            "month": key,
-            "label": label,
-            "transaction_count": stats["count"],
-            "total_sales": f"{stats['sales']:.2f}",
-            "total_commissions": f"{stats['commissions']:.2f}"
-        })
+    timeline, unclassified_payload = build_timeline_buckets(
+        filtered=filtered,
+        start_date=start_date_obj,
+        end_date=end_date_obj,
+        applied_granularity=applied_granularity
+    )
 
     timeline_count_sum = sum(t["transaction_count"] for t in timeline)
     timeline_sales_sum = sum(Decimal(t["total_sales"]) for t in timeline)
     timeline_comm_sum = sum(Decimal(t["total_commissions"]) for t in timeline)
 
-    unclassified_count = unclassified_groups["count"]
-    unclassified_sales = unclassified_groups["sales"]
-    unclassified_comm = unclassified_groups["commissions"]
+    unclassified_count = unclassified_payload["transaction_count"]
+    unclassified_sales = Decimal(unclassified_payload["total_sales"])
+    unclassified_comm = Decimal(unclassified_payload["total_commissions"])
 
     reconciled_count = (timeline_count_sum + unclassified_count) == summary["transaction_count"]
     reconciled_sales = (timeline_sales_sum + unclassified_sales) == total_sales
@@ -1592,10 +1727,21 @@ def compute_dashboard_aggregates(
         "transaction_count": unclassified_count,
         "total_sales": f"{unclassified_sales:.2f}",
         "total_commissions": f"{unclassified_comm:.2f}",
-        "missing_date_count": unclassified_groups["missing_date_count"],
-        "invalid_date_count": unclassified_groups["invalid_date_count"],
-        "out_of_range_count": unclassified_groups["out_of_range_count"]
+        "missing_date_count": unclassified_payload["missing_date_count"],
+        "invalid_date_count": unclassified_payload["invalid_date_count"],
+        "out_of_range_count": unclassified_payload["out_of_range_count"]
     }
+
+    months_range = []
+    c_y, c_m = start_date_obj.year, start_date_obj.month
+    end_y, end_m = end_date_obj.year, end_date_obj.month
+    while (c_y, c_m) <= (end_y, end_m):
+        months_range.append((c_y, c_m))
+        if c_m == 12:
+            c_m = 1
+            c_y += 1
+        else:
+            c_m += 1
 
     # === VGC Commission Financials Analysis ===
     sp_tz = ZoneInfo("America/Sao_Paulo")
@@ -3229,6 +3375,17 @@ class DashboardCommissionsResponse(BaseModel):
         }
     }
 
+class DashboardTimelineMetric(BaseModel):
+    bucket_key: str = Field(..., description="Unique key for the bucket (e.g. 2026-07-01, 2026-07-06_2026-07-12, 2026-07)")
+    period_start: str = Field(..., description="Start date of the bucket period (YYYY-MM-DD)")
+    period_end: str = Field(..., description="End date of the bucket period (YYYY-MM-DD)")
+    label: str = Field(..., description="Display label for the bucket (e.g. 06–12 jul, 01/07, Jul/26)")
+    month: Optional[str] = Field(None, description="Month key (YYYY-MM) for month granularity, None for day/week")
+    transaction_count: int = Field(..., description="Number of transactions during the bucket period")
+    total_sales: str = Field(..., description="Total sales volume as string")
+    total_commissions: str = Field(..., description="Total commissions as string")
+    average_commission_rate: float = Field(0.0, description="Weighted average commission rate percentage for the bucket")
+
 class TimelineMetric(BaseModel):
     month: str = Field(..., description="Month key (e.g. YYYY-MM)", json_schema_extra={"example": "2026-01"})
     label: str = Field(..., description="Month/Year label (e.g. Jan/26)", json_schema_extra={"example": "Jan/26"})
@@ -3500,6 +3657,9 @@ class DashboardFullResponse(BaseModel):
     data_mode: str
     source: str
     period: DashboardPeriod
+    requested_granularity: str = "month"
+    applied_granularity: str = "month"
+    available_granularities: List[str] = Field(default_factory=lambda: ["day", "week", "month"])
     pages_fetched: int
     transaction_count: int
     summary: SummaryDataPayload
@@ -3508,7 +3668,7 @@ class DashboardFullResponse(BaseModel):
     managers: List[ManagerMetric]
     payments: PaymentsDataPayload
     commissions: CommissionsDataPayload
-    timeline: List[TimelineMetric]
+    timeline: List[DashboardTimelineMetric]
     unclassified: Optional[UnclassifiedTimeline] = None
     reconciliation: Optional[TimelineReconciliation] = None
     sales_cycle: Optional[SalesCyclePayload] = None
@@ -4554,18 +4714,63 @@ async def get_dashboard_full(
     category: Optional[str] = Query(None),
     financing: Optional[bool] = Query(None),
     etapa_atual: Optional[str] = Query(None),
+    granularity: Optional[str] = Query(None),
     refresh: Optional[bool] = Query(None)
 ):
     req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
+
+    requested_granularity = (granularity or "month").strip().lower()
+    if requested_granularity not in ["auto", "day", "week", "month"]:
+        raise GranularityException(
+            status_code=400,
+            detail=f"Invalid granularity value '{granularity}'. Supported values are: auto, day, week, month.",
+            error_code="invalid_granularity"
+        )
+
+    start_str = data_inicio_ccv or data_inicio_criacao
+    end_str = data_fim_ccv or data_fim_criacao
+
+    start_dt_pre = parse_date_to_date_obj(start_str) if start_str else None
+    end_dt_pre = parse_date_to_date_obj(end_str) if end_str else None
+
+    applied_granularity_pre = None
+    if start_dt_pre and end_dt_pre:
+        if start_dt_pre > end_dt_pre:
+            start_dt_pre, end_dt_pre = end_dt_pre, start_dt_pre
+        total_days_pre = (end_dt_pre - start_dt_pre).days + 1
+        if total_days_pre <= 62:
+            avail_pre = ["day", "week", "month"]
+        elif total_days_pre <= 366:
+            avail_pre = ["week", "month"]
+        else:
+            avail_pre = ["month"]
+
+        if requested_granularity == "auto":
+            if total_days_pre <= 14:
+                applied_granularity_pre = "day"
+            elif total_days_pre <= 90:
+                applied_granularity_pre = "week"
+            else:
+                applied_granularity_pre = "month"
+        else:
+            if requested_granularity not in avail_pre:
+                raise GranularityException(
+                    status_code=400,
+                    detail=f"Granularity '{requested_granularity}' is not supported for a period of {total_days_pre} days.",
+                    error_code="unsupported_granularity_for_period"
+                )
+            applied_granularity_pre = requested_granularity
 
     try:
         mode, src, dataset, pages_fetched, cache_status = await load_transactions_dataset(
             data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
             data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
-            pagina=None, request_id=req_id, refresh=bool(refresh)
+            pagina=None, request_id=req_id, refresh=bool(refresh),
+            requested_granularity=requested_granularity,
+            applied_granularity=applied_granularity_pre
         )
     except Exception as e:
-        if isinstance(e, IntegrationUnavailableError) or isinstance(e, HTTPException):
+        if isinstance(e, IntegrationUnavailableError) or isinstance(e, HTTPException) or isinstance(e, GranularityException):
             raise e
         raise IntegrationUnavailableError(
             status_code=503,
@@ -4582,9 +4787,66 @@ async def get_dashboard_full(
         agent, category, financing, etapa_atual
     )
 
+    start_dt = start_dt_pre
+    end_dt = end_dt_pre
+    if not start_dt or not end_dt:
+        dataset_dates = []
+        for tx in filtered:
+            dt_str = extract_transaction_date(tx)
+            d = parse_date_to_date_obj(dt_str)
+            if d:
+                dataset_dates.append(d)
+        if dataset_dates:
+            if not start_dt:
+                start_dt = min(dataset_dates)
+            if not end_dt:
+                end_dt = max(dataset_dates)
+        else:
+            today = datetime.now(ZoneInfo("America/Sao_Paulo")).date()
+            if not start_dt:
+                start_dt = today.replace(day=1)
+            if not end_dt:
+                end_dt = today
+
+    if start_dt > end_dt:
+        start_dt, end_dt = end_dt, start_dt
+
+    total_days = (end_dt - start_dt).days + 1
+
+    if total_days <= 62:
+        available_granularities = ["day", "week", "month"]
+    elif total_days <= 366:
+        available_granularities = ["week", "month"]
+    else:
+        available_granularities = ["month"]
+
+    if requested_granularity == "auto":
+        if total_days <= 14:
+            applied_granularity = "day"
+        elif total_days <= 90:
+            applied_granularity = "week"
+        else:
+            applied_granularity = "month"
+    else:
+        if requested_granularity not in available_granularities:
+            raise GranularityException(
+                status_code=400,
+                detail=f"Granularity '{requested_granularity}' is not supported for a period of {total_days} days.",
+                error_code="unsupported_granularity_for_period"
+            )
+        applied_granularity = requested_granularity
+
     try:
-        aggregates = compute_dashboard_aggregates(filtered, data_inicio_ccv, data_fim_ccv, data_inicio_criacao, data_fim_criacao)
+        aggregates = compute_dashboard_aggregates(
+            filtered,
+            data_inicio_ccv, data_fim_ccv,
+            data_inicio_criacao, data_fim_criacao,
+            requested_granularity=requested_granularity,
+            applied_granularity=applied_granularity
+        )
     except Exception as e:
+        if isinstance(e, GranularityException):
+            raise e
         raise IntegrationUnavailableError(
             status_code=503,
             detail=f"Failed to compute dashboard aggregates: {e}",
@@ -4602,14 +4864,12 @@ async def get_dashboard_full(
         debug_metrics = {}
         debug_metrics["transaction_count"] = len(dataset)
 
-        # 1. Top-level keys presence counts
         top_keys_counts = {}
         for tx in dataset:
             for k in tx.keys():
                 top_keys_counts[k] = top_keys_counts.get(k, 0) + 1
         debug_metrics["top_level_keys_counts"] = top_keys_counts
 
-        # 2. Priority keys presence, types and validity counts
         priority_keys = [
             "data_assinatura_ccv",
             "data_ccv",
@@ -4625,7 +4885,6 @@ async def get_dashboard_full(
         missing_count = 0
         invalid_count = 0
 
-        # Recurse checking
         nested_paths_counts = {}
         def check_nested(node, prefix_path=""):
             if isinstance(node, dict):
@@ -4668,7 +4927,6 @@ async def get_dashboard_full(
         debug_metrics["missing_count"] = missing_count
         debug_metrics["invalid_count"] = invalid_count
 
-        # 3. Stage counts validation
         debug_metrics["stages_validation"] = {
             "raw_count": len(dataset),
             "normalized_count": len(dataset),
@@ -4689,7 +4947,8 @@ async def get_dashboard_full(
         "agent": agent,
         "category": category,
         "financing": financing,
-        "etapa_atual": etapa_atual
+        "etapa_atual": etapa_atual,
+        "granularity": granularity
     }
     filters_applied = {k: v for k, v in filters_map.items() if v is not None}
 
@@ -4697,6 +4956,9 @@ async def get_dashboard_full(
         data_mode=mode,
         source=src,
         period=DashboardPeriod(start=data_inicio_ccv, end=data_fim_ccv),
+        requested_granularity=requested_granularity,
+        applied_granularity=applied_granularity,
+        available_granularities=available_granularities,
         pages_fetched=pages_fetched,
         transaction_count=len(filtered),
         summary=SummaryDataPayload(**aggregates["summary"]),
@@ -4705,7 +4967,7 @@ async def get_dashboard_full(
         managers=[ManagerMetric(**m) for m in aggregates["managers"]],
         payments=PaymentsDataPayload(**aggregates["payments"]),
         commissions=CommissionsDataPayload(**aggregates["commissions"]),
-        timeline=[TimelineMetric(**t) for t in aggregates["timeline"]],
+        timeline=[DashboardTimelineMetric(**t) for t in aggregates["timeline"]],
         unclassified=UnclassifiedTimeline(**aggregates["unclassified"]),
         reconciliation=TimelineReconciliation(**aggregates["reconciliation"]),
         sales_cycle=SalesCyclePayload(**aggregates["sales_cycle"]) if aggregates.get("sales_cycle") is not None else None,
@@ -5046,26 +5308,7 @@ contracts_control_cache = ContractsControlCache()
 def generate_contracts_control_cache_key(coverage_start: str) -> tuple:
     return ("pipeimob:raw", CONTRACTS_CONTROL_CACHE_VERSION, coverage_start)
 
-# Strict date parsing and stats helpers
-def parse_date_to_date_obj(val: Any) -> Optional[date]:
-    if val is None:
-        return None
-    val_str = str(val).strip()
-    if val_str == "" or val_str.lower() in ("none", "null"):
-        return None
-    try:
-        return datetime.strptime(val_str, "%Y-%m-%d").date()
-    except ValueError:
-        pass
-    try:
-        return datetime.strptime(val_str, "%d/%m/%Y").date()
-    except ValueError:
-        pass
-    try:
-        return datetime.fromisoformat(val_str.replace("Z", "+00:00")).date()
-    except ValueError:
-        pass
-    return None
+# Strict date parsing and stats helpers - parse_date_to_date_obj defined earlier in module
 
 def contracts_control_calculate_percentile(values: List[float], percentile: float) -> float:
     if not values:
