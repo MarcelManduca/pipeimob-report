@@ -3775,7 +3775,7 @@ def test_dashboard_full_endpoint_serialization_and_restrictions():
             data = res.json()
 
             # Assert cache version changed check
-            assert DASHBOARD_CACHE_VERSION == "sales-cycle-v6-vgc-pending-unknown-fix"
+            assert DASHBOARD_CACHE_VERSION == "v2"
 
             # Assert receipt_data_quality is present and serialized correctly
             financials = data.get("commission_financials")
@@ -7288,11 +7288,15 @@ def test_bi_dashboard_empty_transactions_period():
                 assert data["payments"]["banks"] == []
                 assert data["timeline"] == [
                     {
-                        "month": "2026-08",
+                        "bucket_key": "2026-08",
+                        "period_start": "2026-08-01",
+                        "period_end": "2026-08-03",
                         "label": "Ago/26",
+                        "month": "2026-08",
                         "transaction_count": 0,
                         "total_sales": "0.00",
-                        "total_commissions": "0.00"
+                        "total_commissions": "0.00",
+                        "average_commission_rate": 0.0
                     }
                 ]
                 assert data["sales_cycle"]["transaction_count"] == 0
@@ -7467,3 +7471,362 @@ def test_contracts_control_global_empty_dataset_rejected():
                 assert "empty transactions dataset for global contracts control" in excinfo.value.detail
 
     main_module.contracts_control_cache.clear()
+
+
+def test_bi_granularity_auto_mode_resolution():
+    from fastapi.testclient import TestClient
+    from unittest.mock import patch, MagicMock
+    import main as main_module
+    import json
+    import os
+
+    client = TestClient(main_module.app)
+    auth_headers = {"Authorization": "Bearer mock_jwt_token"}
+    main_module.app.dependency_overrides[main_module.verify_backend_api_key] = lambda: {
+        "sub": "test-user", "role": "authenticated"
+    }
+
+    payload_empty = {"success": True, "data": {"transacoes": []}, "meta": {"pagination": {"total": 0, "count": 0, "total_pages": 1}}}
+    mock_res = MagicMock()
+    mock_res.read.return_value = json.dumps(payload_empty).encode('utf-8')
+    cm = MagicMock()
+    cm.__enter__.return_value = mock_res
+
+    with patch.dict(os.environ, {"PIPEIMOB_DATA_MODE": "live", "PIPEIMOB_API_KEY": "k", "PIPEIMOB_SECRET_KEY": "s"}):
+        main_module.dashboard_cache.clear()
+        with patch("main.get_auth_token", return_value="mock_token"), patch("urllib.request.urlopen", return_value=cm):
+            # 3 days -> day
+            res = client.get("/api/dashboard/full?data_inicio_ccv=2026-08-01&data_fim_ccv=2026-08-03&granularity=auto", headers=auth_headers)
+            assert res.status_code == 200
+            data = res.json()
+            assert data["requested_granularity"] == "auto"
+            assert data["applied_granularity"] == "day"
+            assert len(data["timeline"]) == 3
+            assert data["available_granularities"] == ["day", "week", "month"]
+
+            # 14 days -> day
+            main_module.dashboard_cache.clear()
+            res = client.get("/api/dashboard/full?data_inicio_ccv=2026-07-01&data_fim_ccv=2026-07-14&granularity=auto", headers=auth_headers)
+            assert res.status_code == 200
+            assert res.json()["applied_granularity"] == "day"
+
+            # 15 days -> week
+            main_module.dashboard_cache.clear()
+            res = client.get("/api/dashboard/full?data_inicio_ccv=2026-07-01&data_fim_ccv=2026-07-15&granularity=auto", headers=auth_headers)
+            assert res.status_code == 200
+            assert res.json()["applied_granularity"] == "week"
+
+            # 31 days -> week (5 buckets)
+            main_module.dashboard_cache.clear()
+            res = client.get("/api/dashboard/full?data_inicio_ccv=2026-07-01&data_fim_ccv=2026-07-31&granularity=auto", headers=auth_headers)
+            assert res.status_code == 200
+            data = res.json()
+            assert data["applied_granularity"] == "week"
+            assert len(data["timeline"]) == 5
+
+            # 90 days -> week
+            main_module.dashboard_cache.clear()
+            res = client.get("/api/dashboard/full?data_inicio_ccv=2026-05-01&data_fim_ccv=2026-07-29&granularity=auto", headers=auth_headers)
+            assert res.status_code == 200
+            assert res.json()["applied_granularity"] == "week"
+
+            # 91 days -> month
+            main_module.dashboard_cache.clear()
+            res = client.get("/api/dashboard/full?data_inicio_ccv=2026-05-01&data_fim_ccv=2026-07-30&granularity=auto", headers=auth_headers)
+            assert res.status_code == 200
+            assert res.json()["applied_granularity"] == "month"
+
+    main_module.app.dependency_overrides.clear()
+    main_module.dashboard_cache.clear()
+
+
+def test_bi_granularity_weekly_breakdown_and_labels():
+    import main as main_module
+    import datetime
+
+    # July 2026: 01/07/2026 (Wed) to 31/07/2026 (Fri)
+    start_d = datetime.date(2026, 7, 1)
+    end_d = datetime.date(2026, 7, 31)
+
+    timeline, unclass = main_module.build_timeline_buckets([], start_d, end_d, "week")
+    assert len(timeline) == 5
+
+    labels = [b["label"] for b in timeline]
+    assert labels == ["01–05 jul", "06–12 jul", "13–19 jul", "20–26 jul", "27–31 jul"]
+
+    assert timeline[0]["period_start"] == "2026-07-01"
+    assert timeline[0]["period_end"] == "2026-07-05"
+    assert timeline[1]["period_start"] == "2026-07-06"
+    assert timeline[1]["period_end"] == "2026-07-12"
+
+    # Cross-month label: 29/06/2026 to 05/07/2026
+    start_cross_month = datetime.date(2026, 6, 29)
+    end_cross_month = datetime.date(2026, 7, 5)
+    timeline_cross, _ = main_module.build_timeline_buckets([], start_cross_month, end_cross_month, "week")
+    assert timeline_cross[0]["label"] == "29 jun–05 jul"
+
+    # Cross-year label: 28/12/2026 to 03/01/2027
+    start_cross_year = datetime.date(2026, 12, 28)
+    end_cross_year = datetime.date(2027, 1, 3)
+    timeline_year, _ = main_module.build_timeline_buckets([], start_cross_year, end_cross_year, "week")
+    assert timeline_year[0]["label"] == "28 dez 2026–03 jan 2027"
+
+
+def test_bi_granularity_empty_buckets_and_commission_rate():
+    import main as main_module
+    import datetime
+
+    start_d = datetime.date(2026, 7, 1)
+    end_d = datetime.date(2026, 7, 5)
+
+    sample_txs = [
+        {
+            "data_assinatura_ccv": "2026-07-02",
+            "valor_contrato": 1000000.0,
+            "total_comissao": 50000.0  # 5%
+        },
+        {
+            "data_assinatura_ccv": "2026-07-02",
+            "valor_contrato": 2000000.0,
+            "total_comissao": 120000.0  # 6%
+        }
+    ]
+
+    timeline, unclass = main_module.build_timeline_buckets(sample_txs, start_d, end_d, "day")
+    assert len(timeline) == 5
+
+    # Day 01/07 (empty)
+    assert timeline[0]["transaction_count"] == 0
+    assert timeline[0]["total_sales"] == "0.00"
+    assert timeline[0]["total_commissions"] == "0.00"
+    assert timeline[0]["average_commission_rate"] == 0.0
+
+    # Day 02/07 (with sales: total 3.000.000, comm 170.000 -> 170000/3000000*100 = 5.67%)
+    assert timeline[1]["transaction_count"] == 2
+    assert timeline[1]["total_sales"] == "3000000.00"
+    assert timeline[1]["total_commissions"] == "170000.00"
+    assert timeline[1]["average_commission_rate"] == 5.67
+
+
+def test_bi_granularity_limits_and_http_400_validation():
+    from fastapi.testclient import TestClient
+    from unittest.mock import patch, MagicMock
+    import main as main_module
+    import json
+    import os
+
+    client = TestClient(main_module.app)
+    auth_headers = {"Authorization": "Bearer mock_jwt_token"}
+    main_module.app.dependency_overrides[main_module.verify_backend_api_key] = lambda: {
+        "sub": "test-user", "role": "authenticated"
+    }
+
+    payload_empty = {"success": True, "data": {"transacoes": []}, "meta": {"pagination": {"total": 0, "count": 0, "total_pages": 1}}}
+    mock_res = MagicMock()
+    mock_res.read.return_value = json.dumps(payload_empty).encode('utf-8')
+    cm = MagicMock()
+    cm.__enter__.return_value = mock_res
+
+    with patch.dict(os.environ, {"PIPEIMOB_DATA_MODE": "live", "PIPEIMOB_API_KEY": "k", "PIPEIMOB_SECRET_KEY": "s"}):
+        main_module.dashboard_cache.clear()
+        with patch("main.get_auth_token", return_value="mock_token"), patch("urllib.request.urlopen", return_value=cm):
+            # Invalid granularity -> HTTP 400 invalid_granularity
+            res = client.get("/api/dashboard/full?data_inicio_ccv=2026-08-01&data_fim_ccv=2026-08-03&granularity=invalid_val", headers=auth_headers)
+            assert res.status_code == 400
+            assert res.json()["error_code"] == "invalid_granularity"
+
+            # Day > 62 days (70 days) -> HTTP 400 unsupported_granularity_for_period
+            res = client.get("/api/dashboard/full?data_inicio_ccv=2026-05-01&data_fim_ccv=2026-07-09&granularity=day", headers=auth_headers)
+            assert res.status_code == 400
+            assert res.json()["error_code"] == "unsupported_granularity_for_period"
+
+            # Week > 366 days (400 days) -> HTTP 400 unsupported_granularity_for_period
+            res = client.get("/api/dashboard/full?data_inicio_ccv=2025-01-01&data_fim_ccv=2026-02-04&granularity=week", headers=auth_headers)
+            assert res.status_code == 400
+            assert res.json()["error_code"] == "unsupported_granularity_for_period"
+
+    main_module.app.dependency_overrides.clear()
+    main_module.dashboard_cache.clear()
+
+
+def test_bi_granularity_partial_monthly_buckets():
+    import main as main_module
+    import datetime
+
+    # 03/05/2026 to 03/08/2026
+    start_d = datetime.date(2026, 5, 3)
+    end_d = datetime.date(2026, 8, 3)
+
+    timeline, unclass = main_module.build_timeline_buckets([], start_d, end_d, "month")
+    assert len(timeline) == 4
+
+    assert timeline[0]["period_start"] == "2026-05-03"
+    assert timeline[0]["period_end"] == "2026-05-31"
+    assert timeline[0]["month"] == "2026-05"
+
+    assert timeline[1]["period_start"] == "2026-06-01"
+    assert timeline[1]["period_end"] == "2026-06-30"
+    assert timeline[1]["month"] == "2026-06"
+
+    assert timeline[2]["period_start"] == "2026-07-01"
+    assert timeline[2]["period_end"] == "2026-07-31"
+    assert timeline[2]["month"] == "2026-07"
+
+    assert timeline[3]["period_start"] == "2026-08-01"
+    assert timeline[3]["period_end"] == "2026-08-03"
+    assert timeline[3]["month"] == "2026-08"
+
+
+def test_bi_granularity_cache_isolation_and_old_version():
+    import main as main_module
+
+    # Confirm cache version is v2
+    assert main_module.DASHBOARD_CACHE_VERSION == "v2"
+
+    key_auto = main_module.generate_dashboard_cache_key(
+        data_inicio_ccv="2026-07-01", data_fim_ccv="2026-07-31",
+        requested_granularity="auto", applied_granularity="week"
+    )
+
+    key_week = main_module.generate_dashboard_cache_key(
+        data_inicio_ccv="2026-07-01", data_fim_ccv="2026-07-31",
+        requested_granularity="week", applied_granularity="week"
+    )
+
+    # Keys must be distinct
+    assert key_auto != key_week
+
+    # Old version key from v1.4 is ignored by v2
+    old_version_key = ("bi", "v1.4", None, None, "2026-07-01", "2026-07-31", None, None, None, None, None, None, None)
+    assert key_auto != old_version_key
+
+
+def test_bi_granularity_isolated_models_and_backwards_compatibility():
+    from fastapi.testclient import TestClient
+    from unittest.mock import patch, MagicMock
+    import main as main_module
+    import json
+    import os
+
+    client = TestClient(main_module.app)
+    auth_headers = {"Authorization": "Bearer mock_jwt_token"}
+    main_module.app.dependency_overrides[main_module.verify_backend_api_key] = lambda: {
+        "sub": "test-user", "role": "authenticated"
+    }
+
+    payload_empty = {"success": True, "data": {"transacoes": []}, "meta": {"pagination": {"total": 0, "count": 0, "total_pages": 1}}}
+    mock_res = MagicMock()
+    mock_res.read.return_value = json.dumps(payload_empty).encode('utf-8')
+    cm = MagicMock()
+    cm.__enter__.return_value = mock_res
+
+    with patch.dict(os.environ, {"PIPEIMOB_DATA_MODE": "live", "PIPEIMOB_API_KEY": "k", "PIPEIMOB_SECRET_KEY": "s"}):
+        main_module.dashboard_cache.clear()
+        with patch("main.get_auth_token", return_value="mock_token"), patch("urllib.request.urlopen", return_value=cm):
+            # Default call without granularity -> requested="month", applied="month"
+            res = client.get("/api/dashboard/full?data_inicio_ccv=2026-07-01&data_fim_ccv=2026-07-31", headers=auth_headers)
+            assert res.status_code == 200
+            data = res.json()
+            assert data["requested_granularity"] == "month"
+            assert data["applied_granularity"] == "month"
+
+            # Check timeline item fields
+            item = data["timeline"][0]
+            assert "bucket_key" in item
+            assert "period_start" in item
+            assert "period_end" in item
+            assert "average_commission_rate" in item
+            assert item["month"] == "2026-07"
+
+            # Verify sales_cycle.timeline model isolation
+            assert "sales_cycle" in data
+            if data["sales_cycle"] and data["sales_cycle"]["timeline"]:
+                sc_item = data["sales_cycle"]["timeline"][0]
+                assert "average_days" in sc_item
+                assert "median_days" in sc_item
+
+    main_module.app.dependency_overrides.clear()
+    main_module.dashboard_cache.clear()
+
+
+def test_bi_granularity_exclusive_attribution_and_edge_cases():
+    import main as main_module
+    import datetime
+
+    # Cross-year range covering Sunday/Monday and month/year boundaries
+    # 28/12/2026 (Mon) to 03/01/2027 (Sun)
+    start_d = datetime.date(2026, 12, 28)
+    end_d = datetime.date(2027, 1, 3)
+
+    sample_txs = [
+        # Start of period (28/12/2026 - Monday)
+        {"data_assinatura_ccv": "2026-12-28T09:00:00Z", "valor_contrato": 100000.0, "total_comissao": 5000.0},
+        # Sunday before month boundary (31/12/2026)
+        {"data_assinatura_ccv": "2026-12-31T23:59:59-03:00", "valor_contrato": 200000.0, "total_comissao": 10000.0},
+        # Year turnover / New Year (01/01/2027)
+        {"data_assinatura_ccv": "2027-01-01T00:01:00-03:00", "valor_contrato": 300000.0, "total_comissao": 15000.0},
+        # End of period (03/01/2027 - Sunday)
+        {"data_assinatura_ccv": "2027-01-03T22:00:00Z", "valor_contrato": 400000.0, "total_comissao": 20000.0},
+        # Unclassified / out of range
+        {"data_assinatura_ccv": "2025-05-05", "valor_contrato": 50000.0, "total_comissao": 2500.0},
+    ]
+
+    for gran in ["day", "week", "month"]:
+        timeline, unclass = main_module.build_timeline_buckets(sample_txs, start_d, end_d, gran)
+
+        # 1. Timeline is chronologically ordered
+        period_starts = [b["period_start"] for b in timeline]
+        assert period_starts == sorted(period_starts)
+
+        # 2. No duplicate bucket keys
+        bucket_keys = [b["bucket_key"] for b in timeline]
+        assert len(bucket_keys) == len(set(bucket_keys))
+
+        # 3. Exact attribution formula: summary count = sum(timeline) + unclassified
+        sum_timeline = sum(b["transaction_count"] for b in timeline)
+        assert sum_timeline == 4  # 4 valid classified transactions
+        assert sum_timeline + unclass["transaction_count"] == len(sample_txs)
+
+
+def test_bi_granularity_timezone_normalization_sao_paulo():
+    import main as main_module
+    import datetime
+
+    # Transaction near midnight UTC: 2026-07-06T01:30:00Z -> 2026-07-05 22:30:00 in SP (UTC-3)
+    tx_utc_late = {"data_assinatura_ccv": "2026-07-06T01:30:00Z", "valor_contrato": 100000.0, "total_comissao": 5000.0}
+
+    dt_parsed = main_module.parse_date_to_date_obj("2026-07-06T01:30:00Z")
+    assert dt_parsed == datetime.date(2026, 7, 5)
+
+    timeline, unclass = main_module.build_timeline_buckets(
+        [tx_utc_late], datetime.date(2026, 7, 5), datetime.date(2026, 7, 6), "day"
+    )
+    # Must be attributed to July 5th (local SP date), NOT July 6th (UTC date)
+    assert timeline[0]["period_start"] == "2026-07-05"
+    assert timeline[0]["transaction_count"] == 1
+    assert timeline[1]["period_start"] == "2026-07-06"
+    assert timeline[1]["transaction_count"] == 0
+
+
+def test_bi_granularity_old_cache_version_rejection():
+    import main as main_module
+    import time
+
+    main_module.dashboard_cache.clear()
+
+    # Store old v1 cache key in cache
+    old_cache_key = ("bi", "v1.4", None, None, "2026-07-01", "2026-07-31", None, None, None, None, None)
+    old_payload = {"legacy_data": "old_format_without_granularity"}
+    now = time.time()
+    main_module.dashboard_cache.cache[old_cache_key] = (old_payload, now + 300, now + 600)
+
+    # Looking up with v2 cache key should result in cache miss (None)
+    new_cache_key = main_module.generate_dashboard_cache_key(
+        data_inicio_ccv="2026-07-01", data_fim_ccv="2026-07-31",
+        requested_granularity="month", applied_granularity="month"
+    )
+
+    val, status = main_module.dashboard_cache.get_status(new_cache_key)
+    assert val is None
+    assert status == "miss"
+    assert main_module.DASHBOARD_CACHE_VERSION == "v2"
