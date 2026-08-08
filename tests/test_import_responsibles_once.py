@@ -43,15 +43,15 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
 
 MOCK_PIPEIMOB_DATASET = [
-    {"transaction_id": "tx_41170", "codigo_imovel": "41170"},
-    {"transaction_id": "tx_40947", "codigo_imovel": "40947"},
-    {"transaction_id": "tx_39177", "codigo_imovel": "39177"},
-    {"transaction_id": "tx_42623", "codigo_imovel": "42623"},
-    {"transaction_id": "tx_42625", "codigo_imovel": "42625"},
-    {"transaction_id": "tx_41386", "codigo_imovel": "41386"},
-    {"transaction_id": "tx_39726", "codigo_imovel": "39726"},
-    {"transaction_id": "tx_ambiguous_1", "codigo_imovel": "99999"},
-    {"transaction_id": "tx_ambiguous_2", "codigo_imovel": "99999"} # 2 deals for code 99999 -> ambiguous!
+    {"transacao_unique_id_pipeimob": "tx_41170", "codigo_imovel": "41170"},
+    {"transacao_unique_id_pipeimob": "tx_40947", "codigo_imovel": "40947"},
+    {"transacao_unique_id_pipeimob": "tx_39177", "codigo_imovel": "39177"},
+    {"transacao_unique_id_pipeimob": "tx_42623", "codigo_imovel": "42623"},
+    {"transacao_unique_id_pipeimob": "tx_42625", "codigo_imovel": "42625"},
+    {"transacao_unique_id_pipeimob": "tx_41386", "codigo_imovel": "41386"},
+    {"transacao_unique_id_pipeimob": "tx_39726", "codigo_imovel": "39726"},
+    {"transacao_unique_id_pipeimob": "tx_ambiguous_1", "codigo_imovel": "99999"},
+    {"transacao_unique_id_pipeimob": "tx_ambiguous_2", "codigo_imovel": "99999"} # 2 deals for code 99999 -> ambiguous!
 ]
 
 @pytest.fixture(autouse=True)
@@ -288,6 +288,62 @@ def test_matching_single_deal(tmp_path, monkeypatch):
     assert db_results["unique_codes_single_match"] == 1
     assert db_results["unique_codes_not_found"] == 0
     assert db_results["deals_eligible"] == 1
+
+
+def test_real_transaction_id_is_prioritized_and_missing_id_is_blocked(tmp_path, monkeypatch):
+    monkeypatch.setenv("APP_ENV", "staging")
+    csv_file = tmp_path / "test_real_transaction_id.csv"
+    csv_file.write_text(
+        "source_sheet,source_row,codigo_imovel,responsavel,gerente\n"
+        "1° TRIMESTRE,2,41170,Carol,GERENTE 1\n"
+        "1° TRIMESTRE,3,40947,Guilherme,GERENTE 2\n",
+        encoding="utf-8"
+    )
+    file_sha256 = calculate_file_sha256(str(csv_file))
+
+    async def mock_real_dataset(*args, **kwargs):
+        return "live", "pipeimob_api", [
+            {
+                "transacao_unique_id_pipeimob": "tx_real_41170",
+                "transaction_id": "tx_legacy_41170",
+                "codigo_imovel": "41170",
+            },
+            {"codigo_imovel": "40947"},
+        ], 1, "miss"
+
+    monkeypatch.setattr(main_module, "load_contracts_control_dataset", mock_real_dataset)
+
+    from scripts.import_responsibles_once import main as run_import
+    with patch("sys.argv", [
+        "import_responsibles_once.py",
+        "--file", str(csv_file),
+        "--target", "staging",
+        "--apply",
+        "--expected-source-sha256", file_sha256,
+    ]):
+        run_import()
+
+    db = TestingSessionLocal()
+    assignments = db.query(ContractsControlManualData).all()
+    assert [item.transaction_id for item in assignments] == ["tx_real_41170"]
+    db.close()
+
+    report_dirs = [d for d in os.listdir("reports") if d.startswith("import_once_")]
+    latest_report_dir = sorted(
+        report_dirs,
+        key=lambda d: os.path.getctime(os.path.join("reports", d)),
+    )[-1]
+    with open(os.path.join("reports", latest_report_dir, "report.json")) as f:
+        data = json.load(f)
+
+    db_results = data["summary"]["database_matching_results"]
+    assert db_results["missing_transaction_id"] == 1
+    assert db_results["blocked_codes_total"] == 1
+    assert db_results["deals_eligible"] == 1
+    assert {
+        "codigo_imovel": "40947",
+        "reason": "missing_transaction_id",
+    } in data["pending_items"]
 
 
 # -----------------------------------------------------------------------------
