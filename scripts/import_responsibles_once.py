@@ -19,6 +19,7 @@ import hashlib
 import json
 import uuid
 import asyncio
+import tempfile
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, Set
 
@@ -32,6 +33,7 @@ from models.contracts_control import (
     ContractsControlManualData,
     normalize_responsible_name,
 )
+from services.contracts_control_import_parser import ContractsControlImportParser
 
 VALID_RESPONSIBLES = {"Guilherme", "Cristina", "Carol", "Laise"}
 EXPLICIT_GUILHERME_CODES = {"39177", "42623", "42625"}
@@ -163,9 +165,58 @@ def parse_consolidated_csv(file_path: str) -> Dict[str, Any]:
     }
 
 
+def parse_official_workbook(file_path: str) -> Dict[str, Any]:
+    """Parse the official multi-tab .xlsx using the same validated preview parser."""
+    parsed_rows = ContractsControlImportParser.parse_file(
+        file_path, os.path.basename(file_path)
+    )
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", newline="", suffix=".csv", delete=False
+        ) as temp_file:
+            temp_path = temp_file.name
+            writer = csv.DictWriter(
+                temp_file,
+                fieldnames=[
+                    "source_sheet",
+                    "source_row",
+                    "codigo_imovel",
+                    "responsavel",
+                    "gerente",
+                ],
+            )
+            writer.writeheader()
+            for row in parsed_rows:
+                writer.writerow({
+                    "source_sheet": row.get("aba") or "",
+                    "source_row": row.get("linha") or 0,
+                    "codigo_imovel": row.get("codigo_imovel") or "",
+                    "responsavel": row.get("responsavel_planilha") or "",
+                    "gerente": row.get("gerente") or "",
+                })
+        return parse_consolidated_csv(temp_path)
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
+def parse_source_file(file_path: str) -> Dict[str, Any]:
+    extension = os.path.splitext(file_path)[1].lower()
+    if extension == ".xlsx":
+        return parse_official_workbook(file_path)
+    if extension == ".csv":
+        return parse_consolidated_csv(file_path)
+    raise ValueError("Formato não suportado. Use a planilha oficial .xlsx ou o CSV consolidado.")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Rotina CLI de Carga Única de Responsáveis (Secretaria de Vendas)")
-    parser.add_argument("--file", required=True, help="Caminho do arquivo CSV consolidado")
+    parser.add_argument(
+        "--file",
+        required=True,
+        help="Caminho da planilha oficial .xlsx ou do arquivo CSV consolidado",
+    )
     parser.add_argument("--target", required=True, choices=["staging", "production"], help="Ambiente alvo (staging ou production)")
     parser.add_argument("--apply", action="store_true", help="Executa a escrita no banco de dados. Sem esta flag, executa apenas dry-run.")
     parser.add_argument("--confirm-production", action="store_true", help="Confirmação necessária para apply em produção")
@@ -213,7 +264,7 @@ def main():
     execution_id = f"exec_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
 
     # 6. Realizar parsing e consolidação do CSV em memória
-    parsed = parse_consolidated_csv(args.file)
+    parsed = parse_source_file(args.file)
     proposed_by_code = parsed["proposed_by_code"]
 
     # 7. Carregar o dataset Pipeimob via serviço oficial (main.load_contracts_control_dataset)
@@ -223,10 +274,17 @@ def main():
 
     try:
         from main import load_contracts_control_dataset
-        loop = asyncio.get_event_loop() if asyncio.get_event_loop().is_running() else asyncio.new_event_loop()
-        mode, src, dataset, pages_fetched, cache_status = loop.run_until_complete(
-            load_contracts_control_dataset(request_id=execution_id, refresh=False, caller_endpoint="cli_import")
-        )
+        loop = asyncio.new_event_loop()
+        try:
+            mode, src, dataset, pages_fetched, cache_status = loop.run_until_complete(
+                load_contracts_control_dataset(
+                    request_id=execution_id,
+                    refresh=False,
+                    caller_endpoint="cli_import",
+                )
+            )
+        finally:
+            loop.close()
         extraction_finished_at = datetime.now(timezone.utc).isoformat()
 
         if not dataset:
@@ -275,17 +333,25 @@ def main():
     db = database.SessionLocal()
     try:
         resp_name_to_id: Dict[str, uuid.UUID] = {}
+        missing_responsible_names: List[str] = []
+        inactive_responsible_names: List[str] = []
         for r_name in VALID_RESPONSIBLES:
             resp_obj = ContractsControlRepository.get_responsible_by_normalized_name(db, normalize_responsible_name(r_name))
-            if not resp_obj and "sqlite" in str(database.engine.url):
-                resp_obj = ContractsControlRepository.create_responsible(db, r_name, active=True)
-                db.commit()
-            if resp_obj and resp_obj.active:
+            if not resp_obj:
+                # Reserve an in-memory id so dry-run and apply calculate the
+                # same assignment plan. The catalog row is created later in
+                # the same atomic transaction as the assignments.
+                missing_responsible_names.append(r_name)
+                resp_name_to_id[r_name] = uuid.uuid4()
+            elif resp_obj.active:
                 resp_name_to_id[r_name] = resp_obj.id
+            else:
+                inactive_responsible_names.append(r_name)
 
         unique_codes_single_match = 0
         unique_codes_not_found = 0
         unique_codes_ambiguous = 0
+        inactive_responsible_code_count = 0
 
         eligible_items: List[Dict[str, Any]] = []
         pending_items: List[Dict[str, Any]] = []
@@ -300,9 +366,10 @@ def main():
         for code, target_resp in proposed_by_code.items():
             resp_id = resp_name_to_id.get(target_resp)
             if not resp_id:
+                inactive_responsible_code_count += 1
                 pending_items.append({
                     "codigo_imovel": code,
-                    "reason": "responsible_not_registered_in_db",
+                    "reason": "responsible_inactive_in_db",
                     "responsible": target_resp
                 })
                 continue
@@ -360,7 +427,13 @@ def main():
 
         db.close()
 
-        blocked_codes_total = unique_codes_not_found + unique_codes_ambiguous + len(parsed["conflict_codes"]) + len(parsed["invalid_responsible_ignored"])
+        blocked_codes_total = (
+            unique_codes_not_found
+            + unique_codes_ambiguous
+            + inactive_responsible_code_count
+            + len(parsed["conflict_codes"])
+            + len(parsed["invalid_responsible_ignored"])
+        )
 
         report_metrics = {
             "source_file_sha256": file_sha256,
@@ -387,12 +460,20 @@ def main():
                 "unique_codes_single_match": unique_codes_single_match,
                 "unique_codes_not_found": unique_codes_not_found,
                 "unique_codes_ambiguous": unique_codes_ambiguous,
+                "inactive_responsible_codes": inactive_responsible_code_count,
                 "blocked_codes_total": blocked_codes_total,
                 "deals_eligible": len(eligible_items),
                 "already_synchronized": already_synchronized_count,
                 "new_assignments": new_assignments_count,
                 "responsible_changes": responsible_changes_count,
                 "items_to_write_count": len(items_to_apply)
+            },
+            "responsible_catalog": {
+                "official_names": sorted(VALID_RESPONSIBLES),
+                "missing_names_to_create": sorted(missing_responsible_names),
+                "inactive_names_blocked": sorted(inactive_responsible_names),
+                "missing_names_to_create_count": len(missing_responsible_names),
+                "inactive_names_blocked_count": len(inactive_responsible_names)
             },
             "proposed_unique_codes_by_responsible": {
                 r: sum(1 for c, resp in proposed_by_code.items() if resp == r) for r in VALID_RESPONSIBLES
@@ -402,29 +483,58 @@ def main():
         # 10. Execução com --apply (Transação Atômica Única)
         applied_count = 0
         failed_count = 0
+        responsibles_created_count = 0
+        responsibles_created: List[Dict[str, str]] = []
         actor_sub = f"official_spreadsheet_2026_one_time:{execution_id}"
 
-        if args.apply and items_to_apply:
+        if args.apply and (items_to_apply or missing_responsible_names):
             backup_dir = os.path.join("backups", f"import_once_{execution_id}")
             os.makedirs(backup_dir, exist_ok=True)
 
-            snapshot_backup = [
-                {
-                    "transaction_id": it["transaction_id"],
-                    "codigo_imovel": it["codigo_imovel"],
-                    "pre_existing": it["pre_existing"],
-                    "previous_responsible_id": str(it["previous_responsible_id"]) if it["previous_responsible_id"] else None,
-                    "previous_version": it["previous_version"],
-                    "applied_responsible_id": str(it["target_responsible_id"]),
-                    "applied_version": it["previous_version"] + 1
-                }
-                for it in items_to_apply
-            ]
-            with open(os.path.join(backup_dir, "backup_pre_import.json"), "w", encoding="utf-8") as f:
-                json.dump(snapshot_backup, f, indent=2)
-
             write_db = database.SessionLocal()
             try:
+                # Resolve the catalog again inside the write transaction to
+                # serialize safely with a concurrent administrative change.
+                resolved_ids: Dict[str, uuid.UUID] = {}
+                for r_name in VALID_RESPONSIBLES:
+                    resp_obj = ContractsControlRepository.get_responsible_by_normalized_name(
+                        write_db, normalize_responsible_name(r_name)
+                    )
+                    if resp_obj and not resp_obj.active:
+                        raise ValueError(f"Official responsible is inactive: {r_name}")
+                    if not resp_obj:
+                        resp_obj = ContractsControlRepository.create_responsible(
+                            write_db, r_name, active=True
+                        )
+                        responsibles_created_count += 1
+                        responsibles_created.append({
+                            "name": r_name,
+                            "id": str(resp_obj.id)
+                        })
+                    resolved_ids[r_name] = resp_obj.id
+
+                for it in items_to_apply:
+                    it["target_responsible_id"] = resolved_ids[it["target_responsible"]]
+
+                snapshot_backup = [
+                    {
+                        "transaction_id": it["transaction_id"],
+                        "codigo_imovel": it["codigo_imovel"],
+                        "pre_existing": it["pre_existing"],
+                        "previous_responsible_id": str(it["previous_responsible_id"]) if it["previous_responsible_id"] else None,
+                        "previous_version": it["previous_version"],
+                        "applied_responsible_id": str(it["target_responsible_id"]),
+                        "applied_version": it["previous_version"] + 1
+                    }
+                    for it in items_to_apply
+                ]
+                with open(os.path.join(backup_dir, "backup_pre_import.json"), "w", encoding="utf-8") as f:
+                    json.dump({
+                        "assignments": snapshot_backup,
+                        "responsibles_created": responsibles_created,
+                        "responsibles_created_are_not_deleted_by_rollback": True
+                    }, f, indent=2)
+
                 for it in items_to_apply:
                     tx_id = it["transaction_id"]
                     resp_id = it["target_responsible_id"]
@@ -460,11 +570,17 @@ def main():
                     applied_count += 1
 
                 write_db.commit()
-                print(f"SUCESSO: Transação atômica concluída. {applied_count} alterações aplicadas com sucesso.")
+                print(
+                    "SUCESSO: Transação atômica concluída. "
+                    f"{responsibles_created_count} responsáveis criados e "
+                    f"{applied_count} atribuições aplicadas com sucesso."
+                )
             except Exception as e:
                 write_db.rollback()
                 failed_count = len(items_to_apply)
                 applied_count = 0
+                responsibles_created_count = 0
+                responsibles_created = []
                 print(f"ERRO CRÍTICO NA TRANSAÇÃO: Rollback integral executado. Causa: {e}", file=sys.stderr)
                 raise
             finally:
@@ -479,8 +595,14 @@ def main():
             "application_results": {
                 "applied_count": applied_count,
                 "failed_count": failed_count,
-                "write_operations_attempted": applied_count if args.apply else 0,
-                "database_commit_executed": True if (args.apply and applied_count > 0) else False
+                "responsibles_created_count": responsibles_created_count,
+                "responsibles_created": responsibles_created,
+                "write_operations_attempted": (
+                    applied_count + responsibles_created_count if args.apply else 0
+                ),
+                "database_commit_executed": True if (
+                    args.apply and (applied_count > 0 or responsibles_created_count > 0)
+                ) else False
             },
             "pending_items": pending_items,
             "ana_cristina_ignored": parsed["ana_cristina_ignored"],
@@ -521,6 +643,8 @@ def main():
         print(f"  Já sincronizados (sem alteração): {already_synchronized_count}")
         print(f"  Novas atribuições a realizar: {new_assignments_count}")
         print(f"  Alterações de responsável a realizar: {responsible_changes_count}")
+        print(f"  Responsáveis oficiais a criar: {len(missing_responsible_names)}")
+        print(f"  Responsáveis oficiais inativos (bloqueados): {len(inactive_responsible_names)}")
         print("-" * 70)
         print("DISTRIBUIÇÃO DOS CÓDOGOS ÚNICOS PROPOSTOS:")
         for r_name, count in report_metrics["proposed_unique_codes_by_responsible"].items():

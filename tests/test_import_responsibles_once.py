@@ -25,6 +25,7 @@ from repositories.contracts_control_repository import ContractsControlRepository
 from scripts.import_responsibles_once import (
     normalize_code,
     parse_consolidated_csv,
+    parse_source_file,
     calculate_file_sha256,
 )
 
@@ -109,6 +110,35 @@ def test_exact_responsible_matching(tmp_path):
     assert parsed["proposed_by_code"]["41170"] == "Carol"
     assert parsed["proposed_by_code"]["40947"] == "Guilherme"
     assert len(parsed["invalid_responsible_ignored"]) == 0
+
+
+def test_official_xlsx_tabs_are_consolidated_with_the_validated_parser(tmp_path):
+    from openpyxl import Workbook
+
+    workbook_path = tmp_path / "processos-vendas-2026.xlsx"
+    wb = Workbook()
+    first = wb.active
+    first.title = "1 ° TRIMESTRE"
+    first.append(["COD. IMÓVEL", "IMÓVEL", "DATA DE CADASTRO", "DATA ASSINATURA CCV", "GERENTE", "RESPONSÁVEL"])
+    first.append([41170, "Imóvel 1", "04/01/2026", "09/01/2026", "EXUPERY", "Carol"])
+
+    second = wb.create_sheet("2° TRIMESTRE")
+    second.append(["COD. IMÓVEL", "IMÓVEL", "DATA DE CADASTRO", "DATA ASSINATURA CCV", "GERENTE", "RESPONSÁVEL"])
+    second.append([42676, "Imóvel 2", "31/03/2026", "01/04/2026", "EVOLUÇÃO", "Guilherme"])
+
+    third = wb.create_sheet("3° TRIMESTRE")
+    third.append(["COD. IMÓVEL", "IMÓVEL", "DATA DE CADASTRO", "DATA ASSIN CCV", "PRAZO", "GERENTE", "RESPONSÁVEL"])
+    third.append([41924, "Imóvel 3", "23/02/2026", None, None, "EQUIPE 1", "Cristina"])
+    wb.save(workbook_path)
+
+    parsed = parse_source_file(str(workbook_path))
+
+    assert parsed["source_counts"]["total_data_rows"] == 3
+    assert parsed["proposed_by_code"] == {
+        "41170": "Carol",
+        "42676": "Guilherme",
+        "41924": "Cristina",
+    }
 
 
 # -----------------------------------------------------------------------------
@@ -637,3 +667,76 @@ def test_atomic_rollback_on_write_failure(tmp_path, monkeypatch):
 
     assert len(manual_data) == 0
     assert len(history) == 0
+
+
+def test_apply_creates_missing_official_responsible_and_assignment_atomically(tmp_path, monkeypatch):
+    monkeypatch.setenv("APP_ENV", "staging")
+    csv_file = tmp_path / "test_create_catalog.csv"
+    csv_file.write_text(
+        "source_sheet,source_row,codigo_imovel,responsavel,gerente\n"
+        "1° TRIMESTRE,2,41170,Carol,GERENTE 1\n",
+        encoding="utf-8"
+    )
+    file_sha256 = calculate_file_sha256(str(csv_file))
+
+    db = TestingSessionLocal()
+    carol = db.query(ContractsControlResponsible).filter_by(name="Carol").one()
+    db.delete(carol)
+    db.commit()
+    db.close()
+
+    from scripts.import_responsibles_once import main as run_import
+    with patch("sys.argv", [
+        "import_responsibles_once.py",
+        "--file", str(csv_file),
+        "--target", "staging",
+        "--apply",
+        "--expected-source-sha256", file_sha256,
+    ]):
+        run_import()
+
+    db = TestingSessionLocal()
+    created_carol = db.query(ContractsControlResponsible).filter_by(name="Carol").one()
+    manual = db.query(ContractsControlManualData).filter_by(transaction_id="tx_41170").one()
+    assert created_carol.active is True
+    assert manual.responsible_id == created_carol.id
+    db.close()
+
+
+def test_catalog_creation_rolls_back_when_assignment_audit_fails(tmp_path, monkeypatch):
+    monkeypatch.setenv("APP_ENV", "staging")
+    csv_file = tmp_path / "test_catalog_rollback.csv"
+    csv_file.write_text(
+        "source_sheet,source_row,codigo_imovel,responsavel,gerente\n"
+        "1° TRIMESTRE,2,41170,Carol,GERENTE 1\n",
+        encoding="utf-8"
+    )
+    file_sha256 = calculate_file_sha256(str(csv_file))
+
+    db = TestingSessionLocal()
+    carol = db.query(ContractsControlResponsible).filter_by(name="Carol").one()
+    db.delete(carol)
+    db.commit()
+    db.close()
+
+    monkeypatch.setattr(
+        ContractsControlRepository,
+        "create_history_record",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("audit failure")),
+    )
+
+    from scripts.import_responsibles_once import main as run_import
+    with patch("sys.argv", [
+        "import_responsibles_once.py",
+        "--file", str(csv_file),
+        "--target", "staging",
+        "--apply",
+        "--expected-source-sha256", file_sha256,
+    ]):
+        with pytest.raises(ValueError, match="audit failure"):
+            run_import()
+
+    db = TestingSessionLocal()
+    assert db.query(ContractsControlResponsible).filter_by(name="Carol").first() is None
+    assert db.query(ContractsControlManualData).count() == 0
+    db.close()
