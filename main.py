@@ -5,7 +5,7 @@ import urllib.request
 import json
 import ssl
 import time
-from datetime import datetime, date, timezone
+from datetime import datetime, date, timezone, timedelta
 from typing import List, Optional, Union, Any
 from decimal import Decimal
 from zoneinfo import ZoneInfo
@@ -5099,6 +5099,29 @@ class ContractsControlTimelineMetric(BaseModel):
     median_duration_days: float
     provisional: bool = True
 
+class ContractsControlWeeklyResponsibleMetric(BaseModel):
+    responsible: Optional[str] = None
+    started_count: int
+
+class ContractsControlWeeklyTimelineMetric(BaseModel):
+    scope: str = "operations"
+    week_start: str
+    week_end: str
+    label: str
+    opening_backlog: int
+    started_count: int
+    completed_count: int
+    net_flow: int
+    ending_backlog: int
+    assigned_started_count: int
+    unassigned_started_count: int
+    assignment_completion_ratio: float
+    by_responsible: List[ContractsControlWeeklyResponsibleMetric]
+    excluded_data_issue_count: int
+    average_duration_days: float
+    median_duration_days: float
+    provisional: bool = True
+
 class ContractsControlDataQuality(BaseModel):
     scope: str = "cohort"
     records_count: int
@@ -5142,6 +5165,7 @@ class ContractsControlSummaryResponse(BaseModel):
     by_modality: ContractsControlModalitySummary
     by_source_type: List[ContractsControlSourceTypeMetric]
     timeline: List[ContractsControlTimelineMetric]
+    weekly_timeline: List[ContractsControlWeeklyTimelineMetric]
     data_quality: ContractsControlDataQuality
     manual_enrichment: ContractsControlManualEnrichment
 
@@ -5239,7 +5263,7 @@ class HistoryRecordItem(BaseModel):
     changed_by_sub: str
 
 # Cache and settings
-CONTRACTS_CONTROL_CACHE_VERSION = "contracts-control-v1-data-inicio-venda"
+CONTRACTS_CONTROL_CACHE_VERSION = "contracts-control-v2-weekly-operations"
 
 class ContractsControlCache:
     def __init__(self):
@@ -5854,6 +5878,33 @@ def generate_months_between(start_date_obj: date, end_date_obj: date) -> list[st
             curr = curr.replace(month=curr.month + 1)
     return months
 
+def generate_contracts_control_weeks(start_date_obj: date, end_date_obj: date) -> list[tuple[date, date]]:
+    """Return Monday-to-Sunday operational weeks clipped to the selected period."""
+    weeks = []
+    curr_start = start_date_obj
+    while curr_start <= end_date_obj:
+        curr_end = min(curr_start + timedelta(days=6 - curr_start.weekday()), end_date_obj)
+        weeks.append((curr_start, curr_end))
+        curr_start = curr_end + timedelta(days=1)
+    return weeks
+
+def format_contracts_control_week_label(week_start: date, week_end: date) -> str:
+    months_pt = {
+        1: "jan", 2: "fev", 3: "mar", 4: "abr", 5: "mai", 6: "jun",
+        7: "jul", 8: "ago", 9: "set", 10: "out", 11: "nov", 12: "dez"
+    }
+    if week_start.year != week_end.year:
+        return (
+            f"{week_start.day:02d} {months_pt[week_start.month]} {week_start.year}–"
+            f"{week_end.day:02d} {months_pt[week_end.month]} {week_end.year}"
+        )
+    if week_start.month != week_end.month:
+        return (
+            f"{week_start.day:02d} {months_pt[week_start.month]}–"
+            f"{week_end.day:02d} {months_pt[week_end.month]}"
+        )
+    return f"{week_start.day:02d}–{week_end.day:02d} {months_pt[week_start.month]}"
+
 def get_duration_bucket(days: int) -> str:
     if days <= 3: return "0_3_days"
     if days <= 7: return "4_7_days"
@@ -6161,6 +6212,74 @@ def compute_contracts_control_data(
         })
         curr_backlog = ending_backlog
 
+    # Weekly operations view. Responsibility is the current manual overlay,
+    # not a reconstructed historical assignment snapshot.
+    weekly_timeline_metrics = []
+    curr_weekly_backlog = opening_backlog_count
+    for week_start, week_end in generate_contracts_control_weeks(start_date_obj, end_date_obj):
+        started_week = [
+            c for c in operations_txs
+            if c["start_date_obj"] and week_start <= c["start_date_obj"] <= week_end
+        ]
+        completed_week = [
+            c for c in operations_txs
+            if c["contract_date_obj"] and week_start <= c["contract_date_obj"] <= week_end
+        ]
+
+        started_count = len(started_week)
+        completed_count = len(completed_week)
+        net_flow = started_count - completed_count
+        ending_backlog = curr_weekly_backlog + net_flow
+
+        assigned_started = [c for c in started_week if c.get("responsible_ref")]
+        unassigned_started_count = started_count - len(assigned_started)
+        responsible_counts: Dict[Optional[str], int] = {}
+        for c in started_week:
+            responsible_ref = c.get("responsible_ref")
+            responsible_name = responsible_ref.get("name") if responsible_ref else None
+            responsible_counts[responsible_name] = responsible_counts.get(responsible_name, 0) + 1
+
+        by_responsible = [
+            {
+                "responsible": responsible_name,
+                "started_count": count
+            }
+            for responsible_name, count in sorted(
+                responsible_counts.items(),
+                key=lambda item: (item[0] is None, (item[0] or "").casefold())
+            )
+        ]
+
+        completed_durations_week = [
+            c["duration_days"] for c in completed_week if c["duration_days"] is not None
+        ]
+        excluded_week_count = len([
+            c for c in excluded_data_issue_txs
+            if c["start_date_obj"] and week_start <= c["start_date_obj"] <= week_end
+        ])
+
+        weekly_timeline_metrics.append({
+            "week_start": week_start.isoformat(),
+            "week_end": week_end.isoformat(),
+            "label": format_contracts_control_week_label(week_start, week_end),
+            "opening_backlog": curr_weekly_backlog,
+            "started_count": started_count,
+            "completed_count": completed_count,
+            "net_flow": net_flow,
+            "ending_backlog": ending_backlog,
+            "assigned_started_count": len(assigned_started),
+            "unassigned_started_count": unassigned_started_count,
+            "assignment_completion_ratio": (
+                float(len(assigned_started) / started_count) if started_count > 0 else 0.0
+            ),
+            "by_responsible": by_responsible,
+            "excluded_data_issue_count": excluded_week_count,
+            "average_duration_days": calculate_average(completed_durations_week),
+            "median_duration_days": contracts_control_calculate_median(completed_durations_week),
+            "provisional": True
+        })
+        curr_weekly_backlog = ending_backlog
+
     # Data Quality calculations (cohort)
     dq_records_count = len(cohort_txs)
     dq_completed = len(completed_cohort)
@@ -6239,6 +6358,7 @@ def compute_contracts_control_data(
         "by_modality": by_modality_data,
         "by_source_type": [],
         "timeline": timeline_metrics,
+        "weekly_timeline": weekly_timeline_metrics,
         "data_quality": {
             "scope": "cohort",
             "records_count": dq_records_count,
@@ -6264,7 +6384,7 @@ def compute_contracts_control_data(
     response_model=ContractsControlSummaryResponse,
     responses={**RESPONSES_503, **RESPONSES_AUTH},
     summary="Get Contracts Control BI aggregates",
-    description="Loads all transactions and returns cohort summary, operations summary, aging/duration buckets, manager metrics, modality metrics, and timeline aggregates.",
+    description="Loads all transactions and returns cohort summary, operations summary, aging/duration buckets, manager metrics, modality metrics, and monthly/weekly timeline aggregates.",
     dependencies=[Depends(verify_backend_api_key)]
 )
 async def get_contracts_control_summary(
@@ -6526,6 +6646,9 @@ async def get_contracts_control_summary(
         by_modality=ContractsControlModalitySummary(**aggregates["by_modality"]),
         by_source_type=[],
         timeline=[ContractsControlTimelineMetric(**t) for t in aggregates["timeline"]],
+        weekly_timeline=[
+            ContractsControlWeeklyTimelineMetric(**t) for t in aggregates["weekly_timeline"]
+        ],
         data_quality=ContractsControlDataQuality(**aggregates["data_quality"]),
         manual_enrichment=ContractsControlManualEnrichment(**enrichment_data)
     )

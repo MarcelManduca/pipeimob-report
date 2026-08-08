@@ -4033,11 +4033,73 @@ def test_contracts_control_backlog_math_and_timeline():
     assert t["ending_backlog"] == 1
     assert t["excluded_data_issue_count"] == 1  # tx5 start date is June, so its data issue counts towards June timeline
 
+    # Weekly view uses Monday-Sunday buckets clipped to the selected period.
+    weekly = aggregates["weekly_timeline"]
+    assert [(w["week_start"], w["week_end"]) for w in weekly] == [
+        ("2026-06-01", "2026-06-07"),
+        ("2026-06-08", "2026-06-14"),
+        ("2026-06-15", "2026-06-21"),
+        ("2026-06-22", "2026-06-28"),
+        ("2026-06-29", "2026-06-30"),
+    ]
+    assert weekly[0]["opening_backlog"] == 2
+    assert weekly[0]["started_count"] == 1
+    assert weekly[0]["completed_count"] == 1
+    assert weekly[0]["ending_backlog"] == 2
+    assert weekly[1]["started_count"] == 1
+    assert weekly[1]["ending_backlog"] == 3
+    assert weekly[2]["completed_count"] == 2
+    assert weekly[2]["excluded_data_issue_count"] == 1
+    assert weekly[-1]["ending_backlog"] == ops["ending_backlog_count"]
+
     # Verify no PII inside aggregates
     payload_str = json.dumps(aggregates, default=str)
     assert "comprador" not in payload_str.lower()
     assert "vendedor" not in payload_str.lower()
     assert "cpf" not in payload_str.lower()
+
+
+def test_contracts_control_weekly_current_responsible_distribution():
+    from datetime import date
+    from main import classify_contracts_control_process, compute_contracts_control_data
+
+    dataset = [
+        {"transacao_unique_id_pipeimob": "tx1", "data_inicio_venda": "2026-06-02", "data_contrato": None, "agente_gestor": "A", "financiamento": True, "codigo_imovel": "1"},
+        {"transacao_unique_id_pipeimob": "tx2", "data_inicio_venda": "2026-06-03", "data_contrato": None, "agente_gestor": "A", "financiamento": True, "codigo_imovel": "2"},
+        {"transacao_unique_id_pipeimob": "tx3", "data_inicio_venda": "2026-06-04", "data_contrato": None, "agente_gestor": "A", "financiamento": True, "codigo_imovel": "3"},
+    ]
+    responsible_refs = [
+        {"id": "resp-carol", "name": "Carol", "active": True},
+        {"id": "resp-cristina", "name": "Cristina", "active": True},
+        None,
+    ]
+    classified = []
+    for tx, responsible_ref in zip(dataset, responsible_refs):
+        item = classify_contracts_control_process(tx, date(2026, 6, 30), date(2026, 6, 30))
+        item["tx"] = tx
+        item["responsible_ref"] = responsible_ref
+        item["manual_data_version"] = 1 if responsible_ref else 0
+        classified.append(item)
+
+    aggregates = compute_contracts_control_data(
+        dataset,
+        "2026-06-01",
+        "2026-06-07",
+        "2026-06-30",
+        pre_classified_txs=classified,
+        raw_records_count=3,
+        unique_records_count=3,
+    )
+
+    week = aggregates["weekly_timeline"][0]
+    assert week["assigned_started_count"] == 2
+    assert week["unassigned_started_count"] == 1
+    assert week["assignment_completion_ratio"] == pytest.approx(2 / 3)
+    assert week["by_responsible"] == [
+        {"responsible": "Carol", "started_count": 1},
+        {"responsible": "Cristina", "started_count": 1},
+        {"responsible": None, "started_count": 1},
+    ]
 
 def test_contracts_control_endpoints_summary_and_deals():
     from fastapi.testclient import TestClient

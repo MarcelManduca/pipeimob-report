@@ -64,7 +64,17 @@ def main():
         sys.exit(1)
 
     with open(backup_file, "r", encoding="utf-8") as f:
-        snapshot_backup: List[Dict[str, Any]] = json.load(f)
+        raw_backup = json.load(f)
+
+    # Backward compatible with the original list-only backup. New backups
+    # also record catalog rows created by the import. Those rows are never
+    # deleted automatically because they may already be referenced elsewhere.
+    if isinstance(raw_backup, dict):
+        snapshot_backup: List[Dict[str, Any]] = raw_backup.get("assignments", [])
+        responsibles_created = raw_backup.get("responsibles_created", [])
+    else:
+        snapshot_backup = raw_backup
+        responsibles_created = []
 
     if not database.SessionLocal:
         db_url = os.getenv("DATABASE_URL") or "sqlite:///test.db"
@@ -140,6 +150,10 @@ def main():
         print(f"Modo: {'APPLY (Escrita)' if args.apply else 'DRY-RUN (Simulação)'}")
         print(f"Target: {args.target} (APP_ENV: {app_env})")
         print(f"Total de itens no snapshot: {len(snapshot_backup)}")
+        print(
+            "Responsáveis criados pela carga e preservados no rollback: "
+            f"{len(responsibles_created)}"
+        )
         print(f"Elegíveis para rollback: {len(eligible_rollbacks)}")
         print(f"Conflitos de alteração posterior (rollback_conflict): {len(conflicts)}")
         print("=" * 70)

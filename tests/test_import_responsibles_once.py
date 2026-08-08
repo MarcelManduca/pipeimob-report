@@ -25,6 +25,7 @@ from repositories.contracts_control_repository import ContractsControlRepository
 from scripts.import_responsibles_once import (
     normalize_code,
     parse_consolidated_csv,
+    parse_source_file,
     calculate_file_sha256,
 )
 
@@ -42,15 +43,15 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
 
 MOCK_PIPEIMOB_DATASET = [
-    {"transaction_id": "tx_41170", "codigo_imovel": "41170"},
-    {"transaction_id": "tx_40947", "codigo_imovel": "40947"},
-    {"transaction_id": "tx_39177", "codigo_imovel": "39177"},
-    {"transaction_id": "tx_42623", "codigo_imovel": "42623"},
-    {"transaction_id": "tx_42625", "codigo_imovel": "42625"},
-    {"transaction_id": "tx_41386", "codigo_imovel": "41386"},
-    {"transaction_id": "tx_39726", "codigo_imovel": "39726"},
-    {"transaction_id": "tx_ambiguous_1", "codigo_imovel": "99999"},
-    {"transaction_id": "tx_ambiguous_2", "codigo_imovel": "99999"} # 2 deals for code 99999 -> ambiguous!
+    {"transacao_unique_id_pipeimob": "tx_41170", "codigo_imovel": "41170"},
+    {"transacao_unique_id_pipeimob": "tx_40947", "codigo_imovel": "40947"},
+    {"transacao_unique_id_pipeimob": "tx_39177", "codigo_imovel": "39177"},
+    {"transacao_unique_id_pipeimob": "tx_42623", "codigo_imovel": "42623"},
+    {"transacao_unique_id_pipeimob": "tx_42625", "codigo_imovel": "42625"},
+    {"transacao_unique_id_pipeimob": "tx_41386", "codigo_imovel": "41386"},
+    {"transacao_unique_id_pipeimob": "tx_39726", "codigo_imovel": "39726"},
+    {"transacao_unique_id_pipeimob": "tx_ambiguous_1", "codigo_imovel": "99999"},
+    {"transacao_unique_id_pipeimob": "tx_ambiguous_2", "codigo_imovel": "99999"} # 2 deals for code 99999 -> ambiguous!
 ]
 
 @pytest.fixture(autouse=True)
@@ -109,6 +110,35 @@ def test_exact_responsible_matching(tmp_path):
     assert parsed["proposed_by_code"]["41170"] == "Carol"
     assert parsed["proposed_by_code"]["40947"] == "Guilherme"
     assert len(parsed["invalid_responsible_ignored"]) == 0
+
+
+def test_official_xlsx_tabs_are_consolidated_with_the_validated_parser(tmp_path):
+    from openpyxl import Workbook
+
+    workbook_path = tmp_path / "processos-vendas-2026.xlsx"
+    wb = Workbook()
+    first = wb.active
+    first.title = "1 ° TRIMESTRE"
+    first.append(["COD. IMÓVEL", "IMÓVEL", "DATA DE CADASTRO", "DATA ASSINATURA CCV", "GERENTE", "RESPONSÁVEL"])
+    first.append([41170, "Imóvel 1", "04/01/2026", "09/01/2026", "EXUPERY", "Carol"])
+
+    second = wb.create_sheet("2° TRIMESTRE")
+    second.append(["COD. IMÓVEL", "IMÓVEL", "DATA DE CADASTRO", "DATA ASSINATURA CCV", "GERENTE", "RESPONSÁVEL"])
+    second.append([42676, "Imóvel 2", "31/03/2026", "01/04/2026", "EVOLUÇÃO", "Guilherme"])
+
+    third = wb.create_sheet("3° TRIMESTRE")
+    third.append(["COD. IMÓVEL", "IMÓVEL", "DATA DE CADASTRO", "DATA ASSIN CCV", "PRAZO", "GERENTE", "RESPONSÁVEL"])
+    third.append([41924, "Imóvel 3", "23/02/2026", None, None, "EQUIPE 1", "Cristina"])
+    wb.save(workbook_path)
+
+    parsed = parse_source_file(str(workbook_path))
+
+    assert parsed["source_counts"]["total_data_rows"] == 3
+    assert parsed["proposed_by_code"] == {
+        "41170": "Carol",
+        "42676": "Guilherme",
+        "41924": "Cristina",
+    }
 
 
 # -----------------------------------------------------------------------------
@@ -258,6 +288,62 @@ def test_matching_single_deal(tmp_path, monkeypatch):
     assert db_results["unique_codes_single_match"] == 1
     assert db_results["unique_codes_not_found"] == 0
     assert db_results["deals_eligible"] == 1
+
+
+def test_real_transaction_id_is_prioritized_and_missing_id_is_blocked(tmp_path, monkeypatch):
+    monkeypatch.setenv("APP_ENV", "staging")
+    csv_file = tmp_path / "test_real_transaction_id.csv"
+    csv_file.write_text(
+        "source_sheet,source_row,codigo_imovel,responsavel,gerente\n"
+        "1° TRIMESTRE,2,41170,Carol,GERENTE 1\n"
+        "1° TRIMESTRE,3,40947,Guilherme,GERENTE 2\n",
+        encoding="utf-8"
+    )
+    file_sha256 = calculate_file_sha256(str(csv_file))
+
+    async def mock_real_dataset(*args, **kwargs):
+        return "live", "pipeimob_api", [
+            {
+                "transacao_unique_id_pipeimob": "tx_real_41170",
+                "transaction_id": "tx_legacy_41170",
+                "codigo_imovel": "41170",
+            },
+            {"codigo_imovel": "40947"},
+        ], 1, "miss"
+
+    monkeypatch.setattr(main_module, "load_contracts_control_dataset", mock_real_dataset)
+
+    from scripts.import_responsibles_once import main as run_import
+    with patch("sys.argv", [
+        "import_responsibles_once.py",
+        "--file", str(csv_file),
+        "--target", "staging",
+        "--apply",
+        "--expected-source-sha256", file_sha256,
+    ]):
+        run_import()
+
+    db = TestingSessionLocal()
+    assignments = db.query(ContractsControlManualData).all()
+    assert [item.transaction_id for item in assignments] == ["tx_real_41170"]
+    db.close()
+
+    report_dirs = [d for d in os.listdir("reports") if d.startswith("import_once_")]
+    latest_report_dir = sorted(
+        report_dirs,
+        key=lambda d: os.path.getctime(os.path.join("reports", d)),
+    )[-1]
+    with open(os.path.join("reports", latest_report_dir, "report.json")) as f:
+        data = json.load(f)
+
+    db_results = data["summary"]["database_matching_results"]
+    assert db_results["missing_transaction_id"] == 1
+    assert db_results["blocked_codes_total"] == 1
+    assert db_results["deals_eligible"] == 1
+    assert {
+        "codigo_imovel": "40947",
+        "reason": "missing_transaction_id",
+    } in data["pending_items"]
 
 
 # -----------------------------------------------------------------------------
@@ -637,3 +723,76 @@ def test_atomic_rollback_on_write_failure(tmp_path, monkeypatch):
 
     assert len(manual_data) == 0
     assert len(history) == 0
+
+
+def test_apply_creates_missing_official_responsible_and_assignment_atomically(tmp_path, monkeypatch):
+    monkeypatch.setenv("APP_ENV", "staging")
+    csv_file = tmp_path / "test_create_catalog.csv"
+    csv_file.write_text(
+        "source_sheet,source_row,codigo_imovel,responsavel,gerente\n"
+        "1° TRIMESTRE,2,41170,Carol,GERENTE 1\n",
+        encoding="utf-8"
+    )
+    file_sha256 = calculate_file_sha256(str(csv_file))
+
+    db = TestingSessionLocal()
+    carol = db.query(ContractsControlResponsible).filter_by(name="Carol").one()
+    db.delete(carol)
+    db.commit()
+    db.close()
+
+    from scripts.import_responsibles_once import main as run_import
+    with patch("sys.argv", [
+        "import_responsibles_once.py",
+        "--file", str(csv_file),
+        "--target", "staging",
+        "--apply",
+        "--expected-source-sha256", file_sha256,
+    ]):
+        run_import()
+
+    db = TestingSessionLocal()
+    created_carol = db.query(ContractsControlResponsible).filter_by(name="Carol").one()
+    manual = db.query(ContractsControlManualData).filter_by(transaction_id="tx_41170").one()
+    assert created_carol.active is True
+    assert manual.responsible_id == created_carol.id
+    db.close()
+
+
+def test_catalog_creation_rolls_back_when_assignment_audit_fails(tmp_path, monkeypatch):
+    monkeypatch.setenv("APP_ENV", "staging")
+    csv_file = tmp_path / "test_catalog_rollback.csv"
+    csv_file.write_text(
+        "source_sheet,source_row,codigo_imovel,responsavel,gerente\n"
+        "1° TRIMESTRE,2,41170,Carol,GERENTE 1\n",
+        encoding="utf-8"
+    )
+    file_sha256 = calculate_file_sha256(str(csv_file))
+
+    db = TestingSessionLocal()
+    carol = db.query(ContractsControlResponsible).filter_by(name="Carol").one()
+    db.delete(carol)
+    db.commit()
+    db.close()
+
+    monkeypatch.setattr(
+        ContractsControlRepository,
+        "create_history_record",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("audit failure")),
+    )
+
+    from scripts.import_responsibles_once import main as run_import
+    with patch("sys.argv", [
+        "import_responsibles_once.py",
+        "--file", str(csv_file),
+        "--target", "staging",
+        "--apply",
+        "--expected-source-sha256", file_sha256,
+    ]):
+        with pytest.raises(ValueError, match="audit failure"):
+            run_import()
+
+    db = TestingSessionLocal()
+    assert db.query(ContractsControlResponsible).filter_by(name="Carol").first() is None
+    assert db.query(ContractsControlManualData).count() == 0
+    db.close()
