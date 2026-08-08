@@ -55,6 +55,17 @@ def normalize_code(raw_code: str) -> str:
     return code
 
 
+def extract_transaction_id(deal: Dict[str, Any]) -> str:
+    """Return the Pipeimob transaction identifier, preferring the live payload key."""
+    raw_id = (
+        deal.get("transacao_unique_id_pipeimob")
+        or deal.get("transaction_id")
+        or deal.get("id")
+        or deal.get("transacao_unique_id")
+    )
+    return str(raw_id).strip() if raw_id is not None else ""
+
+
 def parse_consolidated_csv(file_path: str) -> Dict[str, Any]:
     rows_read = 0
     rows_with_responsible = 0
@@ -352,6 +363,7 @@ def main():
         unique_codes_not_found = 0
         unique_codes_ambiguous = 0
         inactive_responsible_code_count = 0
+        missing_transaction_id_count = 0
 
         eligible_items: List[Dict[str, Any]] = []
         pending_items: List[Dict[str, Any]] = []
@@ -391,7 +403,14 @@ def main():
             else:
                 unique_codes_single_match += 1
                 deal = matching_deals[0]
-                tx_id = str(deal.get("transaction_id") or deal.get("id") or deal.get("transacao_unique_id") or "")
+                tx_id = extract_transaction_id(deal)
+                if not tx_id:
+                    missing_transaction_id_count += 1
+                    pending_items.append({
+                        "codigo_imovel": code,
+                        "reason": "missing_transaction_id"
+                    })
+                    continue
                 eligible_items.append({
                     "codigo_imovel": code,
                     "transaction_id": tx_id,
@@ -431,6 +450,7 @@ def main():
             unique_codes_not_found
             + unique_codes_ambiguous
             + inactive_responsible_code_count
+            + missing_transaction_id_count
             + len(parsed["conflict_codes"])
             + len(parsed["invalid_responsible_ignored"])
         )
@@ -461,6 +481,7 @@ def main():
                 "unique_codes_not_found": unique_codes_not_found,
                 "unique_codes_ambiguous": unique_codes_ambiguous,
                 "inactive_responsible_codes": inactive_responsible_code_count,
+                "missing_transaction_id": missing_transaction_id_count,
                 "blocked_codes_total": blocked_codes_total,
                 "deals_eligible": len(eligible_items),
                 "already_synchronized": already_synchronized_count,
@@ -638,6 +659,7 @@ def main():
         print(f"  Matches únicos com negócio (single_match): {unique_codes_single_match}")
         print(f"  Códigos não encontrados no Pipeimob: {unique_codes_not_found}")
         print(f"  Códigos ambíguos (>1 negócio): {unique_codes_ambiguous}")
+        print(f"  Negócios sem identificador de transação: {missing_transaction_id_count}")
         print(f"  Total de códigos bloqueados: {blocked_codes_total}")
         print(f"  Elegíveis para aplicação: {len(eligible_items)}")
         print(f"  Já sincronizados (sem alteração): {already_synchronized_count}")
