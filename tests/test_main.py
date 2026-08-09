@@ -4101,6 +4101,95 @@ def test_contracts_control_weekly_current_responsible_distribution():
         {"responsible": None, "started_count": 1},
     ]
 
+def test_contracts_control_signature_sla_property_title_and_responsible_ranking():
+    from datetime import date
+    from main import (
+        build_contracts_control_property_title,
+        classify_contracts_control_process,
+        classify_signature_sla,
+        compute_contracts_control_data,
+    )
+
+    assert classify_signature_sla(29, "in_progress")["sla_bucket"] == "under_30_days"
+    assert classify_signature_sla(30, "in_progress")["sla_bucket"] == "30_59_days"
+    assert classify_signature_sla(59, "in_progress")["sla_bucket"] == "30_59_days"
+    assert classify_signature_sla(60, "in_progress")["sla_bucket"] == "60_89_days"
+    assert classify_signature_sla(89, "in_progress")["sla_bucket"] == "60_89_days"
+    assert classify_signature_sla(90, "in_progress")["sla_bucket"] == "90_plus_days"
+    assert "Escalonar" in classify_signature_sla(90, "in_progress")["sla_action"]
+
+    title, source = build_contracts_control_property_title({
+        "categoria_crm": "Prédio",
+        "endereco_logradouro": "Saldanha Marinho",
+        "endereco_numero": "51",
+    })
+    assert title == "Prédio · Saldanha Marinho, 51"
+    assert source == "derived_api"
+
+    transactions = [
+        ({
+            "transacao_unique_id_pipeimob": "a1",
+            "codigo_imovel": "1",
+            "data_inicio_venda": "2026-01-01",
+            "data_contrato": "2026-01-11",
+            "agente_gestor": "Gestor",
+            "financiamento": False,
+        }, {"id": "resp-a", "name": "Ana", "active": True}),
+        ({
+            "transacao_unique_id_pipeimob": "a2",
+            "codigo_imovel": "2",
+            "data_inicio_venda": "2026-01-01",
+            "data_contrato": "2026-02-20",
+            "agente_gestor": "Gestor",
+            "financiamento": False,
+        }, {"id": "resp-a", "name": "Ana", "active": True}),
+        ({
+            "transacao_unique_id_pipeimob": "b1",
+            "codigo_imovel": "3",
+            "data_inicio_venda": "2026-01-01",
+            "data_contrato": "2026-01-21",
+            "agente_gestor": "Gestor",
+            "financiamento": False,
+        }, {"id": "resp-b", "name": "Bruno", "active": True}),
+        ({
+            "transacao_unique_id_pipeimob": "a3",
+            "codigo_imovel": "4",
+            "data_inicio_venda": "2026-01-01",
+            "data_contrato": None,
+            "agente_gestor": "Gestor",
+            "financiamento": False,
+        }, {"id": "resp-a", "name": "Ana", "active": True}),
+    ]
+
+    classified = []
+    for tx, responsible_ref in transactions:
+        item = classify_contracts_control_process(tx, date(2026, 4, 15), date(2026, 4, 15))
+        item["tx"] = tx
+        item["responsible_ref"] = responsible_ref
+        classified.append(item)
+
+    aggregates = compute_contracts_control_data(
+        [tx for tx, _ in transactions],
+        "2026-01-01",
+        "2026-04-15",
+        "2026-04-15",
+        pre_classified_txs=classified,
+        raw_records_count=4,
+        unique_records_count=4,
+    )
+
+    ranking = aggregates["by_responsible"]
+    assert [(item["rank"], item["responsible"]) for item in ranking] == [
+        (1, "Bruno"),
+        (2, "Ana"),
+    ]
+    assert ranking[0]["average_duration_days"] == 20.0
+    assert ranking[1]["average_duration_days"] == 30.0
+    assert ranking[1]["in_progress_count"] == 1
+
+    sla_counts = {item["key"]: item["count"] for item in aggregates["open_sla_buckets"]}
+    assert sla_counts["90_plus_days"] == 1
+
 def test_contracts_control_endpoints_summary_and_deals():
     from fastapi.testclient import TestClient
     from main import app, verify_backend_api_key
@@ -4172,6 +4261,9 @@ def test_contracts_control_endpoints_summary_and_deals():
             assert dq["mapping_status"]["financing_classification"] == "resolved_api"
             assert dq["mapping_status"]["source_type"] == "resolved_api"
             assert dq["mapping_status"]["responsible"] == "manual_bi"
+            assert dq["mapping_status"]["start_date"] == "resolved_api:data_inicio_venda"
+            assert dq["mapping_status"]["contract_date"] == "resolved_api:data_contrato"
+            assert dq["mapping_status"]["signature_sla"] == "derived_30_60_90"
 
             # Test GET /api/contracts-control/deals with scope=operations (default)
             res_deals_ops = client.get("/api/contracts-control/deals?start_date=2026-06-01&end_date=2026-06-30")
@@ -4181,8 +4273,10 @@ def test_contracts_control_endpoints_summary_and_deals():
 
             # Verify PII allowlist strictly (exact match)
             allowed_keys = {
-                "transaction_id", "property_code", "property_title", "start_date", "contract_date",
-                "duration_days", "current_aging_days", "aging_days_at_period_end", "manager",
+                "transaction_id", "property_code", "property_title", "property_title_source",
+                "start_date", "contract_date", "duration_days", "current_aging_days",
+                "aging_days_at_period_end", "elapsed_days", "sla_bucket", "sla_label",
+                "sla_action", "manager",
                 "responsible", "modality", "modality_label", "modality_source", "modality_confidence",
                 "financing_bank", "financing_amount", "financing_ratio", "modality_flags",
                 "source_type", "source_type_label", "current_status", "status_at_period_end",
@@ -4191,6 +4285,7 @@ def test_contracts_control_endpoints_summary_and_deals():
             first_deal = deals_ops["deals"][0]
             assert set(first_deal.keys()) == allowed_keys
             assert first_deal["property_title"] is None
+            assert first_deal["property_title_source"] == "unavailable"
             assert first_deal["responsible"] is None
             assert first_deal["source_type"] == "unknown"
             assert "period_roles" in first_deal
@@ -4232,6 +4327,7 @@ def test_contracts_control_cache_behaviors():
 
     client = TestClient(app)
     app.dependency_overrides[verify_backend_api_key] = lambda: {"sub": "user-123", "role": "authenticated"}
+    contracts_control_cache.clear()
 
     try:
         # Clear cache first to test MISS
@@ -4377,6 +4473,7 @@ def test_contracts_control_additional_coverage_details():
 
     client = TestClient(app)
     app.dependency_overrides[verify_backend_api_key] = lambda: {"sub": "user-123", "role": "authenticated"}
+    contracts_control_cache.clear()
 
     try:
         # 1. Test invalid dates and negative duration branches inside classify_contracts_control_process
@@ -4426,6 +4523,7 @@ def test_contracts_control_additional_coverage_details():
             time.sleep(0.1)
 
         # 4. Test deals query filters (scope, manager, process_status, modality, aging_bucket, search filtering)
+        contracts_control_cache.clear()
         mock_txs_filters = [
             {"transacao_unique_id_pipeimob": "tx1", "codigo_imovel": "123", "data_inicio_venda": "2026-06-10", "data_contrato": "2026-06-25", "agente_gestor": "Manager A", "financiamento": True},
             {"transacao_unique_id_pipeimob": "tx2", "codigo_imovel": "456", "data_inicio_venda": "2026-06-28", "data_contrato": None, "agente_gestor": "Manager A", "financiamento": True}
@@ -4443,10 +4541,10 @@ def test_contracts_control_additional_coverage_details():
             assert res_mod_mismatch.status_code == 200
             assert res_mod_mismatch.json()["total_records"] == 0
 
-            # Query with non-matching aging_bucket (should hit continue on line 5483)
-            res_aging_mismatch = client.get("/api/contracts-control/deals?start_date=2026-06-01&end_date=2026-06-30&aging_bucket=over_30_days")
-            assert res_aging_mismatch.status_code == 200
-            assert res_aging_mismatch.json()["total_records"] == 0
+            # Open aging is evaluated against the current date, not period end.
+            res_current_aging = client.get("/api/contracts-control/deals?start_date=2026-06-01&end_date=2026-06-30&aging_bucket=over_30_days")
+            assert res_current_aging.status_code == 200
+            assert res_current_aging.json()["total_records"] == 1
 
             # Query with page limit larger than 100 to test caps
             res_cap = client.get("/api/contracts-control/deals?start_date=2026-06-01&end_date=2026-06-30&page_size=101")
@@ -4661,7 +4759,11 @@ def test_contracts_control_modality_classification_matrix():
 
     # 12. mapping_status final.
     assert aggregates["data_quality"]["mapping_status"] == {
-        "property_title": "unresolved",
+        "property_title": "derived_api",
+        "start_date": "resolved_api:data_inicio_venda",
+        "contract_date": "resolved_api:data_contrato",
+        "elapsed_days": "derived",
+        "signature_sla": "derived_30_60_90",
         "responsible": "manual_bi",
         "financing_classification": "resolved_api",
         "modality_detail": "partial",
