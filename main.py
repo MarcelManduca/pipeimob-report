@@ -5037,7 +5037,11 @@ class ContractsControlBucket(BaseModel):
 
 class ContractsControlResponsibleMetric(BaseModel):
     scope: str = "cohort"
+    rank: Optional[int] = None
+    responsible_id: Optional[str] = None
     responsible: Optional[str] = None
+    ranking_eligible: bool = False
+    ranking_basis: str = "average_duration_days_completed"
     records_count: int
     completed_count: int
     in_progress_count: int
@@ -5159,6 +5163,7 @@ class ContractsControlSummaryResponse(BaseModel):
     cohort_summary: ContractsControlCohortSummary
     operations_summary: ContractsControlOperationsSummary
     aging_buckets: List[ContractsControlBucket]
+    open_sla_buckets: List[ContractsControlBucket]
     duration_buckets: List[ContractsControlBucket]
     by_responsible: List[ContractsControlResponsibleMetric]
     by_manager: List[ContractsControlManagerMetric]
@@ -5178,11 +5183,16 @@ class ContractsControlDeal(BaseModel):
     transaction_id: str
     property_code: str
     property_title: Optional[str] = None
+    property_title_source: str = "unavailable"
     start_date: Optional[str] = None
     contract_date: Optional[str] = None
     duration_days: Optional[int] = None
     current_aging_days: Optional[int] = None
     aging_days_at_period_end: Optional[int] = None
+    elapsed_days: Optional[int] = None
+    sla_bucket: str
+    sla_label: str
+    sla_action: str
     manager: Optional[str] = None
     responsible: Optional[ContractsControlResponsibleReference] = None
     modality: str
@@ -5384,6 +5394,66 @@ def normalize_text(text: Any) -> str:
     s = str(text).strip().lower()
     s = "".join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
     return s
+
+def build_contracts_control_property_title(tx: dict) -> tuple[Optional[str], str]:
+    """Build a safe API-derived property label when Pipeimob has no title field."""
+    category = str(tx.get("categoria_crm") or tx.get("categoria") or "").strip()
+    street = str(tx.get("endereco_logradouro") or "").strip()
+    number = str(tx.get("endereco_numero") or "").strip()
+    complement = str(tx.get("endereco_complemento") or "").strip()
+
+    address_parts = []
+    if street:
+        address_parts.append(street)
+    if number:
+        address_parts.append(number)
+    if complement:
+        address_parts.append(complement)
+
+    address = ", ".join(address_parts)
+    if category and address:
+        return f"{category} · {address}", "derived_api"
+    if address:
+        return address, "derived_api"
+    if category:
+        return category, "derived_api"
+    return None, "unavailable"
+
+def classify_signature_sla(elapsed_days: Optional[int], current_status: str) -> dict:
+    """Classify the 30/60/90-day signature SLA and return an operational action."""
+    if elapsed_days is None or elapsed_days < 0 or current_status == "data_issue":
+        return {
+            "sla_bucket": "data_issue",
+            "sla_label": "Revisar dados",
+            "sla_action": "Corrigir as datas de cadastro e assinatura antes de acompanhar o prazo."
+        }
+
+    if elapsed_days < 30:
+        bucket = "under_30_days"
+        label = "Até 29 dias"
+        open_action = "Acompanhar no fluxo normal."
+    elif elapsed_days < 60:
+        bucket = "30_59_days"
+        label = "30 a 59 dias"
+        open_action = "Revisar pendências com o responsável."
+    elif elapsed_days < 90:
+        bucket = "60_89_days"
+        label = "60 a 89 dias"
+        open_action = "Definir plano de ação com o responsável e o gerente."
+    else:
+        bucket = "90_plus_days"
+        label = "90 dias ou mais"
+        open_action = "Escalonar para a gestão e priorizar a assinatura."
+
+    return {
+        "sla_bucket": bucket,
+        "sla_label": label,
+        "sla_action": (
+            open_action
+            if current_status == "in_progress"
+            else "Processo concluído; considerar no histórico de desempenho."
+        )
+    }
 
 def classify_contract_modality(tx: dict) -> dict:
     midia_raw = tx.get("midia_origem_vendedores")
@@ -5599,6 +5669,14 @@ def classify_contracts_control_process(tx: dict, as_of_date_obj: date, end_date_
     if status_at_period_end == "in_progress" and start_date_obj:
         aging_days_at_period_end = (end_date_obj - start_date_obj).days
 
+    elapsed_days = None
+    if current_status == "completed":
+        elapsed_days = duration_days
+    elif current_status == "in_progress":
+        elapsed_days = current_aging_days
+
+    sla_info = classify_signature_sla(elapsed_days, current_status)
+
     modality_info = classify_contract_modality(tx)
 
     res_dict = {
@@ -5609,8 +5687,10 @@ def classify_contracts_control_process(tx: dict, as_of_date_obj: date, end_date_
         "duration_days": duration_days,
         "current_aging_days": current_aging_days,
         "aging_days_at_period_end": aging_days_at_period_end,
+        "elapsed_days": elapsed_days,
         "data_quality_flags": sorted(list(data_quality_flags))
     }
+    res_dict.update(sla_info)
     res_dict.update(modality_info)
     return res_dict
 
@@ -5920,6 +6000,19 @@ def get_aging_bucket(days: int) -> str:
     if days <= 30: return "16_30_days"
     return "over_30_days"
 
+def matches_contracts_control_aging_filter(item: dict, requested_bucket: str) -> bool:
+    sla_buckets = {"under_30_days", "30_59_days", "60_89_days", "90_plus_days"}
+    if requested_bucket in sla_buckets:
+        return (
+            item.get("current_status") == "in_progress"
+            and item.get("sla_bucket") == requested_bucket
+        )
+
+    current_aging_days = item.get("current_aging_days")
+    if current_aging_days is None:
+        return False
+    return get_aging_bucket(current_aging_days) == requested_bucket
+
 # Main Core Aggregator
 def compute_contracts_control_data(
     dataset: list,
@@ -6014,7 +6107,11 @@ def compute_contracts_control_data(
     cancelled_cohort_count = 0
 
     completed_durations = [c["duration_days"] for c in completed_cohort if c["duration_days"] is not None]
-    in_progress_agings = [c["aging_days_at_period_end"] for c in in_progress_cohort if c["aging_days_at_period_end"] is not None]
+    in_progress_agings = [
+        c["current_aging_days"]
+        for c in cohort_txs
+        if c["current_status"] == "in_progress" and c["current_aging_days"] is not None
+    ]
 
     without_manager_cohort_count = len([c for c in cohort_txs if c["tx"].get("agente_gestor") is None or str(c["tx"].get("agente_gestor")).strip() == ""])
     unknown_modality_cohort_count = len([c for c in cohort_txs if not c["tx"].get("financiamento")])
@@ -6075,6 +6172,106 @@ def compute_contracts_control_data(
             "count": cnt,
             "ratio": ratio
         })
+
+    # Operational signature SLA for processes that are still open today.
+    open_sla_keys = ["under_30_days", "30_59_days", "60_89_days", "90_plus_days"]
+    open_sla_labels = {
+        "under_30_days": "Até 29 dias",
+        "30_59_days": "30 a 59 dias",
+        "60_89_days": "60 a 89 dias",
+        "90_plus_days": "90 dias ou mais"
+    }
+    open_sla_counts = {key: 0 for key in open_sla_keys}
+    for c in cohort_txs:
+        if c["current_status"] != "in_progress":
+            continue
+        key = c.get("sla_bucket")
+        if key in open_sla_counts:
+            open_sla_counts[key] += 1
+
+    total_open_sla = sum(open_sla_counts.values())
+    open_sla_buckets = [
+        {
+            "key": key,
+            "label": open_sla_labels[key],
+            "count": open_sla_counts[key],
+            "ratio": float(open_sla_counts[key] / total_open_sla) if total_open_sla else 0.0
+        }
+        for key in open_sla_keys
+    ]
+
+    # Ranking by current manually assigned responsible. Only concluded processes
+    # participate in the ranking; open and unassigned volumes remain visible.
+    by_responsible_dict: Dict[tuple[Optional[str], Optional[str]], list] = {}
+    for c in cohort_txs:
+        responsible_ref = c.get("responsible_ref")
+        responsible_id = responsible_ref.get("id") if responsible_ref else None
+        responsible_name = responsible_ref.get("name") if responsible_ref else None
+        key = (responsible_id, responsible_name)
+        by_responsible_dict.setdefault(key, []).append(c)
+
+    by_responsible_metrics = []
+    for (responsible_id, responsible_name), tx_list in by_responsible_dict.items():
+        completed = [t for t in tx_list if t["status_at_period_end"] == "completed"]
+        in_progress = [t for t in tx_list if t["status_at_period_end"] == "in_progress"]
+        completed_durations_responsible = [
+            t["duration_days"] for t in completed if t["duration_days"] is not None
+        ]
+        current_open_agings = [
+            t["current_aging_days"]
+            for t in tx_list
+            if t["current_status"] == "in_progress" and t["current_aging_days"] is not None
+        ]
+        completed_count = len(completed)
+        records_count = len(tx_list)
+        by_responsible_metrics.append({
+            "scope": "cohort",
+            "rank": None,
+            "responsible_id": responsible_id,
+            "responsible": responsible_name,
+            "ranking_eligible": responsible_id is not None and completed_count > 0,
+            "ranking_basis": "average_duration_days_completed",
+            "records_count": records_count,
+            "completed_count": completed_count,
+            "in_progress_count": len(in_progress),
+            "data_issue_count": len([
+                t for t in tx_list if t["status_at_period_end"] == "data_issue"
+            ]),
+            "average_duration_days": calculate_average(completed_durations_responsible),
+            "median_duration_days": contracts_control_calculate_median(
+                completed_durations_responsible
+            ),
+            "p75_duration_days": contracts_control_calculate_percentile(
+                completed_durations_responsible, 75.0
+            ),
+            "average_open_aging_days": calculate_average(current_open_agings),
+            "median_open_aging_days": contracts_control_calculate_median(current_open_agings),
+            "completion_ratio": float(completed_count / records_count) if records_count else 0.0,
+            "unknown_modality_count": len([
+                t for t in tx_list if t.get("modality") == "unknown"
+            ])
+        })
+
+    ranked_responsibles = sorted(
+        [metric for metric in by_responsible_metrics if metric["ranking_eligible"]],
+        key=lambda metric: (
+            metric["average_duration_days"],
+            metric["median_duration_days"],
+            -metric["completed_count"],
+            (metric["responsible"] or "").casefold()
+        )
+    )
+    for rank, metric in enumerate(ranked_responsibles, start=1):
+        metric["rank"] = rank
+
+    by_responsible_metrics.sort(
+        key=lambda metric: (
+            metric["rank"] is None,
+            metric["rank"] or 0,
+            metric["responsible"] is None,
+            (metric["responsible"] or "").casefold()
+        )
+    )
 
     # Group by manager (cohort)
     by_manager_dict = {}
@@ -6313,7 +6510,11 @@ def compute_contracts_control_data(
     ])
 
     mapping_status = {
-        "property_title": "unresolved",
+        "property_title": "derived_api",
+        "start_date": "resolved_api:data_inicio_venda",
+        "contract_date": "resolved_api:data_contrato",
+        "elapsed_days": "derived",
+        "signature_sla": "derived_30_60_90",
         "responsible": "manual_bi",
         "financing_classification": "resolved_api",
         "modality_detail": "partial",
@@ -6352,8 +6553,9 @@ def compute_contracts_control_data(
             "excluded_data_issue_count": excluded_data_issue_count
         },
         "aging_buckets": aging_buckets,
+        "open_sla_buckets": open_sla_buckets,
         "duration_buckets": duration_buckets,
-        "by_responsible": [],
+        "by_responsible": by_responsible_metrics,
         "by_manager": by_manager_metrics,
         "by_modality": by_modality_data,
         "by_source_type": [],
@@ -6522,11 +6724,9 @@ async def get_contracts_control_summary(
         if resolved_modality and tx_modality != resolved_modality:
             continue
 
-        if resolved_aging_bucket and c["aging_days_at_period_end"] is not None:
-            tx_aging_bucket = get_aging_bucket(c["aging_days_at_period_end"])
-            if tx_aging_bucket != resolved_aging_bucket:
-                continue
-        elif resolved_aging_bucket:
+        if resolved_aging_bucket and not matches_contracts_control_aging_filter(
+            c, resolved_aging_bucket
+        ):
             continue
 
         if resolved_search:
@@ -6640,8 +6840,12 @@ async def get_contracts_control_summary(
         cohort_summary=ContractsControlCohortSummary(**aggregates["cohort_summary"]),
         operations_summary=ContractsControlOperationsSummary(**aggregates["operations_summary"]),
         aging_buckets=[ContractsControlBucket(**b) for b in aggregates["aging_buckets"]],
+        open_sla_buckets=[ContractsControlBucket(**b) for b in aggregates["open_sla_buckets"]],
         duration_buckets=[ContractsControlBucket(**b) for b in aggregates["duration_buckets"]],
-        by_responsible=[],
+        by_responsible=[
+            ContractsControlResponsibleMetric(**metric)
+            for metric in aggregates["by_responsible"]
+        ],
         by_manager=[ContractsControlManagerMetric(**m) for m in aggregates["by_manager"]],
         by_modality=ContractsControlModalitySummary(**aggregates["by_modality"]),
         by_source_type=[],
@@ -6785,11 +6989,9 @@ async def get_contracts_control_deals(
         if resolved_modality and tx_modality != resolved_modality:
             continue
 
-        if resolved_aging_bucket and c["aging_days_at_period_end"] is not None:
-            tx_aging_bucket = get_aging_bucket(c["aging_days_at_period_end"])
-            if tx_aging_bucket != resolved_aging_bucket:
-                continue
-        elif resolved_aging_bucket:
+        if resolved_aging_bucket and not matches_contracts_control_aging_filter(
+            c, resolved_aging_bucket
+        ):
             continue
 
         if resolved_search:
@@ -6814,15 +7016,22 @@ async def get_contracts_control_deals(
             if responsible_ref["id"] != resolved_responsible and norm_resp_name != norm_resp_filter:
                 continue
 
+        property_title, property_title_source = build_contracts_control_property_title(tx)
+
         deal_item = {
             "transaction_id": tx_id,
             "property_code": tx.get("codigo_imovel") or "",
-            "property_title": None,
+            "property_title": property_title,
+            "property_title_source": property_title_source,
             "start_date": tx.get("data_inicio_venda"),
             "contract_date": tx.get("data_contrato"),
             "duration_days": c["duration_days"],
             "current_aging_days": c["current_aging_days"],
             "aging_days_at_period_end": c["aging_days_at_period_end"],
+            "elapsed_days": c["elapsed_days"],
+            "sla_bucket": c["sla_bucket"],
+            "sla_label": c["sla_label"],
+            "sla_action": c["sla_action"],
             "manager": tx.get("agente_gestor"),
             "responsible": responsible_ref,
             "manual_data_version": manual_version,
