@@ -4159,6 +4159,14 @@ def test_contracts_control_signature_sla_property_title_and_responsible_ranking(
             "agente_gestor": "Gestor",
             "financiamento": False,
         }, {"id": "resp-a", "name": "Ana", "active": True}),
+        ({
+            "transacao_unique_id_pipeimob": "c1",
+            "codigo_imovel": "5",
+            "data_inicio_venda": "2026-01-01",
+            "data_contrato": None,
+            "agente_gestor": "Gestor",
+            "financiamento": False,
+        }, {"id": "resp-c", "name": "Carlos", "active": True}),
     ]
 
     classified = []
@@ -4174,21 +4182,25 @@ def test_contracts_control_signature_sla_property_title_and_responsible_ranking(
         "2026-04-15",
         "2026-04-15",
         pre_classified_txs=classified,
-        raw_records_count=4,
-        unique_records_count=4,
+        raw_records_count=5,
+        unique_records_count=5,
     )
 
     ranking = aggregates["by_responsible"]
     assert [(item["rank"], item["responsible"]) for item in ranking] == [
         (1, "Bruno"),
         (2, "Ana"),
+        (None, "Carlos"),
     ]
     assert ranking[0]["average_duration_days"] == 20.0
     assert ranking[1]["average_duration_days"] == 30.0
     assert ranking[1]["in_progress_count"] == 1
+    assert ranking[1]["current_in_progress_count"] == 1
+    assert ranking[2]["ranking_eligible"] is False
+    assert ranking[2]["current_in_progress_count"] == 1
 
     sla_counts = {item["key"]: item["count"] for item in aggregates["open_sla_buckets"]}
-    assert sla_counts["90_plus_days"] == 1
+    assert sla_counts["90_plus_days"] == 2
 
 def test_contracts_control_endpoints_summary_and_deals():
     from fastapi.testclient import TestClient
