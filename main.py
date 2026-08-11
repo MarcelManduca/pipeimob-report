@@ -5045,6 +5045,7 @@ class ContractsControlResponsibleMetric(BaseModel):
     records_count: int
     completed_count: int
     in_progress_count: int
+    current_in_progress_count: int
     data_issue_count: int
     average_duration_days: float
     median_duration_days: float
@@ -6214,6 +6215,7 @@ def compute_contracts_control_data(
     for (responsible_id, responsible_name), tx_list in by_responsible_dict.items():
         completed = [t for t in tx_list if t["status_at_period_end"] == "completed"]
         in_progress = [t for t in tx_list if t["status_at_period_end"] == "in_progress"]
+        current_in_progress = [t for t in tx_list if t["current_status"] == "in_progress"]
         completed_durations_responsible = [
             t["duration_days"] for t in completed if t["duration_days"] is not None
         ]
@@ -6234,6 +6236,7 @@ def compute_contracts_control_data(
             "records_count": records_count,
             "completed_count": completed_count,
             "in_progress_count": len(in_progress),
+            "current_in_progress_count": len(current_in_progress),
             "data_issue_count": len([
                 t for t in tx_list if t["status_at_period_end"] == "data_issue"
             ]),
