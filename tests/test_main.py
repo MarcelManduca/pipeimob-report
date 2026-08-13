@@ -8065,6 +8065,7 @@ def test_pipeimob_pagination_timeout_exhaustion_has_actionable_error():
 
 
 def test_pipeimob_pagination_retries_http_504_then_succeeds():
+    import urllib.error
     import main as main_module
 
     payload = {
