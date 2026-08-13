@@ -610,9 +610,25 @@ def fetch_all_pipeimob_transactions(
                     auth_retry_allowed=False,
                     attempt=attempt,
                 )
+            if (
+                e.code in {408, 429, 500, 502, 503, 504}
+                and attempt < PIPEIMOB_REQUEST_MAX_ATTEMPTS
+            ):
+                time.sleep(PIPEIMOB_RETRY_BACKOFF_SECONDS * attempt)
+                return request_with_retry(
+                    url,
+                    auth_retry_allowed=auth_retry_allowed,
+                    attempt=attempt + 1,
+                )
+            detail = (
+                f"Pipeimob API remained unavailable (HTTP {e.code}) "
+                f"after {attempt} attempts."
+                if e.code in {408, 429, 500, 502, 503, 504}
+                else f"Pipeimob API is temporarily unavailable (HTTP {e.code})."
+            )
             raise IntegrationUnavailableError(
                 status_code=503,
-                detail=f"Pipeimob API is temporarily unavailable (HTTP {e.code}).",
+                detail=detail,
                 error_code="pipeimob_unavailable",
                 data_mode="live",
                 pipeimob_connection="unavailable"
