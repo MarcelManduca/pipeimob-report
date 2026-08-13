@@ -8006,3 +8006,59 @@ def test_bi_granularity_old_cache_version_rejection():
     assert val is None
     assert status == "miss"
     assert main_module.DASHBOARD_CACHE_VERSION == "v2"
+
+
+def test_pipeimob_pagination_retries_read_timeout_then_succeeds():
+    import main as main_module
+
+    payload = {
+        "success": True,
+        "data": {
+            "transacoes": [
+                {"transacao_unique_id_pipeimob": "tx_retry_success"}
+            ]
+        },
+        "meta": {
+            "pagination": {"total": 1, "total_pages": 1}
+        },
+    }
+    response = MagicMock()
+    response.__enter__.return_value = response
+    response.read.return_value = json.dumps(payload).encode("utf-8")
+
+    with patch("main.get_auth_token", return_value="token"), \
+         patch("urllib.request.urlopen", side_effect=[TimeoutError("read timed out"), response]) as mock_urlopen, \
+         patch("main.PIPEIMOB_REQUEST_MAX_ATTEMPTS", 3), \
+         patch("main.PIPEIMOB_RETRY_BACKOFF_SECONDS", 0), \
+         patch("time.sleep"):
+        transactions, pages = main_module.fetch_all_pipeimob_transactions(
+            api_key="key",
+            api_secret="secret",
+            data_inicio_criacao="2020-01-01",
+        )
+
+    assert pages == 1
+    assert transactions == [{"transacao_unique_id_pipeimob": "tx_retry_success"}]
+    assert mock_urlopen.call_count == 2
+
+
+def test_pipeimob_pagination_timeout_exhaustion_has_actionable_error():
+    import main as main_module
+
+    with patch("main.get_auth_token", return_value="token"), \
+         patch("urllib.request.urlopen", side_effect=TimeoutError("read timed out")) as mock_urlopen, \
+         patch("main.PIPEIMOB_REQUEST_MAX_ATTEMPTS", 3), \
+         patch("main.PIPEIMOB_RETRY_BACKOFF_SECONDS", 0), \
+         patch("time.sleep"):
+        with pytest.raises(main_module.IntegrationUnavailableError) as exc_info:
+            main_module.fetch_all_pipeimob_transactions(
+                api_key="key",
+                api_secret="secret",
+                data_inicio_criacao="2020-01-01",
+            )
+
+    assert exc_info.value.error_code == "pipeimob_pagination_timeout"
+    assert str(exc_info.value) == (
+        "Pipeimob CRM Pagination request timed out after 3 attempts."
+    )
+    assert mock_urlopen.call_count == 3
