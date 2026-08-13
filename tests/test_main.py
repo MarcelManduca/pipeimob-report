@@ -8062,3 +8062,47 @@ def test_pipeimob_pagination_timeout_exhaustion_has_actionable_error():
         "Pipeimob CRM Pagination request timed out after 3 attempts."
     )
     assert mock_urlopen.call_count == 3
+
+
+def test_pipeimob_pagination_retries_http_504_then_succeeds():
+    import urllib.error
+    import main as main_module
+
+    payload = {
+        "success": True,
+        "data": {
+            "transacoes": [
+                {"transacao_unique_id_pipeimob": "tx_http_retry_success"}
+            ]
+        },
+        "meta": {
+            "pagination": {"total": 1, "total_pages": 1}
+        },
+    }
+    response = MagicMock()
+    response.__enter__.return_value = response
+    response.read.return_value = json.dumps(payload).encode("utf-8")
+    gateway_timeout = urllib.error.HTTPError(
+        url="https://api.pipeimob.com.br/page/1",
+        code=504,
+        msg="Gateway Timeout",
+        hdrs=None,
+        fp=None,
+    )
+
+    with patch("main.get_auth_token", return_value="token"), \
+         patch("urllib.request.urlopen", side_effect=[gateway_timeout, response]) as mock_urlopen, \
+         patch("main.PIPEIMOB_REQUEST_MAX_ATTEMPTS", 3), \
+         patch("main.PIPEIMOB_RETRY_BACKOFF_SECONDS", 0), \
+         patch("time.sleep"):
+        transactions, pages = main_module.fetch_all_pipeimob_transactions(
+            api_key="key",
+            api_secret="secret",
+            data_inicio_criacao="2020-01-01",
+        )
+
+    assert pages == 1
+    assert transactions == [
+        {"transacao_unique_id_pipeimob": "tx_http_retry_success"}
+    ]
+    assert mock_urlopen.call_count == 2
