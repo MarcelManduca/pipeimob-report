@@ -2,6 +2,7 @@ import os
 import uuid
 import asyncio
 import urllib.request
+import socket
 import json
 import ssl
 import time
@@ -22,6 +23,18 @@ try:
     PIPEIMOB_HTTP_TIMEOUT_SECONDS = max(1, min(30, _env_timeout))
 except ValueError:
     PIPEIMOB_HTTP_TIMEOUT_SECONDS = 12
+
+try:
+    _env_request_attempts = int(os.getenv("PIPEIMOB_REQUEST_MAX_ATTEMPTS", "3"))
+    PIPEIMOB_REQUEST_MAX_ATTEMPTS = max(1, min(5, _env_request_attempts))
+except ValueError:
+    PIPEIMOB_REQUEST_MAX_ATTEMPTS = 3
+
+try:
+    _env_retry_backoff = float(os.getenv("PIPEIMOB_RETRY_BACKOFF_SECONDS", "1"))
+    PIPEIMOB_RETRY_BACKOFF_SECONDS = max(0.0, min(10.0, _env_retry_backoff))
+except ValueError:
+    PIPEIMOB_RETRY_BACKOFF_SECONDS = 1.0
 
 # Token Cache in memory
 class TokenCache:
@@ -323,6 +336,7 @@ app = FastAPI(
 
 class IntegrationUnavailableError(Exception):
     def __init__(self, status_code: int, detail: str, error_code: str, data_mode: str, pipeimob_connection: str):
+        super().__init__(detail)
         self.status_code = status_code
         self.detail = detail
         self.error_code = error_code
@@ -546,7 +560,11 @@ def fetch_all_pipeimob_transactions(
     query_str = "&".join(query_parts)
     prefix = f"&{query_str}" if query_str else ""
 
-    def request_with_retry(url: str, retry_allowed: bool = True) -> dict:
+    def request_with_retry(
+        url: str,
+        auth_retry_allowed: bool = True,
+        attempt: int = 1,
+    ) -> dict:
         nonlocal token
         req = urllib.request.Request(
             url,
@@ -585,9 +603,13 @@ def fetch_all_pipeimob_transactions(
                     )
                 return res_body
         except urllib.error.HTTPError as e:
-            if e.code == 401 and retry_allowed:
+            if e.code == 401 and auth_retry_allowed:
                 token = get_auth_token(api_key, api_secret, force_refresh=True)
-                return request_with_retry(url, retry_allowed=False)
+                return request_with_retry(
+                    url,
+                    auth_retry_allowed=False,
+                    attempt=attempt,
+                )
             raise IntegrationUnavailableError(
                 status_code=503,
                 detail=f"Pipeimob API is temporarily unavailable (HTTP {e.code}).",
@@ -597,10 +619,36 @@ def fetch_all_pipeimob_transactions(
             )
         except urllib.error.URLError as e:
             is_timeout = "timeout" in str(e.reason).lower() if hasattr(e, 'reason') else False
+            if is_timeout and attempt < PIPEIMOB_REQUEST_MAX_ATTEMPTS:
+                time.sleep(PIPEIMOB_RETRY_BACKOFF_SECONDS * attempt)
+                return request_with_retry(
+                    url,
+                    auth_retry_allowed=auth_retry_allowed,
+                    attempt=attempt + 1,
+                )
             raise IntegrationUnavailableError(
                 status_code=503,
-                detail="Pipeimob CRM Pagination request timed out." if is_timeout else "Pipeimob CRM Pagination is unreachable.",
+                detail=(
+                    f"Pipeimob CRM Pagination request timed out after {attempt} attempts."
+                    if is_timeout
+                    else "Pipeimob CRM Pagination is unreachable."
+                ),
                 error_code="pipeimob_pagination_timeout" if is_timeout else "pipeimob_pagination_unavailable",
+                data_mode="live",
+                pipeimob_connection="unavailable"
+            )
+        except (TimeoutError, socket.timeout):
+            if attempt < PIPEIMOB_REQUEST_MAX_ATTEMPTS:
+                time.sleep(PIPEIMOB_RETRY_BACKOFF_SECONDS * attempt)
+                return request_with_retry(
+                    url,
+                    auth_retry_allowed=auth_retry_allowed,
+                    attempt=attempt + 1,
+                )
+            raise IntegrationUnavailableError(
+                status_code=503,
+                detail=f"Pipeimob CRM Pagination request timed out after {attempt} attempts.",
+                error_code="pipeimob_pagination_timeout",
                 data_mode="live",
                 pipeimob_connection="unavailable"
             )
