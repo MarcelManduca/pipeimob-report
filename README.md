@@ -148,6 +148,28 @@ Todas as rotas de listagem e BI suportam os seguintes filtros opcionais:
   * Taxas de comissão por contrato (apenas código do contrato e comissão, sem dados de corretor ou e-mails) e média global.
 * **Linha do Tempo (Timelines):** `GET /api/dashboard/timeline`
   * Progresso cronológico mensal do volume e quantidade de vendas (ex: `Jan/26`, `Fev/26`).
+* **Conciliação de Vendas Pipeimob + Vista:** `GET /api/reconciliation/sales`
+  * Considera venda somente quando existe contrato assinado no Pipeimob. O Pipeimob define quantidade, data oficial da venda e VGV.
+  * Usa exclusivamente negócios com `Status = Ganho` no Vista para conciliação e atribuição comercial. A etapa `Fechamento`, isoladamente, nunca é tratada como venda.
+  * Mantém separados o corretor fiscal do Pipeimob e o corretor comercial do Vista. Quando o corretor comercial não está disponível, o dado fica pendente em vez de ser substituído pelo emissor da nota fiscal.
+  * Expõe divergências de vínculo, data e valor para auditoria, sem solicitar ou retornar dados pessoais de clientes.
+
+Configurações server-side necessárias para a conciliação:
+
+```env
+VISTA_API_BASE_URL=https://<tenant-vista>/api
+VISTA_API_KEY=
+VISTA_SALES_PIPE_ID=
+VISTA_HTTP_TIMEOUT_SECONDS=12
+```
+
+Exemplo de consulta:
+
+```text
+GET /api/reconciliation/sales?data_inicio_ccv=2026-08-01&data_fim_ccv=2026-08-20
+```
+
+O endpoint só opera com a fonte Pipeimob ao vivo; dados simulados não podem formar números oficiais.
 
 ---
 
@@ -173,4 +195,3 @@ pytest
 
 * **Autenticação:** A autenticação com o CRM Pipeimob está marcada como **Pendente** por padrão até a definição das chaves no `.env`.
 * **Endpoint Pipeimob:** O endpoint definitivo de transações foi oficialmente confirmado como `/api/v2/negocios/transacoes`.
-
