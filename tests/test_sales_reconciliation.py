@@ -59,8 +59,51 @@ def test_vista_client_requests_only_documented_non_personal_fields():
         "DataFinal": ["2026-08-01", "2026-08-20"],
     }
     assert "NomeCliente" not in pesquisa["fields"]
+    assert "CodigoCorretor" not in pesquisa["fields"]
+    assert "Corretor" not in pesquisa["fields"]
+    assert "NomeCorretor" not in pesquisa["fields"]
+    assert "CorretorNegocio" in pesquisa["fields"]
     assert "NomeCliente" not in gains[0]
     assert gains[0]["status"] == "Ganho"
+
+
+def test_vista_client_resolves_commercial_broker_from_users_endpoint():
+    requests = []
+
+    def opener(request, timeout):
+        requests.append(request)
+        if "/negocios/listar?" in request.full_url:
+            return FakeResponse(
+                {
+                    "1": {
+                        "Codigo": "vista-1",
+                        "CodigoImovel": "44357",
+                        "Status": "Ganho",
+                        "DataFinal": "2026-08-10",
+                        "ValorNegocio": "4500000",
+                        "CorretorNegocio": "77",
+                    },
+                    "total": 1,
+                    "paginas": 1,
+                }
+            )
+        return FakeResponse(
+            {
+                "77": {"Codigo": "77", "Nome": "Corretor Comercial"},
+                "total": 1,
+                "paginas": 1,
+            }
+        )
+
+    client = VistaSalesClient(
+        "https://tenant.example.com", "secret-key", "pipe-1", opener=opener
+    )
+    gains = client.fetch_gains(date(2026, 8, 1), date(2026, 8, 20))
+
+    assert len(requests) == 2
+    assert "/usuarios/listar?" in requests[1].full_url
+    assert gains[0]["commercial_broker_id"] == "77"
+    assert gains[0]["commercial_broker_name"] == "Corretor Comercial"
 
 
 def test_vista_client_error_never_contains_api_key():
