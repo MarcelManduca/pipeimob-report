@@ -3872,6 +3872,19 @@ def get_jwk_client():
 
 authorization_role_status = "unresolved"
 
+
+def _log_auth_failure(reason: str, *, alg: Optional[str] = None, error_type: Optional[str] = None) -> None:
+    """Registra somente metadados seguros para diagnosticar rejeições JWT."""
+    event = {
+        "event": "auth_validation_failed",
+        "reason": reason,
+    }
+    if alg:
+        event["alg"] = alg
+    if error_type:
+        event["error_type"] = error_type
+    print(f"SECURE_LOG: {json.dumps(event)}")
+
 def get_db_session():
     try:
         from database import SessionLocal
@@ -3969,6 +3982,7 @@ async def verify_backend_api_key(
     import time
 
     if not authorization:
+        _log_auth_failure("authorization_missing")
         raise AuthException(
             status_code=401,
             detail="Authentication required.",
@@ -3976,6 +3990,7 @@ async def verify_backend_api_key(
         )
 
     if not authorization.startswith("Bearer "):
+        _log_auth_failure("authorization_scheme_invalid")
         raise AuthException(
             status_code=401,
             detail="Invalid or expired access token.",
@@ -4000,7 +4015,8 @@ async def verify_backend_api_key(
         try:
             header = jwt.get_unverified_header(token)
             alg = header.get("alg")
-        except Exception:
+        except Exception as exc:
+            _log_auth_failure("token_header_invalid", error_type=type(exc).__name__)
             raise AuthException(
                 status_code=401,
                 detail="Invalid or expired access token.",
@@ -4009,6 +4025,7 @@ async def verify_backend_api_key(
 
         ALLOWED_ALGORITHMS = ["HS256", "RS256", "ES256"]
         if not alg or alg not in ALLOWED_ALGORITHMS:
+            _log_auth_failure("algorithm_not_allowed", alg=alg)
             raise AuthException(
                 status_code=401,
                 detail="Invalid or expired access token.",
@@ -4017,6 +4034,7 @@ async def verify_backend_api_key(
 
         if alg == "HS256":
             if not jwt_secret:
+                _log_auth_failure("hs256_secret_missing", alg=alg)
                 raise AuthException(
                     status_code=401,
                     detail="Invalid or expired access token.",
@@ -4033,7 +4051,8 @@ async def verify_backend_api_key(
                 )
             except AuthException:
                 raise
-            except Exception:
+            except Exception as exc:
+                _log_auth_failure("hs256_decode_failed", alg=alg, error_type=type(exc).__name__)
                 raise AuthException(
                     status_code=401,
                     detail="Invalid or expired access token.",
@@ -4043,6 +4062,7 @@ async def verify_backend_api_key(
         elif alg in ["RS256", "ES256"]:
             # Require 'kid' header for asymmetric tokens
             if not isinstance(header, dict) or "kid" not in header or not header["kid"]:
+                _log_auth_failure("asymmetric_kid_missing", alg=alg)
                 raise AuthException(
                     status_code=401,
                     detail="Invalid or expired access token.",
@@ -4050,6 +4070,7 @@ async def verify_backend_api_key(
                 )
 
             if not jwks_url:
+                _log_auth_failure("jwks_url_missing", alg=alg)
                 raise AuthException(
                     status_code=401,
                     detail="Invalid or expired access token.",
@@ -4061,12 +4082,14 @@ async def verify_backend_api_key(
             try:
                 jwk_set = client.get_jwk_set()
             except PyJWKClientConnectionError:
+                _log_auth_failure("jwks_unavailable", alg=alg)
                 raise AuthException(
                     status_code=503,
                     detail="Supabase JWKS service is temporarily unavailable.",
                     error_code="supabase_jwks_unavailable"
                 )
-            except Exception:
+            except Exception as exc:
+                _log_auth_failure("jwks_invalid", alg=alg, error_type=type(exc).__name__)
                 raise AuthException(
                     status_code=503,
                     detail="Supabase JWKS response is malformed or invalid.",
@@ -4074,6 +4097,7 @@ async def verify_backend_api_key(
                 )
 
             if not jwk_set or not hasattr(jwk_set, "keys") or not jwk_set.keys:
+                _log_auth_failure("jwks_empty", alg=alg)
                 raise AuthException(
                     status_code=503,
                     detail="Supabase JWKS response is empty or invalid.",
@@ -4093,7 +4117,8 @@ async def verify_backend_api_key(
                 )
             except AuthException:
                 raise
-            except (PyJWKSetError, Exception):
+            except Exception as exc:
+                _log_auth_failure("asymmetric_decode_failed", alg=alg, error_type=type(exc).__name__)
                 raise AuthException(
                     status_code=401,
                     detail="Invalid or expired access token.",
@@ -4104,6 +4129,7 @@ async def verify_backend_api_key(
         # Additional required claims validation (both JWKS & Dev)
         # 1. role must be authenticated
         if payload.get("role") != "authenticated":
+            _log_auth_failure("role_invalid", alg=alg)
             raise AuthException(
                 status_code=401,
                 detail="Invalid or expired access token.",
@@ -4112,6 +4138,7 @@ async def verify_backend_api_key(
 
         # 2. email must be present
         if not payload.get("email") or not isinstance(payload.get("email"), str):
+            _log_auth_failure("email_claim_missing", alg=alg)
             raise AuthException(
                 status_code=401,
                 detail="Invalid or expired access token.",
@@ -4120,6 +4147,7 @@ async def verify_backend_api_key(
 
         # 3. sub must be present
         if not payload.get("sub") or not isinstance(payload.get("sub"), str):
+            _log_auth_failure("subject_claim_missing", alg=alg)
             raise AuthException(
                 status_code=401,
                 detail="Invalid or expired access token.",
@@ -4128,6 +4156,7 @@ async def verify_backend_api_key(
 
         # 4. issuer check if expected
         if expected_iss and payload.get("iss") != expected_iss:
+            _log_auth_failure("issuer_mismatch", alg=alg)
             raise AuthException(
                 status_code=401,
                 detail="Invalid or expired access token.",
@@ -4136,6 +4165,7 @@ async def verify_backend_api_key(
 
         # 5. audience check
         if expected_aud and payload.get("aud") != expected_aud:
+            _log_auth_failure("audience_mismatch", alg=alg)
             raise AuthException(
                 status_code=401,
                 detail="Invalid or expired access token.",
