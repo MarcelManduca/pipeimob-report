@@ -49,7 +49,7 @@ class SupabaseDirectorTokenVerifier(TokenVerifier):
         return AccessToken(
             token=token,
             client_id=str(payload.get("client_id") or "supabase-chatgpt"),
-            scopes=["director:read"],
+            scopes=["openid", "email"],
             expires_at=int(payload["exp"]) if payload.get("exp") else None,
             subject=subject,
             claims={"email": email, "role": role},
@@ -103,7 +103,7 @@ def create_server(
         auth = AuthSettings(
             issuer_url=issuer,
             resource_server_url=f"{public_url}/mcp",
-            required_scopes=["director:read"],
+            required_scopes=["openid", "email"],
         )
         token_verifier = SupabaseDirectorTokenVerifier()
 

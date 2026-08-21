@@ -39,6 +39,8 @@ e-mail, telefone ou documento de cliente.
 
 - Cada diretor usa uma identidade individual; não há credencial compartilhada.
 - A autorização é validada no servidor por e-mail ou domínio permitido.
+- Os escopos OAuth anunciados são `openid` e `email`, ambos suportados pelo
+  provedor; a permissão de Diretoria continua sendo aplicada no servidor.
 - O token do diretor é encaminhado ao backend protegido e nunca é retornado ao chat.
 - O modo `MCP_AUTH_REQUIRED=false` é restrito à inspeção local isolada.
 - Produção exige OAuth 2.1 compatível com o cliente ChatGPT, HTTPS estável, rate

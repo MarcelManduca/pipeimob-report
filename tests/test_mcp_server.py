@@ -1,5 +1,6 @@
 import asyncio
 
+from mcp_server import SupabaseDirectorTokenVerifier
 from mcp_server import create_server
 
 
@@ -51,3 +52,27 @@ def test_mcp_advertises_only_read_only_director_tools(monkeypatch):
         assert result.structured_content["vgv"] == "24196504"
 
     asyncio.run(inspect_tools())
+
+
+def test_director_token_uses_scopes_supported_by_supabase(monkeypatch):
+    monkeypatch.setenv("MCP_AUTH_REQUIRED", "true")
+    monkeypatch.setenv("SUPABASE_ISSUER", "https://example.supabase.co/auth/v1")
+    monkeypatch.setenv("MCP_PUBLIC_URL", "https://validation.example.com")
+    server = create_server(auth_required=True)
+
+    assert server.settings.auth.required_scopes == ["openid", "email"]
+
+    verifier = SupabaseDirectorTokenVerifier()
+    monkeypatch.setattr(
+        verifier,
+        "_decode",
+        lambda token: {
+            "sub": "director-1",
+            "email": "director@gralhaimoveis.com.br",
+            "role": "authenticated",
+            "exp": 9999999999,
+        },
+    )
+
+    access_token = asyncio.run(verifier.verify_token("token"))
+    assert access_token.scopes == ["openid", "email"]
