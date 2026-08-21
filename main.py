@@ -15,6 +15,12 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
+from services.sales_reconciliation import reconcile_sales
+from services.vista_sales_client import (
+    VistaSalesAPIError,
+    VistaSalesClient,
+    VistaSalesConfigurationError,
+)
 
 # Centralized HTTP Timeout configuration for external API requests (connection and read timeout)
 try:
@@ -5042,6 +5048,119 @@ async def get_dashboard_full(
         debug_metrics=debug_metrics,
         data_quality=DataQualityPayload(**aggregates["data_quality"]) if aggregates.get("data_quality") is not None else None
     )
+
+
+@app.get(
+    "/api/reconciliation/sales",
+    dependencies=[Depends(verify_backend_api_key)],
+    summary="Reconcile Pipeimob sales with Vista gains",
+    description=(
+        "Uses Pipeimob as the official source for sale count, CCV date and VGV, "
+        "then enriches matched contracts with the commercial ownership available "
+        "in Vista. Client personal data is neither requested nor returned."
+    ),
+)
+async def get_sales_reconciliation(
+    request: Request,
+    response: Response,
+    data_inicio_ccv: str = Query(..., description="Official CCV start date (YYYY-MM-DD)"),
+    data_fim_ccv: str = Query(..., description="Official CCV end date (YYYY-MM-DD)"),
+    date_tolerance_days: int = Query(7, ge=0, le=31),
+    refresh: bool = Query(False),
+):
+    try:
+        start_date = date.fromisoformat(data_inicio_ccv)
+        end_date = date.fromisoformat(data_fim_ccv)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400, detail="CCV dates must use YYYY-MM-DD"
+        ) from exc
+    if start_date > end_date:
+        raise HTTPException(
+            status_code=400, detail="data_inicio_ccv cannot be after data_fim_ccv"
+        )
+
+    request_id = getattr(request.state, "request_id", None) or str(uuid.uuid4())
+    mode, source, dataset, pages_fetched, cache_status = await load_transactions_dataset(
+        data_inicio_ccv=data_inicio_ccv,
+        data_fim_ccv=data_fim_ccv,
+        request_id=request_id,
+        refresh=bool(refresh),
+    )
+    validate_dataset_origin(mode, source, dataset)
+    if mode != "live" or source != "pipeimob_api_v2":
+        raise IntegrationUnavailableError(
+            status_code=503,
+            detail="Official sales reconciliation requires live Pipeimob data.",
+            error_code="reconciliation_requires_live_pipeimob",
+            data_mode=mode,
+            pipeimob_connection="unavailable",
+        )
+
+    official_transactions = []
+    for transaction in dataset:
+        signed_date = parse_date_to_date_obj(transaction.get("data_assinatura_ccv"))
+        if signed_date and start_date <= signed_date <= end_date:
+            official_transactions.append(transaction)
+
+    try:
+        vista_client = VistaSalesClient.from_env()
+        vista_start = start_date - timedelta(days=date_tolerance_days)
+        vista_end = end_date + timedelta(days=date_tolerance_days)
+        vista_gains = await asyncio.to_thread(
+            vista_client.fetch_gains, vista_start, vista_end
+        )
+    except VistaSalesConfigurationError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Vista sales reconciliation is not configured.",
+            headers={"X-Reconciliation-Error": "vista_not_configured"},
+        ) from exc
+    except VistaSalesAPIError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Vista sales data is temporarily unavailable.",
+            headers={"X-Reconciliation-Error": "vista_unavailable"},
+        ) from exc
+
+    official_property_codes = {
+        str(transaction.get("codigo_imovel") or "").strip().upper()
+        for transaction in official_transactions
+        if transaction.get("codigo_imovel") not in (None, "")
+    }
+    relevant_vista_gains = []
+    for gain in vista_gains:
+        gain_date = parse_date_to_date_obj(gain.get("gain_date"))
+        property_code = str(gain.get("property_code") or "").strip().upper()
+        if property_code in official_property_codes or (
+            gain_date and start_date <= gain_date <= end_date
+        ):
+            relevant_vista_gains.append(gain)
+
+    result = reconcile_sales(
+        official_transactions,
+        relevant_vista_gains,
+        date_tolerance_days=date_tolerance_days,
+    )
+    result.update(
+        {
+            "period": {"start": data_inicio_ccv, "end": data_fim_ccv},
+            "generated_at": datetime.now(timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z"),
+            "pipeimob_pages_fetched": pages_fetched,
+            "pipeimob_cache_status": cache_status,
+            "vista_pipe_id_configured": True,
+            "commercial_broker_limitation": (
+                "The documented Vista negocios/listar fields do not guarantee a "
+                "commercial broker field. Missing ownership remains pending and is "
+                "never replaced by Pipeimob's fiscal agent."
+            ),
+        }
+    )
+    response.headers["X-Data-Mode"] = "live"
+    response.headers["X-Reconciliation-Contract"] = result["contract_version"]
+    return result
 
 
 # ======================================================================
