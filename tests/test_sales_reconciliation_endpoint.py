@@ -26,7 +26,8 @@ def test_reconciliation_endpoint_uses_live_pipeimob_and_vista_sources():
             "transacao_unique_id_pipeimob": "pipe-1",
             "codigo_imovel": "100",
             "codigo_contrato": "contract-1",
-            "data_assinatura_ccv": "2026-08-10",
+            "data_contrato": "2026-08-10",
+            "data_inicio_venda": "2026-07-01",
             "valor_contrato": "100000",
             "agente_gestor": "Agente Fiscal",
         }

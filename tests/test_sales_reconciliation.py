@@ -193,6 +193,24 @@ def test_closing_stage_is_not_treated_as_sale_without_vista_gain_status():
     assert result["items"][0]["status"] == "PIPEIMOB_SEM_GANHO_VISTA"
 
 
+def test_pipeimob_contract_date_is_used_when_ccv_signature_field_is_absent():
+    result = reconcile_sales(
+        [
+            {
+                "transacao_unique_id_pipeimob": "pipe-1",
+                "codigo_imovel": "100",
+                "data_contrato": "2026-08-10",
+                "data_inicio_venda": "2026-07-01",
+                "valor_contrato": "100000",
+            }
+        ],
+        [],
+    )
+
+    assert result["summary"]["source_data_incomplete"] == 0
+    assert result["items"][0]["official_sale_date"] == "2026-08-10"
+
+
 def test_vista_client_rejects_closing_stage_even_if_api_ignores_gain_filter():
     def opener(request, timeout):
         return FakeResponse(

@@ -15,7 +15,10 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
-from services.sales_reconciliation import reconcile_sales
+from services.sales_reconciliation import (
+    pipeimob_official_sale_date,
+    reconcile_sales,
+)
 from services.vista_sales_client import (
     VistaSalesAPIError,
     VistaSalesClient,
@@ -5099,7 +5102,9 @@ async def get_sales_reconciliation(
 
     official_transactions = []
     for transaction in dataset:
-        signed_date = parse_date_to_date_obj(transaction.get("data_assinatura_ccv"))
+        signed_date = parse_date_to_date_obj(
+            pipeimob_official_sale_date(transaction)
+        )
         if signed_date and start_date <= signed_date <= end_date:
             official_transactions.append(transaction)
 
