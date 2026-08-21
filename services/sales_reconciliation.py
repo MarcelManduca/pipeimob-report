@@ -14,6 +14,22 @@ DATE_MISMATCH = "DIVERGENCIA_DATA"
 NO_LINK = "SEM_VINCULO_AUTOMATICO"
 SOURCE_DATA_INCOMPLETE = "DADO_FONTE_INCOMPLETO"
 
+PIPEIMOB_OFFICIAL_SALE_DATE_FIELDS = (
+    "data_assinatura_ccv",
+    "data_ccv",
+    "data_assinatura",
+    "data_contrato",
+)
+
+
+def pipeimob_official_sale_date(row: Dict[str, Any]) -> Any:
+    """Return Pipeimob's official sale date without using process-start dates."""
+    for field in PIPEIMOB_OFFICIAL_SALE_DATE_FIELDS:
+        value = row.get(field)
+        if value not in (None, ""):
+            return value
+    return None
+
 
 def reconcile_sales(
     pipeimob_transactions: Sequence[Dict[str, Any]],
@@ -164,7 +180,7 @@ def _normalize_pipe_sale(row: Dict[str, Any]) -> Dict[str, Any]:
         "transaction_id": _clean(row.get("transacao_unique_id_pipeimob")),
         "contract_code": _clean(row.get("codigo_contrato")),
         "property_code": _normalize_code(row.get("codigo_imovel")),
-        "official_date": _parse_date(row.get("data_assinatura_ccv")),
+        "official_date": _parse_date(pipeimob_official_sale_date(row)),
         "official_value": _parse_decimal(row.get("valor_contrato")),
         "fiscal_broker": _clean(row.get("agente_gestor")),
     }
