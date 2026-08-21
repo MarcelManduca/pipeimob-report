@@ -189,6 +189,7 @@ retornam PII de clientes e anunciam `readOnlyHint=true`,
 Configuração adicional:
 
 ```env
+MCP_ENABLED=false
 PIPEIMOB_BI_BACKEND_URL=https://<backend-validacao>
 MCP_PUBLIC_URL=https://<mcp-validacao>
 MCP_AUTH_REQUIRED=true
@@ -212,6 +213,10 @@ O processo MCP requer Python 3.10 ou superior. Ele deve ser implantado como um
 serviço de validação separado do backend e do dashboard atualmente publicados.
 Consulte `docs/MCP_HOMOLOGACAO.md` para os critérios de aceite e a sequência segura
 de liberação.
+
+Quando o ambiente de homologação reutiliza o próprio backend, defina
+`MCP_ENABLED=true`; o mesmo serviço passa a responder em `/mcp`. O valor padrão é
+`false`, portanto a rota não é montada em produção sem ativação explícita.
 
 Para reproduzir uma conciliação controlada por CSV, sem emitir dados pessoais:
 

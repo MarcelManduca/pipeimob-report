@@ -7872,3 +7872,9 @@ async def get_import_responsibles_preview(
         total_pages=total_pages,
         items=resp_items
     )
+
+
+# This remains disabled unless MCP_ENABLED=true is set in an isolated environment.
+from services.director_mcp_mount import mount_director_mcp
+
+mount_director_mcp(app)
