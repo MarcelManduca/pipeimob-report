@@ -1,7 +1,9 @@
 import asyncio
+from unittest.mock import AsyncMock
 
 from mcp_server import SupabaseDirectorTokenVerifier
 from mcp_server import create_server
+from services.director_metrics import DirectorMetricsClient
 
 
 class FakeDirectorClient:
@@ -76,3 +78,22 @@ def test_director_token_uses_scopes_supported_by_supabase(monkeypatch):
 
     access_token = asyncio.run(verifier.verify_token("token"))
     assert access_token.scopes == ["openid", "email"]
+
+
+def test_sales_can_use_isolated_validation_endpoint():
+    client = DirectorMetricsClient(
+        "https://existing-backend.example.com",
+        sales_url="https://validation.example.com/director-validation",
+    )
+    client._get_url = AsyncMock(return_value={"summary": {"official_sales": 19}})
+
+    result = asyncio.run(
+        client.sales_reconciliation("2026-08-01", "2026-08-20", "director-token")
+    )
+
+    assert result["summary"]["official_sales"] == 19
+    client._get_url.assert_awaited_once_with(
+        "https://validation.example.com/director-validation",
+        {"data_inicio_ccv": "2026-08-01", "data_fim_ccv": "2026-08-20"},
+        "director-token",
+    )

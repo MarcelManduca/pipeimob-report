@@ -13,18 +13,24 @@ class DirectorMetricsError(RuntimeError):
 
 
 class DirectorMetricsClient:
-    def __init__(self, base_url: str, timeout_seconds: int = 35) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        timeout_seconds: int = 35,
+        sales_url: str | None = None,
+    ) -> None:
         if not str(base_url or "").strip():
             raise ValueError("PIPEIMOB_BI_BACKEND_URL is required")
         self.base_url = base_url.rstrip("/")
+        self.sales_url = str(sales_url or "").strip() or None
         self.timeout_seconds = max(1, min(60, int(timeout_seconds)))
 
     async def sales_reconciliation(
         self, start: str, end: str, bearer_token: str
     ) -> Dict[str, Any]:
         _validate_period(start, end)
-        return await self._get(
-            "/api/reconciliation/sales",
+        return await self._get_url(
+            self.sales_url or f"{self.base_url}/api/reconciliation/sales",
             {"data_inicio_ccv": start, "data_fim_ccv": end},
             bearer_token,
         )
@@ -33,21 +39,21 @@ class DirectorMetricsClient:
         self, start: str, end: str, bearer_token: str
     ) -> Dict[str, Any]:
         _validate_period(start, end)
-        return await self._get(
-            "/api/dashboard/full",
+        return await self._get_url(
+            f"{self.base_url}/api/dashboard/full",
             {"data_inicio_ccv": start, "data_fim_ccv": end},
             bearer_token,
         )
 
-    async def _get(
-        self, path: str, params: Dict[str, str], bearer_token: str
+    async def _get_url(
+        self, url: str, params: Dict[str, str], bearer_token: str
     ) -> Dict[str, Any]:
         if not bearer_token:
             raise DirectorMetricsError("Authenticated director access is required")
         try:
             async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
                 response = await client.get(
-                    f"{self.base_url}{path}",
+                    url,
                     params=params,
                     headers={"Authorization": f"Bearer {bearer_token}"},
                 )

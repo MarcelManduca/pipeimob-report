@@ -231,6 +231,7 @@ def _client_from_env() -> DirectorMetricsClient:
     return DirectorMetricsClient(
         _required_env("PIPEIMOB_BI_BACKEND_URL"),
         int(os.getenv("MCP_BACKEND_TIMEOUT_SECONDS", "35")),
+        sales_url=os.getenv("VALIDATION_SALES_URL"),
     )
 
 

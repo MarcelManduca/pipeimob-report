@@ -10,6 +10,8 @@ sem alterar o Pipeimob BI Analytics publicado e sem expor dados de clientes.
 - Serviço MCP próprio, em endereço HTTPS de homologação.
 - Backend de validação separado do serviço atualmente publicado.
 - Banco, segredos, logs e variáveis separados por ambiente.
+- `VALIDATION_SALES_URL` aponta somente para a Edge Function privada do projeto
+  Supabase de homologação; quando ausente, o backend mantém o comportamento anterior.
 - Nenhum deploy automático para produção a partir desta branch.
 - O dashboard atual continua sendo apenas Pipeimob até aprovação formal.
 
@@ -42,6 +44,8 @@ e-mail, telefone ou documento de cliente.
 - Os escopos OAuth anunciados são `openid` e `email`, ambos suportados pelo
   provedor; a permissão de Diretoria continua sendo aplicada no servidor.
 - O token do diretor é encaminhado ao backend protegido e nunca é retornado ao chat.
+- A Edge Function valida novamente a identidade e o domínio autorizado antes de
+  executar a projeção privada de vendas.
 - O modo `MCP_AUTH_REQUIRED=false` é restrito à inspeção local isolada.
 - Produção exige OAuth 2.1 compatível com o cliente ChatGPT, HTTPS estável, rate
   limit, auditoria de acesso e logs sem tokens ou PII.
