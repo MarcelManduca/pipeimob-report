@@ -171,6 +171,54 @@ GET /api/reconciliation/sales?data_inicio_ccv=2026-08-01&data_fim_ccv=2026-08-20
 
 O endpoint só opera com a fonte Pipeimob ao vivo; dados simulados não podem formar números oficiais.
 
+### MCP gerencial para a Diretoria (ambiente de validação)
+
+O processo `mcp_server.py` expõe, em `/mcp`, somente consultas de leitura:
+
+* `consultar_resumo_vendas`
+* `consultar_conciliacao_vendas`
+* `listar_divergencias_vendas`
+* `listar_corretores_com_vendas`
+* `consultar_funil`
+* `consultar_qualidade_dados`
+
+As ferramentas encaminham o token individual do diretor ao backend protegido, não
+retornam PII de clientes e anunciam `readOnlyHint=true`,
+`destructiveHint=false` e `openWorldHint=false`.
+
+Configuração adicional:
+
+```env
+PIPEIMOB_BI_BACKEND_URL=https://<backend-validacao>
+MCP_PUBLIC_URL=https://<mcp-validacao>
+MCP_AUTH_REQUIRED=true
+MCP_ALLOWED_DIRECTOR_EMAILS=
+MCP_ALLOWED_DIRECTOR_DOMAINS=gralhaimoveis.com.br
+MCP_BACKEND_TIMEOUT_SECONDS=35
+```
+
+Execução local, exclusivamente para inspeção:
+
+```bash
+MCP_AUTH_REQUIRED=false MCP_BACKEND_BEARER_TOKEN=<token-temporario> \
+  python mcp_server.py
+```
+
+Antes de disponibilizar aos diretores, o endpoint deve ser homologado com OAuth,
+HTTPS estável, logs sem tokens/PII, rate limit e MCP Inspector. Não utilizar o modo
+sem autenticação fora de uma máquina de desenvolvimento isolada.
+
+O processo MCP requer Python 3.10 ou superior. Ele deve ser implantado como um
+serviço de validação separado do backend e do dashboard atualmente publicados.
+Consulte `docs/MCP_HOMOLOGACAO.md` para os critérios de aceite e a sequência segura
+de liberação.
+
+Para reproduzir uma conciliação controlada por CSV, sem emitir dados pessoais:
+
+```bash
+python scripts/reconcile_validation_csvs.py <pipeimob.csv> <vista-ganhos.csv>
+```
+
 ---
 
 ## 🛡️ Política de CORS (Cross-Origin Resource Sharing)

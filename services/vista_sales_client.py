@@ -31,6 +31,10 @@ class VistaSalesClient:
         "EtapaAtual",
         "NomeEtapa",
         "CodigoImovel",
+        "CodigoCorretor",
+        "CorretorNegocio",
+        "Corretor",
+        "NomeCorretor",
     ]
     PAGINATION_KEYS = {"total", "paginas", "pagina", "quantidade"}
 
