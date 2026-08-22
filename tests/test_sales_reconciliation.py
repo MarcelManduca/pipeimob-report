@@ -152,7 +152,8 @@ def test_august_reconciliation_reproduces_validated_official_totals():
             "codigo_imovel": code,
             "data_assinatura_ccv": "2026-08-10",
             "valor_contrato": value,
-            "agente_gestor": "Fiscal",
+            "total_comissao": "1000",
+            "agente_gestor": "Gerente",
         }
         for code, value in pipe_values.items()
     ]
@@ -172,6 +173,7 @@ def test_august_reconciliation_reproduces_validated_official_totals():
 
     assert result["summary"]["official_sales"] == 19
     assert result["summary"]["official_vgv"] == "24196504"
+    assert result["summary"]["official_vgc"] == "19000"
     assert result["summary"]["matched"] == 6
     assert result["summary"]["pipeimob_without_vista_gain"] == 13
     assert result["summary"]["vista_without_pipeimob_contract"] == 0
@@ -209,6 +211,43 @@ def test_pipeimob_contract_date_is_used_when_ccv_signature_field_is_absent():
 
     assert result["summary"]["source_data_incomplete"] == 0
     assert result["items"][0]["official_sale_date"] == "2026-08-10"
+
+
+def test_pipeimob_report_fields_are_preserved_for_director_portal():
+    result = reconcile_sales(
+        [
+            {
+                "transacao_unique_id_pipeimob": "pipe-1",
+                "codigo_imovel": "100",
+                "data_contrato": "2026-08-10",
+                "data_inicio_venda": "2026-08-03",
+                "valor_contrato": "100000",
+                "total_comissao": "5530.20",
+                "data_recebimento_comissao": "2026-08-12",
+                "agente_gestor": "Gerente da Operação",
+                "endereco_logradouro": "Rua Exemplo",
+                "endereco_numero": "10",
+                "endereco_complemento": "Apto 20",
+                "endereco_bairro": "Centro",
+                "endereco_cidade": "Florianópolis",
+                "endereco_uf": "SC",
+                "endereco_cep": "88000-000",
+            }
+        ],
+        [],
+    )
+
+    item = result["items"][0]
+    assert result["contract_version"] == "1.1"
+    assert result["summary"]["official_vgc"] == "5530.20"
+    assert item["ccv_signature_date"] == "2026-08-10"
+    assert item["ccv_upload_date"] == "2026-08-03"
+    assert item["commission_value"] == "5530.20"
+    assert item["commission_date"] == "2026-08-12"
+    assert item["pipeimob_manager"] == "Gerente da Operação"
+    assert item["property_address"] == (
+        "Rua Exemplo, 10, Apto 20, Centro, Florianópolis, SC, CEP 88000-000"
+    )
 
 
 def test_unique_property_match_enriches_broker_when_vista_omits_date_and_value():

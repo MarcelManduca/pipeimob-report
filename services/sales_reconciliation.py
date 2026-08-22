@@ -98,11 +98,11 @@ def reconcile_sales(
         if delay_days is not None and abs(delay_days) > date_tolerance_days:
             issues.append(DATE_MISMATCH)
 
-        fiscal_broker = sale["fiscal_broker"]
+        pipeimob_manager = sale["pipeimob_manager"]
         commercial_broker = selected["commercial_broker_name"]
-        broker_roles_differ = None
-        if fiscal_broker and commercial_broker:
-            broker_roles_differ = _normalize_text(fiscal_broker) != _normalize_text(
+        manager_and_broker_differ = None
+        if pipeimob_manager and commercial_broker:
+            manager_and_broker_differ = _normalize_text(pipeimob_manager) != _normalize_text(
                 commercial_broker
             )
 
@@ -127,7 +127,9 @@ def reconcile_sales(
                 ),
                 "commercial_broker_id": selected["commercial_broker_id"],
                 "commercial_broker": commercial_broker,
-                "broker_roles_differ": broker_roles_differ,
+                "manager_and_broker_differ": manager_and_broker_differ,
+                # Deprecated compatibility alias for clients on contract 1.0.
+                "broker_roles_differ": manager_and_broker_differ,
                 "vista_stage": selected["stage_name"],
             }
         )
@@ -142,10 +144,15 @@ def reconcile_sales(
                     "vista_deal_id": gain["deal_id"],
                     "property_code": gain["property_code"],
                     "official_sale_date": None,
+                    "ccv_signature_date": None,
+                    "ccv_upload_date": None,
                     "vista_gain_date": (
                         gain["gain_date"].isoformat() if gain["gain_date"] else None
                     ),
                     "official_value": None,
+                    "commission_value": None,
+                    "commission_date": None,
+                    "property_address": None,
                     "vista_value": (
                         str(gain["deal_value"])
                         if gain["deal_value"] is not None
@@ -153,6 +160,7 @@ def reconcile_sales(
                     ),
                     "commercial_broker_id": gain["commercial_broker_id"],
                     "commercial_broker": gain["commercial_broker_name"],
+                    "pipeimob_manager": None,
                     "fiscal_broker": None,
                 }
             )
@@ -167,6 +175,14 @@ def reconcile_sales(
         ),
         Decimal("0"),
     )
+    official_vgc = sum(
+        (
+            sale["commission_value"]
+            for sale in pipe_sales
+            if sale["commission_value"] is not None
+        ),
+        Decimal("0"),
+    )
     missing_commercial_broker = sum(
         1
         for item in items
@@ -174,12 +190,13 @@ def reconcile_sales(
     )
 
     return {
-        "contract_version": "1.0",
+        "contract_version": "1.1",
         "official_source": "pipeimob_api_v2",
         "commercial_source": "vista_negocio_ganho",
         "summary": {
             "official_sales": len(pipe_sales),
             "official_vgv": str(official_vgv),
+            "official_vgc": str(official_vgc),
             "matched": status_counts[MATCHED],
             "pipeimob_without_vista_gain": status_counts[PIPE_WITHOUT_GAIN],
             "vista_without_pipeimob_contract": status_counts[VISTA_WITHOUT_CONTRACT],
@@ -199,8 +216,14 @@ def _normalize_pipe_sale(row: Dict[str, Any]) -> Dict[str, Any]:
         "contract_code": _clean(row.get("codigo_contrato")),
         "property_code": _normalize_code(row.get("codigo_imovel")),
         "official_date": _parse_date(pipeimob_official_sale_date(row)),
+        "ccv_upload_date": _parse_date(row.get("data_inicio_venda")),
         "official_value": _parse_decimal(row.get("valor_contrato")),
-        "fiscal_broker": _clean(row.get("agente_gestor")),
+        "commission_value": _parse_decimal(row.get("total_comissao")),
+        "commission_date": _parse_date(row.get("data_recebimento_comissao")),
+        "property_address": _build_property_address(row),
+        # Pipeimob calls this source field agente_gestor. It is the manager
+        # responsible for the operation, not the selling broker.
+        "pipeimob_manager": _clean(row.get("agente_gestor")),
     }
 
 
@@ -267,16 +290,53 @@ def _base_pipe_item(
         "official_sale_date": (
             sale["official_date"].isoformat() if sale["official_date"] else None
         ),
+        "ccv_signature_date": (
+            sale["official_date"].isoformat() if sale["official_date"] else None
+        ),
+        "ccv_upload_date": (
+            sale["ccv_upload_date"].isoformat() if sale["ccv_upload_date"] else None
+        ),
         "vista_gain_date": None,
         "official_value": (
             str(sale["official_value"])
             if sale["official_value"] is not None
             else None
         ),
+        "commission_value": (
+            str(sale["commission_value"])
+            if sale["commission_value"] is not None
+            else None
+        ),
+        "commission_date": (
+            sale["commission_date"].isoformat() if sale["commission_date"] else None
+        ),
+        "property_address": sale["property_address"],
         "vista_value": None,
-        "fiscal_broker": sale["fiscal_broker"],
+        "pipeimob_manager": sale["pipeimob_manager"],
+        # Deprecated compatibility alias. New clients must use pipeimob_manager.
+        "fiscal_broker": sale["pipeimob_manager"],
         "commercial_broker": None,
     }
+
+
+def _build_property_address(row: Dict[str, Any]) -> Optional[str]:
+    """Build the property address without including customer information."""
+    first_line = [
+        _clean(row.get("endereco_logradouro")),
+        _clean(row.get("endereco_numero")),
+        _clean(row.get("endereco_complemento")),
+    ]
+    locality = [
+        _clean(row.get("endereco_bairro")),
+        _clean(row.get("endereco_cidade")),
+        _clean(row.get("endereco_uf")),
+    ]
+    parts = [part for part in first_line + locality if part]
+    postal_code = _clean(row.get("endereco_cep"))
+    address = ", ".join(parts)
+    if postal_code:
+        address = f"{address}, CEP {postal_code}" if address else f"CEP {postal_code}"
+    return address or None
 
 
 def _parse_date(value: Any) -> Optional[date]:
