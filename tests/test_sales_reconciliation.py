@@ -211,6 +211,59 @@ def test_pipeimob_contract_date_is_used_when_ccv_signature_field_is_absent():
     assert result["items"][0]["official_sale_date"] == "2026-08-10"
 
 
+def test_unique_property_match_enriches_broker_when_vista_omits_date_and_value():
+    result = reconcile_sales(
+        [
+            {
+                "transacao_unique_id_pipeimob": "pipe-1",
+                "codigo_imovel": "100",
+                "data_contrato": "2026-08-10",
+                "valor_contrato": "100000",
+            }
+        ],
+        [
+            {
+                "deal_id": "vista-1",
+                "property_code": "100",
+                "gain_date": None,
+                "deal_value": None,
+                "commercial_broker_name": "Corretor Comercial",
+            }
+        ],
+    )
+
+    assert result["summary"]["matched"] == 1
+    assert result["summary"]["no_automatic_link"] == 0
+    assert result["summary"]["vista_without_pipeimob_contract"] == 0
+    assert result["items"][0]["status"] == "CONCILIADO"
+    assert result["items"][0]["commercial_broker"] == "Corretor Comercial"
+    assert result["items"][0]["official_sale_date"] == "2026-08-10"
+    assert result["items"][0]["official_value"] == "100000"
+    assert result["items"][0]["vista_gain_date"] is None
+    assert result["items"][0]["vista_value"] is None
+
+
+def test_incomplete_vista_fields_do_not_guess_between_duplicate_property_matches():
+    result = reconcile_sales(
+        [
+            {
+                "transacao_unique_id_pipeimob": "pipe-1",
+                "codigo_imovel": "100",
+                "data_contrato": "2026-08-10",
+                "valor_contrato": "100000",
+            }
+        ],
+        [
+            {"deal_id": "vista-1", "property_code": "100"},
+            {"deal_id": "vista-2", "property_code": "100"},
+        ],
+    )
+
+    assert result["summary"]["matched"] == 0
+    assert result["summary"]["no_automatic_link"] == 1
+    assert result["summary"]["vista_without_pipeimob_contract"] == 2
+
+
 def test_vista_client_rejects_closing_stage_even_if_api_ignores_gain_filter():
     def opener(request, timeout):
         return FakeResponse(

@@ -83,11 +83,19 @@ def reconcile_sales(
 
         used_deal_ids.add(selected["deal_id"])
         issues: List[str] = []
-        value_difference = selected["deal_value"] - sale["official_value"]
-        delay_days = (selected["gain_date"] - sale["official_date"]).days
-        if value_difference != Decimal("0"):
+        value_difference = (
+            selected["deal_value"] - sale["official_value"]
+            if selected["deal_value"] is not None
+            else None
+        )
+        delay_days = (
+            (selected["gain_date"] - sale["official_date"]).days
+            if selected["gain_date"] is not None
+            else None
+        )
+        if value_difference is not None and value_difference != Decimal("0"):
             issues.append(VALUE_MISMATCH)
-        if abs(delay_days) > date_tolerance_days:
+        if delay_days is not None and abs(delay_days) > date_tolerance_days:
             issues.append(DATE_MISMATCH)
 
         fiscal_broker = sale["fiscal_broker"]
@@ -103,10 +111,20 @@ def reconcile_sales(
                 **_base_pipe_item(sale, issues[0] if issues else MATCHED),
                 "issues": issues,
                 "vista_deal_id": selected["deal_id"],
-                "vista_gain_date": selected["gain_date"].isoformat(),
+                "vista_gain_date": (
+                    selected["gain_date"].isoformat()
+                    if selected["gain_date"] is not None
+                    else None
+                ),
                 "delay_days": delay_days,
-                "vista_value": str(selected["deal_value"]),
-                "value_difference": str(value_difference),
+                "vista_value": (
+                    str(selected["deal_value"])
+                    if selected["deal_value"] is not None
+                    else None
+                ),
+                "value_difference": (
+                    str(value_difference) if value_difference is not None else None
+                ),
                 "commercial_broker_id": selected["commercial_broker_id"],
                 "commercial_broker": commercial_broker,
                 "broker_roles_differ": broker_roles_differ,
@@ -201,13 +219,18 @@ def _normalize_vista_gain(row: Dict[str, Any]) -> Dict[str, Any]:
 def _select_candidate(
     sale: Dict[str, Any], candidates: Sequence[Dict[str, Any]]
 ) -> Optional[Dict[str, Any]]:
+    # An exact, unique property-code match is enough to enrich the official
+    # Pipeimob sale with Vista's commercial owner.  Date and VGV remain
+    # authoritative in Pipeimob and may legitimately be absent from Vista's
+    # negocios/listar response for this tenant.
+    if len(candidates) == 1:
+        return candidates[0]
+
     valid = [
         gain
         for gain in candidates
         if gain["gain_date"] is not None and gain["deal_value"] is not None
     ]
-    if len(valid) == 1:
-        return valid[0]
     if not valid:
         return None
 
