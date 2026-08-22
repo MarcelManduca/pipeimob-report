@@ -3856,18 +3856,46 @@ async def get_catalog():
         resources=[transactions_resource]
     )
 
-_jwk_client = None
+_jwk_clients = {}
 
-def get_jwk_client():
-    global _jwk_client
-    jwks_url = os.getenv("SUPABASE_JWKS_URL")
+def get_jwk_client(jwks_url: Optional[str] = None):
+    """Return one cached JWKS client per explicitly trusted Supabase project."""
+    global _jwk_clients
+    jwks_url = jwks_url or os.getenv("SUPABASE_JWKS_URL")
     if not jwks_url:
-        _jwk_client = None
         return None
-    if _jwk_client is None or getattr(_jwk_client, "uri", None) != jwks_url:
+    if jwks_url not in _jwk_clients:
         from jwt import PyJWKClient
-        _jwk_client = PyJWKClient(jwks_url)
-    return _jwk_client
+        _jwk_clients[jwks_url] = PyJWKClient(jwks_url)
+    return _jwk_clients[jwks_url]
+
+
+def _configured_asymmetric_auth_projects():
+    """Build the exact issuer -> JWKS allowlist used for asymmetric JWTs."""
+    projects = []
+    primary_issuer = os.getenv("SUPABASE_ISSUER")
+    primary_jwks_url = os.getenv("SUPABASE_JWKS_URL")
+    secondary_issuer = os.getenv("SUPABASE_SECONDARY_ISSUER")
+    secondary_jwks_url = os.getenv("SUPABASE_SECONDARY_JWKS_URL")
+
+    if primary_issuer and primary_jwks_url:
+        projects.append((primary_issuer.rstrip("/"), primary_jwks_url))
+
+    if bool(secondary_issuer) != bool(secondary_jwks_url):
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Server configuration error: SUPABASE_SECONDARY_ISSUER and "
+                "SUPABASE_SECONDARY_JWKS_URL must be configured together."
+            ),
+        )
+
+    if secondary_issuer and secondary_jwks_url:
+        normalized_secondary = secondary_issuer.rstrip("/")
+        if not any(issuer == normalized_secondary for issuer, _ in projects):
+            projects.append((normalized_secondary, secondary_jwks_url))
+
+    return projects
 
 
 authorization_role_status = "unresolved"
@@ -4001,7 +4029,6 @@ async def verify_backend_api_key(
 
     try:
         app_env = os.getenv("APP_ENV", "production").lower()
-        jwks_url = os.getenv("SUPABASE_JWKS_URL")
         jwt_secret = os.getenv("SUPABASE_JWT_SECRET") or ("secret" if app_env not in ["production", "staging"] else None)
         expected_aud = os.getenv("SUPABASE_JWT_AUDIENCE", "authenticated")
         expected_iss = os.getenv("SUPABASE_ISSUER")
@@ -4069,7 +4096,8 @@ async def verify_backend_api_key(
                     error_code="invalid_access_token"
                 )
 
-            if not jwks_url:
+            auth_projects = _configured_asymmetric_auth_projects()
+            if not auth_projects:
                 _log_auth_failure("jwks_url_missing", alg=alg)
                 raise AuthException(
                     status_code=401,
@@ -4077,8 +4105,44 @@ async def verify_backend_api_key(
                     error_code="invalid_access_token"
                 )
 
-            from jwt.exceptions import PyJWKClientConnectionError, PyJWKSetError
-            client = get_jwk_client()
+            try:
+                unverified_payload = jwt.decode(
+                    token,
+                    options={
+                        "verify_signature": False,
+                        "verify_aud": False,
+                        "verify_exp": False,
+                    },
+                )
+                token_issuer = str(unverified_payload.get("iss") or "").rstrip("/")
+            except Exception as exc:
+                _log_auth_failure("token_payload_invalid", alg=alg, error_type=type(exc).__name__)
+                raise AuthException(
+                    status_code=401,
+                    detail="Invalid or expired access token.",
+                    error_code="invalid_access_token"
+                )
+
+            selected_project = next(
+                (
+                    (issuer, project_jwks_url)
+                    for issuer, project_jwks_url in auth_projects
+                    if issuer == token_issuer
+                ),
+                None,
+            )
+            if selected_project is None:
+                _log_auth_failure("issuer_not_trusted", alg=alg)
+                raise AuthException(
+                    status_code=401,
+                    detail="Invalid or expired access token.",
+                    error_code="invalid_access_token"
+                )
+
+            expected_iss, jwks_url = selected_project
+
+            from jwt.exceptions import PyJWKClientConnectionError
+            client = get_jwk_client(jwks_url)
             try:
                 jwk_set = client.get_jwk_set()
             except PyJWKClientConnectionError:

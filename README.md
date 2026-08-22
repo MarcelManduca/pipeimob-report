@@ -96,6 +96,8 @@ Os endpoints de dados e dashboard da API (`/api/transactions`, `/api/transaction
 * **Configurações Server-side Obrigatórias:**
   - `SUPABASE_JWKS_URL`: URL oficial do JWKS para verificar assinaturas assimétricas. Ex: `https://<project-ref>.supabase.co/auth/v1/.well-known/jwks.json`
   - `SUPABASE_ISSUER`: O issuer oficial do JWT. Ex: `https://<project-ref>.supabase.co/auth/v1`
+  - `SUPABASE_SECONDARY_JWKS_URL`: JWKS de um segundo projeto Supabase autorizado (opcional; deve ser usado junto com `SUPABASE_SECONDARY_ISSUER`).
+  - `SUPABASE_SECONDARY_ISSUER`: Issuer exato do segundo projeto Supabase autorizado (opcional; deve ser usado junto com `SUPABASE_SECONDARY_JWKS_URL`).
   - `SUPABASE_JWT_AUDIENCE`: Audiência esperada (geralmente `authenticated`).
   - `ALLOWED_USER_EMAILS`: E-mails específicos autorizados (separados por vírgula).
   - `ALLOWED_EMAIL_DOMAINS`: Domínios autorizados. Padrão: `gralhaimoveis.com.br`
