@@ -1034,7 +1034,7 @@ def test_supabase_jwt_validation_claims_and_unsafe_jwks():
     # 3. JWKS empty / unavailable -> HTTP 503 Service Unavailable
     os.environ["SUPABASE_JWKS_URL"] = "https://mock.supabase.co/auth/v1/.well-known/jwks.json"
     try:
-        rs256_mock_token = "eyJhbGciOiJSUzI1NiIsImtpZCI6Im1vY2tfa2lkIn0.eyJzdWIiOiJ1c2VyLTEyMyIsInJvbGUiOiJhdXRoZW50aWNhdGVkIiwiZW1haWwiOiJ0ZXN0QHRlc3QuY29tIiwiZXhwIjo5OTk5OTk5OTk5fQ.c2lnbmF0dXJl"
+        rs256_mock_token = "eyJhbGciOiJSUzI1NiIsImtpZCI6Im1vY2tfa2lkIn0.eyJzdWIiOiJ1c2VyLTEyMyIsInJvbGUiOiJhdXRoZW50aWNhdGVkIiwiZW1haWwiOiJ0ZXN0QHRlc3QuY29tIiwiaXNzIjoiaHR0cHM6Ly9tb2NrLnN1cGFiYXNlLmNvL2F1dGgvdjEiLCJhdWQiOiJhdXRoZW50aWNhdGVkIiwiZXhwIjo5OTk5OTk5OTk5fQ.c2lnbmF0dXJl"
         jwks_client = TestClient(app, headers={"Authorization": f"Bearer {rs256_mock_token}"})
         res = jwks_client.get("/api/dashboard/summary")
         assert res.status_code == 503
@@ -1147,7 +1147,7 @@ def test_jwt_kid_desconhecido_retorna_401(mock_get_jwk_client):
         mock_client.get_signing_key_from_jwt.side_effect = Exception("Signing key not found")
         mock_get_jwk_client.return_value = mock_client
 
-        token = "eyJhbGciOiJSUzI1NiIsImtpZCI6InVua25vd25fa2lkIn0.eyJzdWIiOiJ1c2VyLTEyMyIsInJvbGUiOiJhdXRoZW50aWNhdGVkIiwiZW1haWwiOiJ0ZXN0QHRlc3QuY29tIiwiZXhwIjo5OTk5OTk5OTk5fQ.c2lnbmF0dXJl"
+        token = "eyJhbGciOiJSUzI1NiIsImtpZCI6InVua25vd25fa2lkIn0.eyJzdWIiOiJ1c2VyLTEyMyIsInJvbGUiOiJhdXRoZW50aWNhdGVkIiwiZW1haWwiOiJ0ZXN0QHRlc3QuY29tIiwiaXNzIjoiaHR0cHM6Ly9tb2NrLnN1cGFiYXNlLmNvL2F1dGgvdjEiLCJhdWQiOiJhdXRoZW50aWNhdGVkIiwiZXhwIjo5OTk5OTk5OTk5fQ.c2lnbmF0dXJl"
         test_client = TestClient(app, headers={"Authorization": f"Bearer {token}"})
         res = test_client.get("/api/dashboard/summary")
         assert res.status_code == 401
@@ -1183,7 +1183,7 @@ def test_jwt_assinatura_invalida_retorna_401(mock_get_jwk_client):
         mock_client.get_signing_key_from_jwt.return_value = mock_key
         mock_get_jwk_client.return_value = mock_client
 
-        token = "eyJhbGciOiJSUzI1NiIsImtpZCI6Im1vY2tfa2lkIn0.eyJzdWIiOiJ1c2VyLTEyMyIsInJvbGUiOiJhdXRoZW50aWNhdGVkIiwiZW1haWwiOiJ0ZXN0QHRlc3QuY29tIiwiZXhwIjo5OTk5OTk5OTk5fQ.c2lnbmF0dXJl"
+        token = "eyJhbGciOiJSUzI1NiIsImtpZCI6Im1vY2tfa2lkIn0.eyJzdWIiOiJ1c2VyLTEyMyIsInJvbGUiOiJhdXRoZW50aWNhdGVkIiwiZW1haWwiOiJ0ZXN0QHRlc3QuY29tIiwiaXNzIjoiaHR0cHM6Ly9tb2NrLnN1cGFiYXNlLmNvL2F1dGgvdjEiLCJhdWQiOiJhdXRoZW50aWNhdGVkIiwiZXhwIjo5OTk5OTk5OTk5fQ.c2lnbmF0dXJl"
         test_client = TestClient(app, headers={"Authorization": f"Bearer {token}"})
         res = test_client.get("/api/dashboard/summary")
         assert res.status_code == 401
@@ -1202,7 +1202,7 @@ def test_jwks_offline_retorna_503(mock_get_jwk_client):
         mock_client.get_jwk_set.side_effect = PyJWKClientConnectionError("Connection timed out")
         mock_get_jwk_client.return_value = mock_client
 
-        token = "eyJhbGciOiJSUzI1NiIsImtpZCI6Im1vY2tfa2lkIn0.eyJzdWIiOiJ1c2VyLTEyMyIsInJvbGUiOiJhdXRoZW50aWNhdGVkIiwiZW1haWwiOiJ0ZXN0QHRlc3QuY29tIiwiZXhwIjo5OTk5OTk5OTk5fQ.c2lnbmF0dXJl"
+        token = "eyJhbGciOiJSUzI1NiIsImtpZCI6Im1vY2tfa2lkIn0.eyJzdWIiOiJ1c2VyLTEyMyIsInJvbGUiOiJhdXRoZW50aWNhdGVkIiwiZW1haWwiOiJ0ZXN0QHRlc3QuY29tIiwiaXNzIjoiaHR0cHM6Ly9tb2NrLnN1cGFiYXNlLmNvL2F1dGgvdjEiLCJhdWQiOiJhdXRoZW50aWNhdGVkIiwiZXhwIjo5OTk5OTk5OTk5fQ.c2lnbmF0dXJl"
         test_client = TestClient(app, headers={"Authorization": f"Bearer {token}"})
         res = test_client.get("/api/dashboard/summary")
         assert res.status_code == 503
@@ -1222,7 +1222,7 @@ def test_jwks_vazio_retorna_503(mock_get_jwk_client):
         mock_client.get_jwk_set.return_value = mock_jwk_set
         mock_get_jwk_client.return_value = mock_client
 
-        token = "eyJhbGciOiJSUzI1NiIsImtpZCI6Im1vY2tfa2lkIn0.eyJzdWIiOiJ1c2VyLTEyMyIsInJvbGUiOiJhdXRoZW50aWNhdGVkIiwiZW1haWwiOiJ0ZXN0QHRlc3QuY29tIiwiZXhwIjo5OTk5OTk5OTk5fQ.c2lnbmF0dXJl"
+        token = "eyJhbGciOiJSUzI1NiIsImtpZCI6Im1vY2tfa2lkIn0.eyJzdWIiOiJ1c2VyLTEyMyIsInJvbGUiOiJhdXRoZW50aWNhdGVkIiwiZW1haWwiOiJ0ZXN0QHRlc3QuY29tIiwiaXNzIjoiaHR0cHM6Ly9tb2NrLnN1cGFiYXNlLmNvL2F1dGgvdjEiLCJhdWQiOiJhdXRoZW50aWNhdGVkIiwiZXhwIjo5OTk5OTk5OTk5fQ.c2lnbmF0dXJl"
         test_client = TestClient(app, headers={"Authorization": f"Bearer {token}"})
         res = test_client.get("/api/dashboard/summary")
         assert res.status_code == 503
@@ -1258,12 +1258,79 @@ def test_jwt_valido_retorna_200(mock_jwt_decode, mock_get_jwk_client):
             "exp": time.time() + 3600
         }
 
-        token = "eyJhbGciOiJSUzI1NiIsImtpZCI6Im1vY2tfa2lkIn0.eyJzdWIiOiJ1c2VyLTEyMyIsInJvbGUiOiJhdXRoZW50aWNhdGVkIiwiZW1haWwiOiJ0ZXN0QHRlc3QuY29tIiwiZXhwIjo5OTk5OTk5OTk5fQ.c2lnbmF0dXJl"
+        token = "eyJhbGciOiJSUzI1NiIsImtpZCI6Im1vY2tfa2lkIn0.eyJzdWIiOiJ1c2VyLTEyMyIsInJvbGUiOiJhdXRoZW50aWNhdGVkIiwiZW1haWwiOiJ0ZXN0QHRlc3QuY29tIiwiaXNzIjoiaHR0cHM6Ly9tb2NrLnN1cGFiYXNlLmNvL2F1dGgvdjEiLCJhdWQiOiJhdXRoZW50aWNhdGVkIiwiZXhwIjo5OTk5OTk5OTk5fQ.c2lnbmF0dXJl"
         test_client = TestClient(app, headers={"Authorization": f"Bearer {token}"})
         res = test_client.get("/api/dashboard/summary")
         assert res.status_code == 200
     finally:
         os.environ.pop("SUPABASE_JWKS_URL", None)
+
+
+@patch("main.get_jwk_client")
+@patch("jwt.decode")
+def test_jwt_assimetrico_aceita_projeto_supabase_secundario(mock_jwt_decode, mock_get_jwk_client):
+    if verify_backend_api_key in app.dependency_overrides:
+        del app.dependency_overrides[verify_backend_api_key]
+
+    old_env = dict(os.environ)
+    secondary_issuer = "https://secondary.supabase.co/auth/v1"
+    secondary_jwks = f"{secondary_issuer}/.well-known/jwks.json"
+    try:
+        os.environ["APP_ENV"] = "production"
+        os.environ["PIPEIMOB_DATA_MODE"] = "demo"
+        os.environ["SUPABASE_ISSUER"] = "https://primary.supabase.co/auth/v1"
+        os.environ["SUPABASE_JWKS_URL"] = "https://primary.supabase.co/auth/v1/.well-known/jwks.json"
+        os.environ["SUPABASE_SECONDARY_ISSUER"] = secondary_issuer
+        os.environ["SUPABASE_SECONDARY_JWKS_URL"] = secondary_jwks
+
+        payload = {
+            "email": "diretor@gralhaimoveis.com.br",
+            "sub": "secondary_user_123",
+            "aud": "authenticated",
+            "role": "authenticated",
+            "iss": secondary_issuer,
+            "exp": time.time() + 3600,
+        }
+        mock_jwt_decode.return_value = payload
+
+        mock_client = MagicMock()
+        mock_key = MagicMock()
+        mock_key.key = "secondary_public_key"
+        mock_jwk_set = MagicMock()
+        mock_jwk_set.keys = [mock_key]
+        mock_client.get_jwk_set.return_value = mock_jwk_set
+        mock_client.get_signing_key_from_jwt.return_value = mock_key
+        mock_get_jwk_client.return_value = mock_client
+
+        token = "eyJhbGciOiJFUzI1NiIsImtpZCI6InNlY29uZGFyeV9raWQifQ.eyJpc3MiOiJzZWNvbmRhcnkifQ.c2lnbmF0dXJl"
+        result = asyncio.run(verify_backend_api_key(f"Bearer {token}"))
+
+        assert result["sub"] == "secondary_user_123"
+        mock_get_jwk_client.assert_called_once_with(secondary_jwks)
+        assert mock_jwt_decode.call_args_list[-1].kwargs["issuer"] == secondary_issuer
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
+
+
+def test_configuracao_supabase_secundaria_incompleta_falha_fechada():
+    import main as main_module
+    from fastapi import HTTPException
+
+    old_env = dict(os.environ)
+    try:
+        os.environ["SUPABASE_ISSUER"] = "https://primary.supabase.co/auth/v1"
+        os.environ["SUPABASE_JWKS_URL"] = "https://primary.supabase.co/auth/v1/.well-known/jwks.json"
+        os.environ["SUPABASE_SECONDARY_ISSUER"] = "https://secondary.supabase.co/auth/v1"
+        os.environ.pop("SUPABASE_SECONDARY_JWKS_URL", None)
+
+        with pytest.raises(HTTPException) as exc:
+            main_module._configured_asymmetric_auth_projects()
+
+        assert exc.value.status_code == 500
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
 
 def test_jwt_sem_kid_retorna_401():
     if verify_backend_api_key in app.dependency_overrides:
@@ -1271,7 +1338,7 @@ def test_jwt_sem_kid_retorna_401():
     os.environ["SUPABASE_JWKS_URL"] = "https://mock.supabase.co/auth/v1/.well-known/jwks.json"
     try:
         # Create token without kid header for RS256
-        token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyLTEyMyIsInJvbGUiOiJhdXRoZW50aWNhdGVkIiwiZW1haWwiOiJ0ZXN0QHRlc3QuY29tIiwiZXhwIjo5OTk5OTk5OTk5fQ.c2lnbmF0dXJl"
+        token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyLTEyMyIsInJvbGUiOiJhdXRoZW50aWNhdGVkIiwiZW1haWwiOiJ0ZXN0QHRlc3QuY29tIiwiaXNzIjoiaHR0cHM6Ly9tb2NrLnN1cGFiYXNlLmNvL2F1dGgvdjEiLCJhdWQiOiJhdXRoZW50aWNhdGVkIiwiZXhwIjo5OTk5OTk5OTk5fQ.c2lnbmF0dXJl"
         test_client = TestClient(app, headers={"Authorization": f"Bearer {token}"})
         res = test_client.get("/api/dashboard/summary")
         assert res.status_code == 401
