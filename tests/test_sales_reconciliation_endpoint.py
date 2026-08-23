@@ -29,7 +29,10 @@ def test_reconciliation_endpoint_uses_live_pipeimob_and_vista_sources():
             "data_contrato": "2026-08-10",
             "data_inicio_venda": "2026-07-01",
             "valor_contrato": "100000",
-            "agente_gestor": "Agente Fiscal",
+            "total_comissao": "6000",
+            "endereco_logradouro": "Rua Exemplo",
+            "endereco_numero": "10",
+            "agente_gestor": "Gerente Pipeimob",
         }
     ]
 
@@ -50,6 +53,9 @@ def test_reconciliation_endpoint_uses_live_pipeimob_and_vista_sources():
     assert data["summary"]["official_sales"] == 1
     assert data["summary"]["matched"] == 1
     assert data["items"][0]["commercial_broker"] == "Corretor Comercial"
-    assert data["items"][0]["fiscal_broker"] == "Agente Fiscal"
+    assert data["summary"]["official_vgc"] == "6000"
+    assert data["items"][0]["pipeimob_manager"] == "Gerente Pipeimob"
+    assert data["items"][0]["fiscal_broker"] == "Gerente Pipeimob"
+    assert data["items"][0]["property_address"] == "Rua Exemplo, 10"
     assert data["items"][0]["broker_roles_differ"] is True
-    assert response.headers["X-Reconciliation-Contract"] == "1.0"
+    assert response.headers["X-Reconciliation-Contract"] == "1.1"

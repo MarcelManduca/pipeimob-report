@@ -1,12 +1,31 @@
-"""Minimal, privacy-preserving client for won deals in Vista CRM."""
-
 import json
+import logging
 import os
+import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import date
 from typing import Any, Callable, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
+
+# Sanitization helper to redact any keys or sensitive tokens before logging
+SENSITIVE_PATTERNS = [
+    re.compile(r"(key|api_key|token|authorization|password|secret)=([^&]+)", re.IGNORECASE),
+    re.compile(r"([\x27\x22](?:key|api_key|token|authorization|password|secret)[\x27\x22]\s*:\s*[\x27\x22])([^\x27\x22]+)([\x27\x22])", re.IGNORECASE),
+]
+
+def sanitize_vista_log_body(text: str, max_length: int = 500) -> str:
+    if not text:
+        return ""
+    sanitized = str(text)
+    for pattern in SENSITIVE_PATTERNS:
+        sanitized = pattern.sub(r"\1=[REDACTED]", sanitized)
+    if len(sanitized) > max_length:
+        sanitized = sanitized[:max_length] + "... [TRUNCATED]"
+    return sanitized
 
 
 class VistaSalesConfigurationError(RuntimeError):
@@ -14,23 +33,27 @@ class VistaSalesConfigurationError(RuntimeError):
 
 
 class VistaSalesAPIError(RuntimeError):
-    """Raised without including the Vista API key or response personal data."""
+    """Raised when the CRM Vista API fails, times out or is unreachable."""
 
 
 class VistaSalesClient:
-    """Read only the fields required to reconcile sales."""
+    """Official read-only CRM Vista client for sales reconciliation.
+
+    Queries exclusively closed sales ("Ganho") and their responsible brokers.
+    Never requests client names, CPF/CNPJ, phones, emails or notes.
+    """
 
     FIELDS = [
         "Codigo",
-        "NomePipe",
-        "UltimaAtualizacao",
+        "CodigoImovel",
         "Status",
         "DataFinal",
+        "UltimaAtualizacao",
         "ValorNegocio",
         "CodigoPipe",
+        "NomePipe",
         "EtapaAtual",
         "NomeEtapa",
-        "CodigoImovel",
         "CorretorNegocio",
     ]
     PAGINATION_KEYS = {"total", "paginas", "pagina", "quantidade"}
@@ -123,21 +146,34 @@ class VistaSalesClient:
                     ),
                 }
             )
+            endpoint_path = "/usuarios/listar"
             request = urllib.request.Request(
-                f"{self.base_url}/usuarios/listar?{query}",
+                f"{self.base_url}{endpoint_path}?{query}",
                 headers={"Accept": "application/json"},
             )
+            start_time = time.perf_counter()
             try:
                 with self.opener(request, timeout=self.timeout_seconds) as response:
                     body = response.read()
                     payload = json.loads(body.decode("utf-8")) if body else {}
-            except (
-                urllib.error.HTTPError,
-                urllib.error.URLError,
-                TimeoutError,
-                UnicodeDecodeError,
-                json.JSONDecodeError,
-            ):
+            except Exception as exc:
+                duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
+                error_body = ""
+                if isinstance(exc, urllib.error.HTTPError):
+                    try:
+                        error_body = exc.read().decode("utf-8", errors="replace")
+                    except Exception:
+                        pass
+                logger.warning(
+                    json.dumps({
+                        "event": "vista_sales_users_lookup_failed",
+                        "exception_class": type(exc).__name__,
+                        "operation": "list_users",
+                        "endpoint_path": endpoint_path,
+                        "duration_ms": duration_ms,
+                        "sanitized_body": sanitize_vista_log_body(error_body or str(exc)),
+                    })
+                )
                 # A broker-name lookup must not make official sales unavailable.
                 return names
 
@@ -185,10 +221,13 @@ class VistaSalesClient:
                 ),
             }
         )
+        endpoint_path = "/negocios/listar"
         request = urllib.request.Request(
-            f"{self.base_url}/negocios/listar?{query}",
+            f"{self.base_url}{endpoint_path}?{query}",
             headers={"Accept": "application/json"},
         )
+
+        start_time = time.perf_counter()
         try:
             with self.opener(request, timeout=self.timeout_seconds) as response:
                 body = response.read()
@@ -196,15 +235,83 @@ class VistaSalesClient:
                     return {}
                 payload = json.loads(body.decode("utf-8"))
         except urllib.error.HTTPError as exc:
+            duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
+            error_body = ""
+            try:
+                error_body = exc.read().decode("utf-8", errors="replace")
+            except Exception:
+                pass
+            content_type = exc.headers.get("content-type", "") if exc.headers else ""
+            logger.error(
+                json.dumps({
+                    "event": "vista_sales_api_failed",
+                    "exception_class": type(exc).__name__,
+                    "operation": "list_gains",
+                    "endpoint_path": endpoint_path,
+                    "http_status": exc.code,
+                    "duration_ms": duration_ms,
+                    "content_type": content_type,
+                    "sanitized_body": sanitize_vista_log_body(error_body),
+                    "error_kind": "http_error",
+                })
+            )
             raise VistaSalesAPIError(
                 f"Vista request failed with HTTP {exc.code}"
             ) from exc
         except (urllib.error.URLError, TimeoutError) as exc:
+            duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
+            is_timeout = isinstance(exc, TimeoutError) or "timed out" in str(exc).lower()
+            logger.error(
+                json.dumps({
+                    "event": "vista_sales_api_failed",
+                    "exception_class": type(exc).__name__,
+                    "operation": "list_gains",
+                    "endpoint_path": endpoint_path,
+                    "http_status": None,
+                    "duration_ms": duration_ms,
+                    "content_type": None,
+                    "sanitized_body": sanitize_vista_log_body(str(exc)),
+                    "error_kind": "timeout" if is_timeout else "connection_error",
+                })
+            )
             raise VistaSalesAPIError("Vista request is unavailable") from exc
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
+            raw_sample = ""
+            try:
+                raw_sample = body.decode("utf-8", errors="replace") if "body" in locals() and body else ""
+            except Exception:
+                pass
+            logger.error(
+                json.dumps({
+                    "event": "vista_sales_api_failed",
+                    "exception_class": type(exc).__name__,
+                    "operation": "list_gains",
+                    "endpoint_path": endpoint_path,
+                    "http_status": 200,
+                    "duration_ms": duration_ms,
+                    "content_type": "invalid_format",
+                    "sanitized_body": sanitize_vista_log_body(raw_sample or str(exc)),
+                    "error_kind": "invalid_json",
+                })
+            )
             raise VistaSalesAPIError("Vista returned invalid JSON") from exc
 
         if not isinstance(payload, dict):
+            duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
+            logger.error(
+                json.dumps({
+                    "event": "vista_sales_api_failed",
+                    "exception_class": "InvalidPayloadType",
+                    "operation": "list_gains",
+                    "endpoint_path": endpoint_path,
+                    "http_status": 200,
+                    "duration_ms": duration_ms,
+                    "content_type": "application/json",
+                    "sanitized_body": sanitize_vista_log_body(str(payload)),
+                    "error_kind": "invalid_json_structure",
+                })
+            )
             raise VistaSalesAPIError("Vista response must be a JSON object")
         return payload
 
@@ -238,7 +345,7 @@ class VistaSalesClient:
 
     @staticmethod
     def _is_gain(value: Any) -> bool:
-        """Never let the pipeline stage "Fechamento" imply a completed sale."""
+        """Never let the pipeline stage \"Fechamento\" imply a completed sale."""
         return str(value or "").strip().casefold() == "ganho"
 
     @staticmethod

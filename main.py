@@ -2824,9 +2824,13 @@ def sanitize_transaction(tx: dict) -> dict:
         "data_assinatura": tx.get("data_assinatura"),
         "data_criacao": tx.get("data_criacao"),
         "created_at": tx.get("created_at"),
+        "endereco_logradouro": tx.get("endereco_logradouro"),
+        "endereco_numero": tx.get("endereco_numero"),
+        "endereco_complemento": tx.get("endereco_complemento"),
         "endereco_bairro": tx.get("endereco_bairro"),
         "endereco_cidade": tx.get("endereco_cidade"),
         "endereco_uf": tx.get("endereco_uf"),
+        "endereco_cep": tx.get("endereco_cep"),
         "categoria_crm": tx.get("categoria_crm"),
         "residencial_comercial": tx.get("residencial_comercial"),
         "area_total": tx.get("area_total"),
@@ -5253,7 +5257,7 @@ async def get_sales_reconciliation(
             "commercial_broker_limitation": (
                 "The documented Vista negocios/listar fields do not guarantee a "
                 "commercial broker field. Missing ownership remains pending and is "
-                "never replaced by Pipeimob's fiscal agent."
+                "never replaced by Pipeimob's manager."
             ),
         }
     )

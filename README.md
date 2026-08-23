@@ -153,7 +153,7 @@ Todas as rotas de listagem e BI suportam os seguintes filtros opcionais:
 * **Conciliação de Vendas Pipeimob + Vista:** `GET /api/reconciliation/sales`
   * Considera venda somente quando existe contrato assinado no Pipeimob. O Pipeimob define quantidade, data oficial da venda e VGV.
   * Usa exclusivamente negócios com `Status = Ganho` no Vista para conciliação e atribuição comercial. A etapa `Fechamento`, isoladamente, nunca é tratada como venda.
-  * Mantém separados o corretor fiscal do Pipeimob e o corretor comercial do Vista. Quando o corretor comercial não está disponível, o dado fica pendente em vez de ser substituído pelo emissor da nota fiscal.
+  * Mantém separados o gerente responsável informado pelo Pipeimob e o corretor comercial do Vista. Quando o corretor comercial não está disponível, o dado fica pendente em vez de ser substituído pelo gerente da operação.
   * Expõe divergências de vínculo, data e valor para auditoria, sem solicitar ou retornar dados pessoais de clientes.
 
 Configurações server-side necessárias para a conciliação:
