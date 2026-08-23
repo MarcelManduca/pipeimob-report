@@ -362,3 +362,28 @@ def test_value_and_date_mismatches_remain_auditable():
         "DIVERGENCIA_VALOR",
         "DIVERGENCIA_DATA",
     ]
+
+
+def test_vista_client_structured_failure_logging_redacts_sensitive_payloads(caplog):
+    import logging
+    def opener(request, timeout):
+        fp = io.BytesIO(b'{"error": "failed", "key": "secret-token-123", "token": "jwt-abc"}')
+        raise urllib.error.HTTPError(request.full_url, 401, "Unauthorized", {"content-type": "application/json"}, fp)
+
+    import io
+    client = VistaSalesClient(
+        "https://tenant.example.com",
+        "secret-api-key-xyz",
+        "pipe-1",
+        opener=opener,
+    )
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(VistaSalesAPIError):
+            client.fetch_gains(date(2026, 8, 1), date(2026, 8, 20))
+
+    assert "secret-api-key-xyz" not in caplog.text
+    assert "secret-token-123" not in caplog.text
+    assert "jwt-abc" not in caplog.text
+    assert "vista_sales_api_failed" in caplog.text
+    assert "[REDACTED]" in caplog.text
