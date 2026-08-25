@@ -149,15 +149,16 @@ class VistaSalesClient:
         max_pages = 20
 
         while page <= max_pages:
-            params = {
-                "showtotal": "1",
-                "pesquisa": json.dumps({
-                    "fields": ["codigo", "nome", "email", "status"]
-                }),
-                "paginacao": json.dumps({
+            page_pesquisa = {
+                "fields": ["Codigo", "Nomecompleto", "Nome", "Email", "Status"],
+                "paginacao": {
                     "pagina": page,
                     "quantidade": page_size
-                })
+                }
+            }
+            params = {
+                "showtotal": "1",
+                "pesquisa": json.dumps(page_pesquisa, separators=(",", ":"))
             }
 
             res = self._api_get("usuarios/listar", params)
@@ -167,12 +168,12 @@ class VistaSalesClient:
             # Identificar quantidade bruta de registros no payload retornado
             raw_records = [
                 v for k, v in res.items()
-                if k not in ("total", "paginas", "pagina", "quantidade") and isinstance(v, dict)
+                if k not in ("total", "paginas", "pagina", "quantidade", "meta") and isinstance(v, dict)
             ]
 
             for v in raw_records:
-                code = str(v.get("codigo") or v.get("Codigo") or "").strip()
-                name = str(v.get("nome") or v.get("Nome") or "").strip()
+                code = str(v.get("Codigo") or v.get("codigo") or "").strip()
+                name = str(v.get("Nomecompleto") or v.get("Nome") or v.get("nome") or "").strip()
                 if code and name:
                     users_map[code] = name
 
@@ -189,6 +190,15 @@ class VistaSalesClient:
 
         return users_map
 
+    @staticmethod
+    def _normalize_date_filter(value: Optional[str], end_of_day: bool = False) -> str:
+        if not value:
+            return ""
+        val = str(value).strip()
+        if len(val) == 10:
+            return f"{val} 23:59:59" if end_of_day else f"{val} 00:00:00"
+        return val
+
     def fetch_won_deals(
         self,
         start_date: Optional[str] = None,
@@ -197,7 +207,7 @@ class VistaSalesClient:
         """
         Consulta /negocios/listar filtrando com a semântica canônica exata:
         - filter.Status = "Ganho"
-        - filter.DataFinal = [data_inicial, data_final]
+        - filter.DataFinal = [data_inicial 00:00:00, data_final 23:59:59]
         - codigo_pipe = VISTA_SALES_PIPE_ID (se configurado)
         Garante limites inclusivos e paginação baseada nos registros brutos.
         """
@@ -205,21 +215,25 @@ class VistaSalesClient:
             raise VistaConfigurationError("VISTA_API_KEY não configurada.")
 
         fields = [
-            "codigo", "Status", "status", "Etapa", "etapa", "Valor", "valor",
-            "DataFechamento", "data_fechamento", "DataGanho", "data_ganho",
-            "Imovel", "codigo_imovel", "imovel", "Corretor", "corretor",
-            "CorretorNome", "corretor_nome"
+            "Codigo", "NomePipe", "UltimaAtualizacao", "NomeNegocio", "Status",
+            "DataInicial", "DataFinal", "ValorNegocio", "PrevisaoFechamento",
+            "VeiculoCaptacao", "CodigoMotivoPerda", "MotivoPerda", "ObservacaoPerda",
+            "CodigoPipe", "EtapaAtual", "NomeEtapa", "CodigoCliente", "NomeCliente",
+            "CodigoImovel", "StatusAtividades", "CodigoUsuario", "NomeUsuario"
         ]
 
         filter_dict: Dict[str, Any] = {"Status": "Ganho"}
 
         # Filtro de período dinâmico e inclusivo em DataFinal
-        if start_date and end_date:
-            filter_dict["DataFinal"] = [start_date, end_date]
-        elif start_date:
-            filter_dict["DataFinal"] = [start_date, start_date]
-        elif end_date:
-            filter_dict["DataFinal"] = [end_date, end_date]
+        start_norm = self._normalize_date_filter(start_date, False)
+        end_norm = self._normalize_date_filter(end_date, True)
+
+        if start_norm and end_norm:
+            filter_dict["DataFinal"] = [start_norm, end_norm]
+        elif start_norm:
+            filter_dict["DataFinal"] = [">=", start_norm]
+        elif end_norm:
+            filter_dict["DataFinal"] = ["<=", end_norm]
 
         won_deals = []
         page = 1
@@ -227,16 +241,18 @@ class VistaSalesClient:
         max_pages = 50  # Suporta até 2.500 negócios no período
 
         while page <= max_pages:
-            params: Dict[str, Any] = {
-                "showtotal": "1",
-                "pesquisa": json.dumps({
-                    "fields": fields,
-                    "filter": filter_dict
-                }),
-                "paginacao": json.dumps({
+            page_pesquisa: Dict[str, Any] = {
+                "fields": fields,
+                "filter": filter_dict,
+                "paginacao": {
                     "pagina": page,
                     "quantidade": page_size
-                })
+                }
+            }
+
+            params: Dict[str, Any] = {
+                "showtotal": "1",
+                "pesquisa": json.dumps(page_pesquisa, separators=(",", ":"))
             }
 
             if self.sales_pipe_id:
@@ -249,7 +265,7 @@ class VistaSalesClient:
             # Identificar registros brutos retornados na página
             raw_records = [
                 v for k, v in res.items()
-                if k not in ("total", "paginas", "pagina", "quantidade") and isinstance(v, dict)
+                if k not in ("total", "paginas", "pagina", "quantidade", "meta") and isinstance(v, dict)
             ]
 
             for v in raw_records:
@@ -296,15 +312,16 @@ class VistaSalesClient:
 
         enriched = []
         for d in deals:
-            deal_id = str(d.get("codigo") or d.get("Codigo") or d.get("id") or "").strip()
-            prop_code = str(d.get("codigo_imovel") or d.get("CodigoImovel") or d.get("imovel") or d.get("Imovel") or "").strip() or None
+            deal_id = str(d.get("Codigo") or d.get("codigo") or d.get("id") or "").strip()
+            prop_code = str(d.get("CodigoImovel") or d.get("codigo_imovel") or d.get("Imovel") or d.get("imovel") or "").strip() or None
             status_val = d.get("Status") or d.get("status") or "Ganho"
-            etapa_val = str(d.get("Etapa") or d.get("etapa") or "").strip()
-            valor_val = d.get("Valor") if d.get("Valor") is not None else d.get("valor")
-            data_fech = d.get("DataFechamento") or d.get("data_fechamento") or d.get("DataGanho") or d.get("data_ganho")
+            etapa_val = str(d.get("NomeEtapa") or d.get("EtapaAtual") or d.get("Etapa") or d.get("etapa") or "").strip()
             
-            broker_code = str(d.get("Corretor") or d.get("corretor") or "").strip()
-            broker_name = str(d.get("CorretorNome") or d.get("corretor_nome") or users_map.get(broker_code) or "").strip() or None
+            valor_val = d.get("ValorNegocio") if d.get("ValorNegocio") is not None else (d.get("Valor") if d.get("Valor") is not None else d.get("valor"))
+            data_fech = d.get("DataFinal") or d.get("data_final") or d.get("DataFechamento") or d.get("data_fechamento") or d.get("DataGanho") or d.get("data_ganho")
+            
+            broker_code = str(d.get("CodigoUsuario") or d.get("codigo_usuario") or d.get("Corretor") or d.get("corretor") or "").strip()
+            broker_name = str(d.get("NomeUsuario") or d.get("nome_usuario") or d.get("CorretorNome") or d.get("corretor_nome") or users_map.get(broker_code) or "").strip() or None
 
             enriched.append({
                 "deal_id": deal_id,

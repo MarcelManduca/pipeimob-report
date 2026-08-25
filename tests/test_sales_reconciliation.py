@@ -555,7 +555,7 @@ def test_pipeimob_pagination_fetches_multiple_pages():
 
 
 def test_vista_client_sends_exact_status_datafinal_and_pipe():
-    """Valida envio exato de Status='Ganho', DataFinal=[start, end] e codigo_pipe para o Vista."""
+    """Valida envio exato de Status='Ganho', DataFinal=[start, end] normalizado e codigo_pipe para o Vista."""
     client_mock = VistaSalesClient(
         api_key="valid_key",
         sales_pipe_id="pipe_vendas_123"
@@ -576,7 +576,9 @@ def test_vista_client_sends_exact_status_datafinal_and_pipe():
     assert call["params"]["codigo_pipe"] == "pipe_vendas_123"
     pesquisa = json.loads(call["params"]["pesquisa"])
     assert pesquisa["filter"]["Status"] == "Ganho"
-    assert pesquisa["filter"]["DataFinal"] == ["2026-08-01", "2026-08-31"]
+    assert pesquisa["filter"]["DataFinal"] == ["2026-08-01 00:00:00", "2026-08-31 23:59:59"]
+    assert pesquisa["paginacao"]["pagina"] == 1
+    assert pesquisa["paginacao"]["quantidade"] == 50
 
 
 def test_vista_client_pagination_with_more_than_50_deals():
@@ -585,14 +587,15 @@ def test_vista_client_pagination_with_more_than_50_deals():
     
     page_1_data = {"total": "75", "paginas": "2", "pagina": "1", "quantidade": "50"}
     for i in range(1, 51):
-        page_1_data[str(i)] = {"codigo": f"deal_{i}", "codigo_imovel": f"AP-{i}", "status": "Ganho", "valor": 100000.0 * i}
+        page_1_data[str(i)] = {"Codigo": f"deal_{i}", "CodigoImovel": f"AP-{i}", "Status": "Ganho", "ValorNegocio": 100000.0 * i}
         
     page_2_data = {"total": "75", "paginas": "2", "pagina": "2", "quantidade": "25"}
     for i in range(51, 76):
-        page_2_data[str(i)] = {"codigo": f"deal_{i}", "codigo_imovel": f"AP-{i}", "status": "Ganho", "valor": 100000.0 * i}
+        page_2_data[str(i)] = {"Codigo": f"deal_{i}", "CodigoImovel": f"AP-{i}", "Status": "Ganho", "ValorNegocio": 100000.0 * i}
         
     def mock_api_get(endpoint, params):
-        pag = json.loads(params["paginacao"])
+        pesq = json.loads(params["pesquisa"])
+        pag = pesq["paginacao"]
         if pag["pagina"] == 1:
             return page_1_data
         elif pag["pagina"] == 2:
@@ -602,8 +605,8 @@ def test_vista_client_pagination_with_more_than_50_deals():
     with patch.object(client_mock, "_api_get", side_effect=mock_api_get):
         deals = client_mock.fetch_won_deals("2026-08-01", "2026-08-31")
         assert len(deals) == 75
-        assert deals[0]["codigo"] == "deal_1"
-        assert deals[74]["codigo"] == "deal_75"
+        assert deals[0]["Codigo"] == "deal_1"
+        assert deals[74]["Codigo"] == "deal_75"
 
 
 def test_vista_client_user_pagination():
@@ -612,14 +615,15 @@ def test_vista_client_user_pagination():
     
     page_1 = {"total": "60", "paginas": "2"}
     for i in range(1, 51):
-        page_1[str(i)] = {"codigo": f"u_{i}", "nome": f"Corretor {i}"}
+        page_1[str(i)] = {"Codigo": f"u_{i}", "Nomecompleto": f"Corretor {i}"}
         
     page_2 = {"total": "60", "paginas": "2"}
     for i in range(51, 61):
-        page_2[str(i)] = {"codigo": f"u_{i}", "nome": f"Corretor {i}"}
+        page_2[str(i)] = {"Codigo": f"u_{i}", "Nomecompleto": f"Corretor {i}"}
         
     def mock_api_get(endpoint, params):
-        pag = json.loads(params["paginacao"])
+        pesq = json.loads(params["pesquisa"])
+        pag = pesq["paginacao"]
         if pag["pagina"] == 1:
             return page_1
         elif pag["pagina"] == 2:
