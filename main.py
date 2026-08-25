@@ -7354,3 +7354,93 @@ async def get_import_responsibles_preview(
         total_pages=total_pages,
         items=resp_items
     )
+
+
+# ==============================================================================
+# Director Sales Reconciliation Endpoint (Pipeimob V2 × CRM Vista)
+# ==============================================================================
+
+@app.get(
+    "/api/reconciliation/sales",
+    summary="Get Director Sales Reconciliation (Pipeimob V2 × CRM Vista)",
+    description="Deterministic reconciliation between official Pipeimob V2 transactions and CRM Vista commercial deals. Fechamento is stage, not sale. Zero is preserved.",
+    dependencies=[Depends(verify_backend_api_key)]
+)
+async def get_sales_reconciliation(
+    response: Response,
+    request: Request,
+    data_inicio_ccv: Optional[str] = Query(None),
+    data_fim_ccv: Optional[str] = Query(None),
+    start_date: Optional[str] = Query(None),
+    end_date: Optional[str] = Query(None),
+    refresh: bool = Query(False)
+):
+    from services.sales_reconciliation_service import reconcile_sales_contract
+    from services.vista_client import VistaSalesClient
+
+    eff_start = data_inicio_ccv or start_date or date.today().replace(day=1).isoformat()
+    eff_end = data_fim_ccv or end_date or date.today().isoformat()
+
+    req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
+    
+    # 1. Load Pipeimob transactions dataset for requested period
+    mode, src, dataset, pages_fetched, cache_status = await load_transactions_dataset(
+        data_inicio_ccv=eff_start,
+        data_fim_ccv=eff_end,
+        request_id=req_id,
+        refresh=refresh
+    )
+
+    from services.vista_client import (
+        VistaClientError,
+        VistaConfigurationError,
+        VistaAuthenticationError,
+        VistaTimeoutError,
+        VistaResponseError,
+        VistaIncompleteQueryError
+    )
+
+    # 2. Consult CRM Vista asynchronously outside event loop
+    vista_client = VistaSalesClient()
+    try:
+        vista_deals = await asyncio.to_thread(
+            vista_client.get_enriched_won_deals,
+            eff_start,
+            eff_end
+        )
+    except VistaAuthenticationError as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Erro de autenticação no CRM Vista: {e}"
+        )
+    except VistaTimeoutError as e:
+        raise HTTPException(
+            status_code=504,
+            detail="Tempo limite de conexão com a API do CRM Vista excedido."
+        )
+    except (VistaResponseError, VistaIncompleteQueryError) as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Erro de comunicação com a API do CRM Vista: {e}"
+        )
+    except VistaConfigurationError as e:
+        if mode == "demo":
+            vista_deals = []
+        else:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Configuração do CRM Vista incompleta: {e}"
+            )
+    
+    # 3. Canonical reconciliation between Pipeimob V2 and CRM Vista
+    contract = reconcile_sales_contract(
+        pipeimob_transactions=dataset,
+        vista_deals=vista_deals,
+        start_date=eff_start,
+        end_date=eff_end,
+        mode=mode
+    )
+
+    contract["pipeimob_cache_status"] = cache_status
+    response.headers["x-cache"] = cache_status
+    return contract
