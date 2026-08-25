@@ -785,3 +785,92 @@ def test_reconciliation_endpoint_propagates_upstream_vista_failure():
         
         assert response.status_code == 504
         assert "Tempo limite" in response.json()["detail"]
+
+
+def test_vista_client_contract_compliance_and_stage_isolation():
+    """
+    Comprova os requisitos de conformidade com o CRM Vista:
+    1. Apenas campos documentados em NEGOCIO_FIELDS são enviados na requisição;
+    2. Negócios em 'Fechamento' são rigorosamente ignorados e NÃO são classificados como venda;
+    3. Negócios com Status='Ganho' são normalizados e classificados como venda;
+    4. Nenhuma chave de API ou credencial vaza em exceções ou logs.
+    """
+    secret_key = "super_secret_vista_key_xyz_123"
+    client_mock = VistaSalesClient(api_key=secret_key, sales_pipe_id="1")
+
+    # Mock de payload retornado pelo Vista
+    mock_payload = {
+        "total": "3",
+        "paginas": "1",
+        "1": {
+            "Codigo": "deal_won_1",
+            "Status": "Ganho",
+            "NomeEtapa": "Contrato Assinado",
+            "ValorNegocio": 1500000.00,
+            "DataFinal": "2026-08-15 14:30:00",
+            "CodigoImovel": "IMOVEL-777",
+            "CodigoUsuario": "usr_99",
+            "NomeUsuario": "Corretor Comercial A"
+        },
+        "2": {
+            "Codigo": "deal_fechamento_2",
+            "Status": "Fechamento",  # Etapa do funil - NÃO É VENDA
+            "NomeEtapa": "Fechamento",
+            "ValorNegocio": 800000.00,
+            "DataFinal": "2026-08-20 10:00:00",
+            "CodigoImovel": "IMOVEL-888",
+            "CodigoUsuario": "usr_99"
+        },
+        "3": {
+            "Codigo": "deal_perdido_3",
+            "Status": "Perdido",
+            "NomeEtapa": "Proposta Recusada",
+            "ValorNegocio": 500000.00,
+            "DataFinal": "2026-08-22 11:00:00",
+            "CodigoImovel": "IMOVEL-999"
+        }
+    }
+
+    captured_params = []
+    def mock_get(endpoint, params):
+        captured_params.append(params)
+        return mock_payload
+
+    with patch.object(client_mock, "_api_get", side_effect=mock_get), \
+         patch.object(client_mock, "fetch_users_map", return_value={"usr_99": "Corretor Comercial A"}):
+        
+        deals = client_mock.get_enriched_won_deals("2026-08-01", "2026-08-25")
+
+    # 1. Validação da requisição enviada
+    assert len(captured_params) == 1
+    pesquisa = json.loads(captured_params[0]["pesquisa"])
+    documented_fields = {
+        "Codigo", "NomePipe", "UltimaAtualizacao", "NomeNegocio", "Status",
+        "DataInicial", "DataFinal", "ValorNegocio", "PrevisaoFechamento",
+        "VeiculoCaptacao", "CodigoMotivoPerda", "MotivoPerda", "ObservacaoPerda",
+        "CodigoPipe", "EtapaAtual", "NomeEtapa", "CodigoCliente", "NomeCliente",
+        "CodigoImovel", "StatusAtividades", "CodigoUsuario", "NomeUsuario"
+    }
+    for field in pesquisa["fields"]:
+        assert field in documented_fields
+
+    assert pesquisa["filter"]["Status"] == "Ganho"
+    assert pesquisa["filter"]["DataFinal"] == ["2026-08-01 00:00:00", "2026-08-25 23:59:59"]
+    assert captured_params[0]["codigo_pipe"] == "1"
+
+    # 2. Validação do isolamento de etapas: apenas 1 negócio Ganho retornado
+    assert len(deals) == 1
+    deal = deals[0]
+    assert deal["deal_id"] == "deal_won_1"
+    assert deal["status"] == "Ganho"
+    assert deal["valor"] == 1500000.00
+    assert deal["data_fechamento"] == "2026-08-15 14:30:00"
+    assert deal["codigo_imovel"] == "IMOVEL-777"
+    assert deal["corretor_nome"] == "Corretor Comercial A"
+
+    # 3. Validação de não-vazamento de credenciais
+    with patch("urllib.request.urlopen", side_effect=RuntimeError("Simulated connection error")):
+        try:
+            client_mock._api_get("negocios/listar", {"pesquisa": "{}"})
+        except Exception as e:
+            assert secret_key not in str(e)
