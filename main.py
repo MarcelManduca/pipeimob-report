@@ -7,7 +7,7 @@ import json
 import ssl
 import time
 from datetime import datetime, date, timezone, timedelta
-from typing import List, Optional, Union, Any
+from typing import List, Literal, Optional, Union, Any
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 from fastapi import FastAPI, Header, Query, HTTPException, Response, Request, Depends, File, UploadFile
@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 from services.sales_reconciliation import (
     pipeimob_official_sale_date,
+    rank_commercial_sales,
     reconcile_sales,
 )
 from services.vista_sales_client import (
@@ -5260,6 +5261,38 @@ async def get_sales_reconciliation(
     response.headers["X-Data-Mode"] = "live"
     response.headers["X-Reconciliation-Contract"] = result["contract_version"]
     return result
+
+
+@app.get(
+    "/api/reconciliation/sales/ranking",
+    dependencies=[Depends(verify_backend_api_key)],
+    summary="Rank commercial brokers by reconciled official sales",
+    description=(
+        "Counts only signed Pipeimob contracts and attributes them exclusively "
+        "to the commercial broker returned by a matched Vista gain. Returns "
+        "aggregates only and does not expose client personal data."
+    ),
+)
+async def get_sales_ranking(
+    request: Request,
+    response: Response,
+    data_inicio_ccv: str = Query(..., description="Official CCV start date (YYYY-MM-DD)"),
+    data_fim_ccv: str = Query(..., description="Official CCV end date (YYYY-MM-DD)"),
+    metric: Literal["sales_count", "vgv"] = Query("sales_count"),
+    date_tolerance_days: int = Query(7, ge=0, le=31),
+    refresh: bool = Query(False),
+):
+    reconciliation = await get_sales_reconciliation(
+        request=request,
+        response=response,
+        data_inicio_ccv=data_inicio_ccv,
+        data_fim_ccv=data_fim_ccv,
+        date_tolerance_days=date_tolerance_days,
+        refresh=refresh,
+    )
+    ranking = rank_commercial_sales(reconciliation, metric=metric)
+    response.headers["X-Sales-Attribution"] = "vista_commercial_broker"
+    return ranking
 
 
 # ======================================================================
