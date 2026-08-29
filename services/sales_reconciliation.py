@@ -3,7 +3,7 @@
 from collections import Counter, defaultdict
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
-from typing import Any, DefaultDict, Dict, List, Optional, Sequence
+from typing import Any, DefaultDict, Dict, List, Literal, Optional, Sequence
 
 
 MATCHED = "CONCILIADO"
@@ -190,6 +190,105 @@ def reconcile_sales(
             "missing_commercial_broker": missing_commercial_broker,
         },
         "items": items,
+    }
+
+
+def rank_commercial_sales(
+    reconciliation: Dict[str, Any],
+    metric: Literal["sales_count", "vgv"] = "sales_count",
+) -> Dict[str, Any]:
+    """Aggregate official Pipeimob sales by Vista's commercial broker.
+
+    Only records backed by an official Pipeimob transaction are counted. A
+    linked sale remains attributable when its date or value differs between
+    systems; those differences are reconciliation issues, not evidence that
+    the signed contract stopped being an official sale.
+    """
+    if metric not in ("sales_count", "vgv"):
+        raise ValueError("metric must be sales_count or vgv")
+
+    grouped: Dict[str, Dict[str, Any]] = {}
+    attributed_sales = 0
+    attributed_vgv = Decimal("0")
+
+    for item in reconciliation.get("items") or []:
+        if not isinstance(item, dict) or not item.get("pipeimob_transaction_id"):
+            continue
+
+        broker = _clean(item.get("commercial_broker"))
+        if not broker:
+            continue
+
+        normalized = _normalize_text(broker)
+        row = grouped.setdefault(
+            normalized,
+            {
+                "commercial_broker": broker,
+                "sales_count": 0,
+                "vgv": Decimal("0"),
+            },
+        )
+        value = _parse_decimal(item.get("official_value")) or Decimal("0")
+        row["sales_count"] += 1
+        row["vgv"] += value
+        attributed_sales += 1
+        attributed_vgv += value
+
+    ranking = []
+    for row in grouped.values():
+        sales_count = int(row["sales_count"])
+        vgv = row["vgv"]
+        ranking.append(
+            {
+                "commercial_broker": row["commercial_broker"],
+                "sales_count": sales_count,
+                "vgv": str(vgv),
+                "average_ticket": str(
+                    vgv / Decimal(sales_count) if sales_count else Decimal("0")
+                ),
+            }
+        )
+
+    if metric == "vgv":
+        ranking.sort(
+            key=lambda row: (
+                -Decimal(row["vgv"]),
+                -row["sales_count"],
+                _normalize_text(row["commercial_broker"]),
+            )
+        )
+    else:
+        ranking.sort(
+            key=lambda row: (
+                -row["sales_count"],
+                -Decimal(row["vgv"]),
+                _normalize_text(row["commercial_broker"]),
+            )
+        )
+
+    for position, row in enumerate(ranking, start=1):
+        row["position"] = position
+
+    summary = reconciliation.get("summary") or {}
+    official_sales = int(summary.get("official_sales") or 0)
+    official_vgv = _parse_decimal(summary.get("official_vgv")) or Decimal("0")
+    return {
+        "contract_version": "1.0",
+        "official_source": reconciliation.get("official_source"),
+        "commercial_source": reconciliation.get("commercial_source"),
+        "attribution": "vista_commercial_broker",
+        "metric": metric,
+        "period": reconciliation.get("period"),
+        "generated_at": reconciliation.get("generated_at"),
+        "summary": {
+            "official_sales": official_sales,
+            "official_vgv": str(official_vgv),
+            "attributed_sales": attributed_sales,
+            "attributed_vgv": str(attributed_vgv),
+            "unattributed_sales": max(official_sales - attributed_sales, 0),
+            "unattributed_vgv": str(max(official_vgv - attributed_vgv, Decimal("0"))),
+        },
+        "ranking": ranking,
     }
 
 
