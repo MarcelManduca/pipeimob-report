@@ -5,7 +5,7 @@ from datetime import date
 
 import pytest
 
-from services.sales_reconciliation import reconcile_sales
+from services.sales_reconciliation import rank_commercial_sales, reconcile_sales
 from services.vista_sales_client import VistaSalesAPIError, VistaSalesClient
 
 
@@ -323,3 +323,97 @@ def test_value_and_date_mismatches_remain_auditable():
         "DIVERGENCIA_VALOR",
         "DIVERGENCIA_DATA",
     ]
+
+
+def test_ranking_uses_official_sales_and_vista_commercial_broker():
+    reconciliation = {
+        "official_source": "pipeimob_api_v2",
+        "commercial_source": "vista_negocio_ganho",
+        "period": {"start": "2026-08-01", "end": "2026-08-31"},
+        "summary": {"official_sales": 4, "official_vgv": "1000000"},
+        "items": [
+            {
+                "pipeimob_transaction_id": "pipe-1",
+                "vista_deal_id": "vista-1",
+                "commercial_broker": "Ana Corretora",
+                "official_value": "200000",
+                "status": "CONCILIADO",
+            },
+            {
+                "pipeimob_transaction_id": "pipe-2",
+                "vista_deal_id": "vista-2",
+                "commercial_broker": " ana   corretora ",
+                "official_value": "300000",
+                "status": "DIVERGENCIA_VALOR",
+            },
+            {
+                "pipeimob_transaction_id": "pipe-3",
+                "vista_deal_id": "vista-3",
+                "commercial_broker": "Bruno Corretor",
+                "official_value": "400000",
+                "status": "CONCILIADO",
+            },
+            {
+                "pipeimob_transaction_id": "pipe-4",
+                "vista_deal_id": None,
+                "commercial_broker": None,
+                "official_value": "100000",
+                "status": "PIPEIMOB_SEM_GANHO_VISTA",
+            },
+            {
+                "pipeimob_transaction_id": None,
+                "vista_deal_id": "vista-only",
+                "commercial_broker": "Bruno Corretor",
+                "official_value": None,
+                "status": "VISTA_SEM_CONTRATO_PIPEIMOB",
+            },
+        ],
+    }
+
+    result = rank_commercial_sales(reconciliation)
+
+    assert result["attribution"] == "vista_commercial_broker"
+    assert result["ranking"][0] == {
+        "commercial_broker": "Ana Corretora",
+        "sales_count": 2,
+        "vgv": "500000",
+        "average_ticket": "250000",
+        "position": 1,
+    }
+    assert result["ranking"][1]["commercial_broker"] == "Bruno Corretor"
+    assert result["summary"] == {
+        "official_sales": 4,
+        "official_vgv": "1000000",
+        "attributed_sales": 3,
+        "attributed_vgv": "900000",
+        "unattributed_sales": 1,
+        "unattributed_vgv": "100000",
+    }
+
+
+def test_ranking_can_order_by_vgv():
+    reconciliation = {
+        "summary": {"official_sales": 3, "official_vgv": "900000"},
+        "items": [
+            {
+                "pipeimob_transaction_id": "1",
+                "commercial_broker": "Mais contratos",
+                "official_value": "100000",
+            },
+            {
+                "pipeimob_transaction_id": "2",
+                "commercial_broker": "Mais contratos",
+                "official_value": "100000",
+            },
+            {
+                "pipeimob_transaction_id": "3",
+                "commercial_broker": "Maior VGV",
+                "official_value": "700000",
+            },
+        ],
+    }
+
+    result = rank_commercial_sales(reconciliation, metric="vgv")
+
+    assert result["ranking"][0]["commercial_broker"] == "Maior VGV"
+    assert result["ranking"][0]["position"] == 1
