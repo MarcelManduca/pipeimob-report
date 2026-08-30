@@ -17,7 +17,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import date
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from services.vista_sales_client import (
     VistaSalesAPIError,
@@ -124,7 +124,9 @@ class VistaFunnelClient:
             ),
             agency_field=os.getenv("VISTA_DEAL_AGENCY_FIELD"),
             capture_source_field=os.getenv("VISTA_DEAL_CAPTURE_SOURCE_FIELD"),
-            responsible_field=os.getenv("VISTA_DEAL_RESPONSIBLE_FIELD"),
+            responsible_field=os.getenv(
+                "VISTA_DEAL_RESPONSIBLE_FIELD", "Responsavel"
+            ),
         )
 
     def fetch_created_deals(
@@ -265,6 +267,9 @@ def summarize_created_deal_cohort(
     missing_stage = 0
     missing_status = 0
     missing_created_at = 0
+    proposal_assignments: Dict[
+        Tuple[str, str, str], Dict[str, Any]
+    ] = {}
 
     for deal in deals:
         status = _normalize_label(deal.get("status"))
@@ -282,6 +287,29 @@ def summarize_created_deal_cohort(
             missing_stage += 1
         if not deal.get("created_at"):
             missing_created_at += 1
+
+        if stage and stage.casefold() == "proposta":
+            team = _normalize_label(deal.get("team"))
+            responsible = _normalize_label(deal.get("responsible"))
+            created_date = str(deal.get("created_at") or "")[:10]
+            assignment_key = (
+                team.casefold() if team else "",
+                responsible.casefold() if responsible else "",
+                created_date,
+            )
+            assignment = proposal_assignments.setdefault(
+                assignment_key,
+                {
+                    "team": team,
+                    "responsible": responsible,
+                    "created_date": created_date or None,
+                    "current_stage_deals_count": 0,
+                    "open_deals_count": 0,
+                },
+            )
+            assignment["current_stage_deals_count"] += 1
+            if status and status.casefold() in {"aberto", "em aberto", "open"}:
+                assignment["open_deals_count"] += 1
 
     def rows(values: Dict[str, int], label_key: str) -> List[Dict[str, Any]]:
         return [
@@ -320,6 +348,26 @@ def summarize_created_deal_cohort(
         for status, count in proposal_status_counts.items()
         if status.casefold() in {"aberto", "em aberto", "open"}
     )
+    proposal_assignment_breakdown = sorted(
+        proposal_assignments.values(),
+        key=lambda row: (
+            -int(row["open_deals_count"]),
+            -int(row["current_stage_deals_count"]),
+            str(row.get("team") or "").casefold(),
+            str(row.get("responsible") or "").casefold(),
+            str(row.get("created_date") or ""),
+        ),
+    )
+    proposal_open_without_direct_team = sum(
+        int(row["open_deals_count"])
+        for row in proposal_assignment_breakdown
+        if not row.get("team")
+    )
+    proposal_open_without_assignment_identity = sum(
+        int(row["open_deals_count"])
+        for row in proposal_assignment_breakdown
+        if not row.get("team") and not row.get("responsible")
+    )
     return {
         "created_deals": len(deals),
         "status_breakdown": rows(status_counts, "status"),
@@ -331,6 +379,7 @@ def summarize_created_deal_cohort(
                 proposal_status_counts, "status"
             ),
             "created_deals_in_proposal_stage_with_open_status": proposal_open_count,
+            "assignment_breakdown": proposal_assignment_breakdown,
             "proposals_generated_in_period": None,
             "proposals_generated_status": "requires_stage_event_history",
         },
@@ -338,5 +387,9 @@ def summarize_created_deal_cohort(
             "missing_created_at": missing_created_at,
             "missing_current_stage": missing_stage,
             "missing_status": missing_status,
+            "proposal_open_without_direct_team": proposal_open_without_direct_team,
+            "proposal_open_without_assignment_identity": (
+                proposal_open_without_assignment_identity
+            ),
         },
     }
