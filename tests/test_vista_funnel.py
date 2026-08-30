@@ -1,4 +1,6 @@
 import json
+import threading
+import time
 import urllib.error
 import urllib.parse
 from datetime import date
@@ -86,6 +88,86 @@ def test_fetch_created_deals_deduplicates_by_vista_deal_id():
 
     assert len(deals) == 1
     assert deals[0]["stage_name"] == "Fechamento"
+
+
+def test_fetch_created_deals_retries_transient_failure_once():
+    attempts = 0
+
+    def opener(request, timeout):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise urllib.error.URLError("temporary")
+        return FakeResponse(
+            {
+                "1": {"Codigo": "deal-1", "NomeEtapa": "Proposta"},
+                "total": 1,
+                "paginas": 1,
+            }
+        )
+
+    client = VistaFunnelClient(
+        "https://tenant.example.com",
+        "secret-key",
+        "pipe-1",
+        opener=opener,
+        request_attempts=2,
+        retry_backoff_seconds=0,
+    )
+
+    deals = client.fetch_created_deals(date(2026, 8, 1), date(2026, 8, 30))
+
+    assert attempts == 2
+    assert [deal["deal_id"] for deal in deals] == ["deal-1"]
+
+
+def test_fetch_created_deals_fetches_known_remaining_pages_concurrently():
+    lock = threading.Lock()
+    active = 0
+    max_active = 0
+
+    def opener(request, timeout):
+        nonlocal active, max_active
+        query = urllib.parse.parse_qs(
+            urllib.parse.urlparse(request.full_url).query
+        )
+        pesquisa = json.loads(query["pesquisa"][0])
+        page = pesquisa["paginacao"]["pagina"]
+        if page > 1:
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+            time.sleep(0.03)
+            with lock:
+                active -= 1
+        return FakeResponse(
+            {
+                "1": {
+                    "Codigo": f"deal-{page}",
+                    "NomeEtapa": "Proposta",
+                },
+                "total": 4,
+                "paginas": 4,
+            }
+        )
+
+    client = VistaFunnelClient(
+        "https://tenant.example.com",
+        "secret-key",
+        "pipe-1",
+        opener=opener,
+        page_concurrency=4,
+    )
+
+    deals = client.fetch_created_deals(date(2026, 8, 1), date(2026, 8, 30))
+
+    assert {deal["deal_id"] for deal in deals} == {
+        "deal-1",
+        "deal-2",
+        "deal-3",
+        "deal-4",
+    }
+    assert max_active > 1
 
 
 def test_summary_keeps_current_proposal_stage_separate_from_generated_proposals():

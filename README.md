@@ -169,6 +169,10 @@ VISTA_DEAL_TEAM_FIELD=
 VISTA_DEAL_AGENCY_FIELD=
 VISTA_DEAL_CAPTURE_SOURCE_FIELD=
 VISTA_DEAL_RESPONSIBLE_FIELD=Responsavel
+VISTA_FUNNEL_REQUEST_MAX_ATTEMPTS=2
+VISTA_FUNNEL_RETRY_BACKOFF_SECONDS=0.25
+VISTA_FUNNEL_PAGE_CONCURRENCY=4
+VISTA_FUNNEL_CACHE_TTL_SECONDS=180
 ```
 
 `VISTA_SALES_TEAM_FIELD` é opcional e deve ser preenchido somente depois de
@@ -209,6 +213,12 @@ GET /api/vista/funnel/cohort?data_inicio=2026-08-01&data_fim=2026-08-30
 
 O endpoint retorna somente agregados. Campos pessoais de clientes não são
 solicitados nem expostos.
+
+Para reduzir a latência sem alterar a fonte oficial, a primeira página é
+consultada antes das demais; quando o Vista informa o total de páginas, as
+restantes são buscadas com concorrência limitada. Falhas transitórias recebem
+uma retentativa curta e o agregado é reutilizado por até três minutos. Depois
+desse prazo, a próxima consulta volta a buscar a API ao vivo.
 
 ---
 

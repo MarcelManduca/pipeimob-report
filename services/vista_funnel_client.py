@@ -10,9 +10,11 @@ documented and validated Vista history endpoint and is therefore never inferred
 here.
 """
 
+import concurrent.futures
 import json
 import os
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -68,6 +70,9 @@ class VistaFunnelClient:
         agency_field: Optional[str] = None,
         capture_source_field: Optional[str] = None,
         responsible_field: Optional[str] = None,
+        request_attempts: int = 2,
+        retry_backoff_seconds: float = 0.25,
+        page_concurrency: int = 4,
         opener: Optional[Callable[..., Any]] = None,
     ) -> None:
         if not str(base_url or "").strip():
@@ -97,6 +102,11 @@ class VistaFunnelClient:
         self.api_key = str(api_key)
         self.pipe_id = str(pipe_id).strip()
         self.timeout_seconds = max(1, min(30, int(timeout_seconds)))
+        self.request_attempts = max(1, min(5, int(request_attempts)))
+        self.retry_backoff_seconds = max(
+            0.0, min(5.0, float(retry_backoff_seconds))
+        )
+        self.page_concurrency = max(1, min(8, int(page_concurrency)))
         self.opener = opener or urllib.request.urlopen
 
         self.fields = list(self.BASE_FIELDS)
@@ -112,6 +122,24 @@ class VistaFunnelClient:
 
     @classmethod
     def from_env(cls) -> "VistaFunnelClient":
+        try:
+            request_attempts = int(
+                os.getenv("VISTA_FUNNEL_REQUEST_MAX_ATTEMPTS", "2")
+            )
+        except ValueError:
+            request_attempts = 2
+        try:
+            retry_backoff_seconds = float(
+                os.getenv("VISTA_FUNNEL_RETRY_BACKOFF_SECONDS", "0.25")
+            )
+        except ValueError:
+            retry_backoff_seconds = 0.25
+        try:
+            page_concurrency = int(
+                os.getenv("VISTA_FUNNEL_PAGE_CONCURRENCY", "4")
+            )
+        except ValueError:
+            page_concurrency = 4
         return cls(
             base_url=os.getenv("VISTA_API_BASE_URL", ""),
             api_key=os.getenv("VISTA_API_KEY", ""),
@@ -127,6 +155,9 @@ class VistaFunnelClient:
             responsible_field=os.getenv(
                 "VISTA_DEAL_RESPONSIBLE_FIELD", "Responsavel"
             ),
+            request_attempts=request_attempts,
+            retry_backoff_seconds=retry_backoff_seconds,
+            page_concurrency=page_concurrency,
         )
 
     def fetch_created_deals(
@@ -136,10 +167,9 @@ class VistaFunnelClient:
         if start_date > end_date:
             raise ValueError("start_date cannot be after end_date")
 
-        page = 1
         by_id: Dict[str, Dict[str, Any]] = {}
-        while True:
-            payload = self._fetch_page(start_date, end_date, page)
+
+        def merge_payload(payload: Dict[str, Any]) -> int:
             records = [
                 value
                 for key, value in payload.items()
@@ -150,13 +180,34 @@ class VistaFunnelClient:
                 deal_id = str(normalized.get("deal_id") or "").strip()
                 if deal_id:
                     by_id[deal_id] = normalized
+            return len(records)
 
-            pages = self._optional_int(payload.get("paginas"))
-            if (pages is not None and page >= pages) or (
-                pages is None and len(records) < 50
-            ):
-                break
-            page += 1
+        first_payload = self._fetch_page(start_date, end_date, 1)
+        first_page_count = merge_payload(first_payload)
+        pages = self._optional_int(first_payload.get("paginas"))
+
+        if pages is not None:
+            remaining_pages = range(2, max(1, pages) + 1)
+            workers = min(self.page_concurrency, max(0, pages - 1))
+            if workers:
+                with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=workers
+                ) as executor:
+                    payloads = executor.map(
+                        lambda page: self._fetch_page(
+                            start_date, end_date, page
+                        ),
+                        remaining_pages,
+                    )
+                    for payload in payloads:
+                        merge_payload(payload)
+        elif first_page_count >= 50:
+            page = 2
+            while True:
+                payload = self._fetch_page(start_date, end_date, page)
+                if merge_payload(payload) < 50:
+                    break
+                page += 1
 
         return list(by_id.values())
 
@@ -185,18 +236,32 @@ class VistaFunnelClient:
             f"{self.base_url}/negocios/listar?{query}",
             headers={"Accept": "application/json"},
         )
-        try:
-            with self.opener(request, timeout=self.timeout_seconds) as response:
-                body = response.read()
-                payload = json.loads(body.decode("utf-8")) if body else {}
-        except urllib.error.HTTPError as exc:
-            raise VistaSalesAPIError(
-                f"Vista funnel request failed with HTTP {exc.code}"
-            ) from exc
-        except (urllib.error.URLError, TimeoutError) as exc:
-            raise VistaSalesAPIError("Vista funnel request is unavailable") from exc
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise VistaSalesAPIError("Vista funnel returned invalid JSON") from exc
+        for attempt in range(1, self.request_attempts + 1):
+            try:
+                with self.opener(
+                    request, timeout=self.timeout_seconds
+                ) as response:
+                    body = response.read()
+                    payload = json.loads(body.decode("utf-8")) if body else {}
+                break
+            except urllib.error.HTTPError as exc:
+                retryable = exc.code == 429 or 500 <= exc.code <= 599
+                if not retryable or attempt >= self.request_attempts:
+                    raise VistaSalesAPIError(
+                        f"Vista funnel request failed with HTTP {exc.code}"
+                    ) from exc
+            except (urllib.error.URLError, TimeoutError) as exc:
+                if attempt >= self.request_attempts:
+                    raise VistaSalesAPIError(
+                        "Vista funnel request is unavailable"
+                    ) from exc
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise VistaSalesAPIError(
+                    "Vista funnel returned invalid JSON"
+                ) from exc
+
+            if self.retry_backoff_seconds:
+                time.sleep(self.retry_backoff_seconds * attempt)
 
         if not isinstance(payload, dict):
             raise VistaSalesAPIError("Vista funnel response must be a JSON object")

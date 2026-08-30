@@ -25,6 +25,17 @@ controle de versão público.
 5. Publicar `gralha-indicadores-mcp` com a configuração de autenticação.
 6. Executar testes autenticados de ranking por corretor, equipe e bairro.
 
+## Contrato de resposta 1.11.0
+
+A Edge Function orienta o consumidor a responder primeiro com o número,
+ranking ou conclusão solicitada. Não existe prefixo obrigatório. Perguntas
+objetivas devem ser curtas; contexto gerencial, cobertura e fonte entram apenas
+quando ajudam a interpretar o resultado ou quando são solicitados.
+
+Erros do backend são devolvidos de forma estruturada para que o Worker apresente
+uma falha curta, sem montar análises com valores ausentes. A função limita a
+espera pelo backend a 35 segundos.
+
 `verify_jwt=false` desativa apenas a validação automática do gateway. A função
 mantém a autenticação interna: valida o bearer token com `auth.getUser`, exige
 perfil ativo e restringe o acesso aos papéis `super_admin` e `viewer`.
