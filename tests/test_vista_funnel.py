@@ -94,11 +94,29 @@ def test_summary_keeps_current_proposal_stage_separate_from_generated_proposals(
             {"deal_id": "1", "created_at": "2026-08-01", "status": "Aberto", "stage_name": "Proposta"},
             {"deal_id": "2", "created_at": "2026-08-02", "status": "Perdido", "stage_name": "Proposta"},
             {"deal_id": "3", "created_at": "2026-08-03", "status": "Ganho", "stage_name": "Fechamento"},
+            {"deal_id": "4", "created_at": "2026-08-04", "status": "Em aberto", "stage_name": "Captação"},
         ]
     )
 
-    assert summary["created_deals"] == 3
+    assert summary["created_deals"] == 4
     assert summary["proposal"]["created_deals_currently_in_proposal"] == 2
+    assert (
+        summary["proposal"]["created_deals_in_proposal_stage_with_open_status"]
+        == 1
+    )
+    proposal_matrix = next(
+        row
+        for row in summary["stage_status_breakdown"]
+        if row["stage"] == "Proposta"
+    )
+    assert proposal_matrix == {
+        "stage": "Proposta",
+        "deals_count": 2,
+        "status_breakdown": [
+            {"status": "Aberto", "deals_count": 1},
+            {"status": "Perdido", "deals_count": 1},
+        ],
+    }
     assert summary["proposal"]["proposals_generated_in_period"] is None
     assert (
         summary["proposal"]["proposals_generated_status"]
