@@ -49,8 +49,25 @@ def test_vista_funnel_endpoint_returns_aggregate_semantics():
         == 2
     )
     assert payload["summary"]["proposal"]["proposals_generated_in_period"] is None
+    assert payload["contract_version"] == "1.1"
+    assert payload["summary"]["stage_status_breakdown"] == [
+        {
+            "stage": "Proposta",
+            "deals_count": 2,
+            "status_breakdown": [
+                {"status": "Aberto", "deals_count": 1},
+                {"status": "Perdido", "deals_count": 1},
+            ],
+        }
+    ]
+    assert (
+        payload["summary"]["proposal"]
+        ["created_deals_in_proposal_stage_with_open_status"]
+        == 1
+    )
     assert payload["semantics"]["stage_entry_events_available"] is False
     assert response.headers["X-Funnel-Semantics"] == "created_deals_current_stage"
+    assert response.headers["X-Funnel-Contract"] == "1.1"
 
 
 def test_vista_funnel_endpoint_rejects_period_over_one_year():
