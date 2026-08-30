@@ -1,4 +1,5 @@
 import json
+import http.client
 import threading
 import time
 import urllib.error
@@ -98,6 +99,46 @@ def test_fetch_created_deals_retries_transient_failure_once():
         attempts += 1
         if attempts == 1:
             raise urllib.error.URLError("temporary")
+        return FakeResponse(
+            {
+                "1": {"Codigo": "deal-1", "NomeEtapa": "Proposta"},
+                "total": 1,
+                "paginas": 1,
+            }
+        )
+
+    client = VistaFunnelClient(
+        "https://tenant.example.com",
+        "secret-key",
+        "pipe-1",
+        opener=opener,
+        request_attempts=2,
+        retry_backoff_seconds=0,
+    )
+
+    deals = client.fetch_created_deals(date(2026, 8, 1), date(2026, 8, 30))
+
+    assert attempts == 2
+    assert [deal["deal_id"] for deal in deals] == ["deal-1"]
+
+
+@pytest.mark.parametrize(
+    "transport_error",
+    [
+        http.client.RemoteDisconnected("remote closed connection"),
+        ConnectionResetError("connection reset"),
+    ],
+)
+def test_fetch_created_deals_retries_low_level_transport_failures(
+    transport_error,
+):
+    attempts = 0
+
+    def opener(request, timeout):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise transport_error
         return FakeResponse(
             {
                 "1": {"Codigo": "deal-1", "NomeEtapa": "Proposta"},
