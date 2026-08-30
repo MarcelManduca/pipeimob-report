@@ -6,7 +6,8 @@ The client deliberately separates two concepts that are often mixed in BI:
 * stage-entry events that happened in a period.
 
 ``negocios/listar`` supports the first concept.  The second one requires a
-tenant-confirmed history/event contract and is therefore never inferred here.
+documented and validated Vista history endpoint and is therefore never inferred
+here.
 """
 
 import json
@@ -260,6 +261,7 @@ def summarize_created_deal_cohort(
     """Build aggregate-only metrics from the Vista created-deal cohort."""
     status_counts: Dict[str, int] = {}
     stage_counts: Dict[str, int] = {}
+    stage_status_counts: Dict[str, Dict[str, int]] = {}
     missing_stage = 0
     missing_status = 0
     missing_created_at = 0
@@ -273,6 +275,9 @@ def summarize_created_deal_cohort(
             missing_status += 1
         if stage:
             stage_counts[stage] = stage_counts.get(stage, 0) + 1
+            if status:
+                statuses = stage_status_counts.setdefault(stage, {})
+                statuses[status] = statuses.get(status, 0) + 1
         else:
             missing_stage += 1
         if not deal.get("created_at"):
@@ -291,12 +296,41 @@ def summarize_created_deal_cohort(
         for stage, count in stage_counts.items()
         if stage.casefold() == "proposta"
     )
+    stage_status_breakdown = [
+        {
+            "stage": stage,
+            "deals_count": sum(statuses.values()),
+            "status_breakdown": rows(statuses, "status"),
+        }
+        for stage, statuses in sorted(
+            stage_status_counts.items(),
+            key=lambda item: (-sum(item[1].values()), item[0].casefold()),
+        )
+    ]
+    proposal_status_counts = next(
+        (
+            statuses
+            for stage, statuses in stage_status_counts.items()
+            if stage.casefold() == "proposta"
+        ),
+        {},
+    )
+    proposal_open_count = sum(
+        count
+        for status, count in proposal_status_counts.items()
+        if status.casefold() in {"aberto", "em aberto", "open"}
+    )
     return {
         "created_deals": len(deals),
         "status_breakdown": rows(status_counts, "status"),
         "current_stage_breakdown": rows(stage_counts, "stage"),
+        "stage_status_breakdown": stage_status_breakdown,
         "proposal": {
             "created_deals_currently_in_proposal": proposal_current_stage_count,
+            "current_proposal_stage_status_breakdown": rows(
+                proposal_status_counts, "status"
+            ),
+            "created_deals_in_proposal_stage_with_open_status": proposal_open_count,
             "proposals_generated_in_period": None,
             "proposals_generated_status": "requires_stage_event_history",
         },
