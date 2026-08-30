@@ -5355,10 +5355,10 @@ async def get_vista_funnel_cohort(
 
     summary = summarize_created_deal_cohort(deals)
     response.headers["X-Data-Mode"] = "live"
-    response.headers["X-Funnel-Contract"] = "1.0"
+    response.headers["X-Funnel-Contract"] = "1.1"
     response.headers["X-Funnel-Semantics"] = "created_deals_current_stage"
     return {
-        "contract_version": "1.0",
+        "contract_version": "1.1",
         "source": "vista_negocios_listar",
         "period": {
             "start": data_inicio,
