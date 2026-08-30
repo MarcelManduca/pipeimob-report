@@ -5383,8 +5383,18 @@ async def get_vista_funnel_cohort(
         )
         return payload
 
+    cached_payload, cache_status = vista_funnel_cache.get_status(cache_key)
+
+    def stale_fallback(reason: str):
+        if cache_status != "stale" or cached_payload is None:
+            return None
+        response.headers["X-Data-Mode"] = "cached"
+        response.headers["X-Funnel-Cache"] = reason
+        response.headers["X-Funnel-Contract"] = "1.1"
+        response.headers["X-Funnel-Semantics"] = "created_deals_current_stage"
+        return cached_payload
+
     try:
-        cached_payload, cache_status = vista_funnel_cache.get_status(cache_key)
         if cache_status == "fresh":
             payload = cached_payload
         else:
@@ -5396,18 +5406,27 @@ async def get_vista_funnel_cohort(
             )
             cache_status = "miss"
     except VistaSalesConfigurationError as exc:
+        fallback = stale_fallback("stale-if-error")
+        if fallback is not None:
+            return fallback
         raise HTTPException(
             status_code=503,
             detail="Vista funnel integration is not configured.",
             headers={"X-Funnel-Error": "vista_not_configured"},
         ) from exc
     except VistaSalesAPIError as exc:
+        fallback = stale_fallback("stale-if-error")
+        if fallback is not None:
+            return fallback
         raise HTTPException(
             status_code=503,
             detail="Vista funnel data is temporarily unavailable.",
             headers={"X-Funnel-Error": "vista_unavailable"},
         ) from exc
     except asyncio.TimeoutError as exc:
+        fallback = stale_fallback("stale-if-timeout")
+        if fallback is not None:
+            return fallback
         raise HTTPException(
             status_code=504,
             detail="Vista funnel query timed out.",

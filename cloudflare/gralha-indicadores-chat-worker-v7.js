@@ -602,6 +602,13 @@ async function chat(request, env) {
       },
     );
     if (directValue?.error) {
+      if (directIntent.type === "proposal_generated") {
+        return json({
+          answer:
+            `Não é possível determinar quantas propostas foram geradas em ${directIntent.period.label}, porque a integração atual não recebe o histórico de entrada na etapa Proposta. A fotografia atual não pôde ser atualizada nesta consulta.`,
+          visualization: null,
+        });
+      }
       return json({
         answer: fallbackAnswerFromTool(payloadWithMcpValue(directValue)),
         visualization: null,

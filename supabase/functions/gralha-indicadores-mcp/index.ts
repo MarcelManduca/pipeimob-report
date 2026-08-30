@@ -8,7 +8,7 @@ import {
 
 const FUNCTION_SLUG = "gralha-indicadores-mcp";
 const SERVER_NAME = "Gralha — Indicadores Pipeimob × Vista";
-const SERVER_VERSION = "1.11.0";
+const SERVER_VERSION = "1.12.0";
 const JSON_HEADERS = {
   "Content-Type": "application/json; charset=utf-8",
   "Cache-Control": "no-store",
@@ -1051,6 +1051,15 @@ async function callVistaFunnelCohort(
     };
   }
   if (result.status < 200 || result.status >= 300) {
+    const upstream = result.payload && typeof result.payload === "object"
+      ? result.payload as Record<string, unknown>
+      : {};
+    console.warn("vista_funnel_backend_failed", {
+      status: result.status,
+      errorCode: typeof upstream.error_code === "string"
+        ? upstream.error_code
+        : null,
+    });
     return {
       isError: true,
       value: {
