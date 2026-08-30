@@ -103,6 +103,16 @@ class DashboardCache:
 dashboard_cache = DashboardCache()
 dashboard_cache.clear()
 
+try:
+    VISTA_FUNNEL_CACHE_TTL_SECONDS = max(
+        30, min(900, int(os.getenv("VISTA_FUNNEL_CACHE_TTL_SECONDS", "180")))
+    )
+except ValueError:
+    VISTA_FUNNEL_CACHE_TTL_SECONDS = 180
+
+vista_funnel_cache = DashboardCache()
+vista_funnel_cache.clear()
+
 DASHBOARD_CACHE_VERSION = "v2"
 
 class AsyncSingleFlightRegistry:
@@ -5335,11 +5345,56 @@ async def get_vista_funnel_cohort(
             status_code=400, detail="Funnel period cannot exceed 366 days"
         )
 
-    try:
+    cache_key = (
+        "vista_funnel_cohort",
+        "1.1",
+        data_inicio,
+        data_fim,
+    )
+
+    def sync_fetch():
         vista_client = VistaFunnelClient.from_env()
-        deals = await asyncio.to_thread(
-            vista_client.fetch_created_deals, start_date, end_date
+        deals = vista_client.fetch_created_deals(start_date, end_date)
+        payload = {
+            "contract_version": "1.1",
+            "source": "vista_negocios_listar",
+            "period": {
+                "start": data_inicio,
+                "end": data_fim,
+                "basis": vista_client.created_field,
+            },
+            "semantics": {
+                "cohort": "distinct_deals_created_in_period",
+                "stage_breakdown": "current_stage_at_query_time",
+                "stage_entry_events_available": False,
+                "warning": (
+                    "Current-stage counts are not equivalent to entries into "
+                    "a stage during the period. Proposal generation requires "
+                    "Vista stage-event history."
+                ),
+            },
+            "generated_at": datetime.now(timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z"),
+            "summary": summarize_created_deal_cohort(deals),
+        }
+        vista_funnel_cache.set(
+            cache_key, payload, ttl=VISTA_FUNNEL_CACHE_TTL_SECONDS
         )
+        return payload
+
+    try:
+        cached_payload, cache_status = vista_funnel_cache.get_status(cache_key)
+        if cache_status == "fresh":
+            payload = cached_payload
+        else:
+            payload = await single_flight_registry.execute(
+                cache_key,
+                lambda: asyncio.to_thread(sync_fetch),
+                caller_endpoint="vista_funnel_cohort",
+                timeout=30,
+            )
+            cache_status = "miss"
     except VistaSalesConfigurationError as exc:
         raise HTTPException(
             status_code=503,
@@ -5352,33 +5407,20 @@ async def get_vista_funnel_cohort(
             detail="Vista funnel data is temporarily unavailable.",
             headers={"X-Funnel-Error": "vista_unavailable"},
         ) from exc
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(
+            status_code=504,
+            detail="Vista funnel query timed out.",
+            headers={"X-Funnel-Error": "vista_timeout"},
+        ) from exc
 
-    summary = summarize_created_deal_cohort(deals)
-    response.headers["X-Data-Mode"] = "live"
+    response.headers["X-Data-Mode"] = (
+        "live" if cache_status == "miss" else "cached"
+    )
+    response.headers["X-Funnel-Cache"] = cache_status
     response.headers["X-Funnel-Contract"] = "1.1"
     response.headers["X-Funnel-Semantics"] = "created_deals_current_stage"
-    return {
-        "contract_version": "1.1",
-        "source": "vista_negocios_listar",
-        "period": {
-            "start": data_inicio,
-            "end": data_fim,
-            "basis": vista_client.created_field,
-        },
-        "semantics": {
-            "cohort": "distinct_deals_created_in_period",
-            "stage_breakdown": "current_stage_at_query_time",
-            "stage_entry_events_available": False,
-            "warning": (
-                "Current-stage counts are not equivalent to entries into a stage "
-                "during the period. Proposal generation requires Vista stage-event history."
-            ),
-        },
-        "generated_at": datetime.now(timezone.utc)
-        .isoformat()
-        .replace("+00:00", "Z"),
-        "summary": summary,
-    }
+    return payload
 
 
 # ======================================================================

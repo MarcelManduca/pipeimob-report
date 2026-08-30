@@ -1,7 +1,9 @@
 from unittest.mock import patch
 
+import pytest
 from fastapi.testclient import TestClient
 
+import main
 from main import app, verify_backend_api_key
 
 
@@ -24,6 +26,13 @@ class FakeVistaFunnelClient:
                 "stage_name": "Proposta",
             },
         ]
+
+
+@pytest.fixture(autouse=True)
+def clear_vista_funnel_cache():
+    main.vista_funnel_cache.clear()
+    yield
+    main.vista_funnel_cache.clear()
 
 
 def test_vista_funnel_endpoint_returns_aggregate_semantics():
@@ -69,6 +78,43 @@ def test_vista_funnel_endpoint_returns_aggregate_semantics():
     assert payload["semantics"]["stage_entry_events_available"] is False
     assert response.headers["X-Funnel-Semantics"] == "created_deals_current_stage"
     assert response.headers["X-Funnel-Contract"] == "1.1"
+    assert response.headers["X-Funnel-Cache"] == "miss"
+
+
+def test_vista_funnel_endpoint_reuses_recent_result():
+    app.dependency_overrides[verify_backend_api_key] = lambda: {"sub": "test"}
+    fake_client = FakeVistaFunnelClient()
+    calls = 0
+    original_fetch = fake_client.fetch_created_deals
+
+    def counted_fetch(start_date, end_date):
+        nonlocal calls
+        calls += 1
+        return original_fetch(start_date, end_date)
+
+    fake_client.fetch_created_deals = counted_fetch
+    try:
+        with patch(
+            "main.VistaFunnelClient.from_env",
+            return_value=fake_client,
+        ):
+            client = TestClient(app)
+            first = client.get(
+                "/api/vista/funnel/cohort"
+                "?data_inicio=2026-08-01&data_fim=2026-08-30"
+            )
+            second = client.get(
+                "/api/vista/funnel/cohort"
+                "?data_inicio=2026-08-01&data_fim=2026-08-30"
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.headers["X-Funnel-Cache"] == "miss"
+    assert second.headers["X-Funnel-Cache"] == "fresh"
+    assert calls == 1
 
 
 def test_vista_funnel_endpoint_rejects_period_over_one_year():
