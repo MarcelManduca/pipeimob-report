@@ -170,6 +170,50 @@ def test_fetch_created_deals_fetches_known_remaining_pages_concurrently():
     assert max_active > 1
 
 
+def test_fetch_created_deals_recovers_failed_parallel_page_serially():
+    lock = threading.Lock()
+    page_attempts = {}
+
+    def opener(request, timeout):
+        query = urllib.parse.parse_qs(
+            urllib.parse.urlparse(request.full_url).query
+        )
+        pesquisa = json.loads(query["pesquisa"][0])
+        page = pesquisa["paginacao"]["pagina"]
+        with lock:
+            page_attempts[page] = page_attempts.get(page, 0) + 1
+            attempt = page_attempts[page]
+        if page == 3 and attempt == 1:
+            raise urllib.error.URLError("temporary parallel refusal")
+        return FakeResponse(
+            {
+                "1": {"Codigo": f"deal-{page}", "NomeEtapa": "Proposta"},
+                "total": 4,
+                "paginas": 4,
+            }
+        )
+
+    client = VistaFunnelClient(
+        "https://tenant.example.com",
+        "secret-key",
+        "pipe-1",
+        opener=opener,
+        request_attempts=1,
+        retry_backoff_seconds=0,
+        page_concurrency=4,
+    )
+
+    deals = client.fetch_created_deals(date(2026, 8, 1), date(2026, 8, 30))
+
+    assert {deal["deal_id"] for deal in deals} == {
+        "deal-1",
+        "deal-2",
+        "deal-3",
+        "deal-4",
+    }
+    assert page_attempts[3] == 2
+
+
 def test_summary_keeps_current_proposal_stage_separate_from_generated_proposals():
     summary = summarize_created_deal_cohort(
         [

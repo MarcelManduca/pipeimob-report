@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 import main
 from main import app, verify_backend_api_key
+from services.vista_sales_client import VistaSalesAPIError
 
 
 class FakeVistaFunnelClient:
@@ -115,6 +116,48 @@ def test_vista_funnel_endpoint_reuses_recent_result():
     assert first.headers["X-Funnel-Cache"] == "miss"
     assert second.headers["X-Funnel-Cache"] == "fresh"
     assert calls == 1
+
+
+def test_vista_funnel_endpoint_serves_recent_stale_result_on_vista_failure():
+    app.dependency_overrides[verify_backend_api_key] = lambda: {"sub": "test"}
+    fake_client = FakeVistaFunnelClient()
+    try:
+        with patch("main.VistaFunnelClient.from_env", return_value=fake_client):
+            client = TestClient(app)
+            first = client.get(
+                "/api/vista/funnel/cohort"
+                "?data_inicio=2026-08-01&data_fim=2026-08-30"
+            )
+            cache_key = (
+                "vista_funnel_cohort",
+                "1.1",
+                "2026-08-01",
+                "2026-08-30",
+            )
+            with main.vista_funnel_cache.lock:
+                payload, _, stale_until = main.vista_funnel_cache.cache[cache_key]
+                main.vista_funnel_cache.cache[cache_key] = (
+                    payload,
+                    0,
+                    stale_until,
+                )
+
+            fake_client.fetch_created_deals = lambda *_: (_ for _ in ()).throw(
+                VistaSalesAPIError("temporary")
+            )
+            second = client.get(
+                "/api/vista/funnel/cohort"
+                "?data_inicio=2026-08-01&data_fim=2026-08-30"
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json() == first.json()
+    assert second.headers["X-Funnel-Cache"] == "stale-if-error"
+    assert second.headers["X-Data-Mode"] == "cached"
+    assert second.headers["X-Funnel-Semantics"] == "created_deals_current_stage"
 
 
 def test_vista_funnel_endpoint_rejects_period_over_one_year():

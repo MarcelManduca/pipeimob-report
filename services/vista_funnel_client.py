@@ -187,20 +187,39 @@ class VistaFunnelClient:
         pages = self._optional_int(first_payload.get("paginas"))
 
         if pages is not None:
-            remaining_pages = range(2, max(1, pages) + 1)
+            remaining_pages = list(range(2, max(1, pages) + 1))
             workers = min(self.page_concurrency, max(0, pages - 1))
             if workers:
+                payloads_by_page: Dict[int, Dict[str, Any]] = {}
+                failed_pages: List[int] = []
                 with concurrent.futures.ThreadPoolExecutor(
                     max_workers=workers
                 ) as executor:
-                    payloads = executor.map(
-                        lambda page: self._fetch_page(
-                            start_date, end_date, page
-                        ),
-                        remaining_pages,
-                    )
-                    for payload in payloads:
-                        merge_payload(payload)
+                    futures = {
+                        executor.submit(
+                            self._fetch_page, start_date, end_date, page
+                        ): page
+                        for page in remaining_pages
+                    }
+                    for future in concurrent.futures.as_completed(futures):
+                        page = futures[future]
+                        try:
+                            payloads_by_page[page] = future.result()
+                        except VistaSalesAPIError:
+                            failed_pages.append(page)
+
+                for page in sorted(payloads_by_page):
+                    merge_payload(payloads_by_page[page])
+
+                # Vista occasionally throttles a request inside a concurrent
+                # page batch. Recover only the failed pages serially so one
+                # transient refusal does not invalidate the whole cohort.
+                if failed_pages:
+                    time.sleep(max(0.5, self.retry_backoff_seconds * 2))
+                    for page in sorted(failed_pages):
+                        merge_payload(
+                            self._fetch_page(start_date, end_date, page)
+                        )
         elif first_page_count >= 50:
             page = 2
             while True:

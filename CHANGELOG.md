@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-08-30 — Resiliência da consulta de propostas
+
+- Mantém uma resposta objetiva sobre a indisponibilidade do histórico de entrada
+  em Proposta mesmo quando a fotografia ao vivo do Vista falhar.
+- Recupera sequencialmente apenas as páginas recusadas durante a paginação
+  concorrente do Vista.
+- Reutiliza por até uma hora o último agregado recente quando a atualização do
+  funil falhar, identificando a resposta como cache de contingência.
+- Adiciona telemetria sanitizada para falhas do backend do funil.
+- Atualiza a Edge Function `gralha-indicadores-mcp` para o contrato `1.12.0`.
+
 ## 2026-08-30 — Respostas gerenciais e latência
 
 - Remove o prefixo obrigatório das respostas e prioriza conclusões diretas.
