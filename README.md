@@ -164,6 +164,11 @@ VISTA_API_KEY=
 VISTA_SALES_PIPE_ID=
 VISTA_HTTP_TIMEOUT_SECONDS=12
 VISTA_SALES_TEAM_FIELD=
+VISTA_DEAL_CREATED_FIELD=DataInicial
+VISTA_DEAL_TEAM_FIELD=
+VISTA_DEAL_AGENCY_FIELD=
+VISTA_DEAL_CAPTURE_SOURCE_FIELD=
+VISTA_DEAL_RESPONSIBLE_FIELD=
 ```
 
 `VISTA_SALES_TEAM_FIELD` é opcional e deve ser preenchido somente depois de
@@ -179,6 +184,26 @@ GET /api/reconciliation/sales?data_inicio_ccv=2026-08-01&data_fim_ccv=2026-08-20
 ```
 
 O endpoint só opera com a fonte Pipeimob ao vivo; dados simulados não podem formar números oficiais.
+
+### Coorte do funil Vista por criação
+
+* **Rota:** `GET /api/vista/funnel/cohort`
+* **Fonte:** `Vista /negocios/listar`.
+* **Semântica:** negócios distintos criados no período, agrupados pela etapa atual
+  e pelo status geral no momento da consulta.
+* **Proteção contra divergência:** a quantidade atualmente na etapa `Proposta`
+  não é apresentada como "propostas geradas no período". Essa segunda métrica
+  permanece `null` até que o contrato de histórico de entrada nas etapas seja
+  confirmado no tenant Vista.
+
+Exemplo:
+
+```text
+GET /api/vista/funnel/cohort?data_inicio=2026-08-01&data_fim=2026-08-30
+```
+
+O endpoint retorna somente agregados. Campos pessoais de clientes não são
+solicitados nem expostos.
 
 ---
 

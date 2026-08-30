@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 80830)
-Total output lines: 8010
-
 import os
 import uuid
 import asyncio
@@ -27,6 +24,10 @@ from services.vista_sales_client import (
     VistaSalesAPIError,
     VistaSalesClient,
     VistaSalesConfigurationError,
+)
+from services.vista_funnel_client import (
+    VistaFunnelClient,
+    summarize_created_deal_cohort,
 )
 
 # Centralized HTTP Timeout configuration for external API requests (connection and read timeout)
@@ -2579,7 +2580,2945 @@ def compute_dashboard_aggregates(
             "pipeimob_location": "Pipeimob → cadastro do agente ou usuário → grupos/equipes a que pertence.",
             "correction_steps": [
                 "Selecione a equipe comercial oficial da pessoa e salve o cadastro. Não utilize filial, cargo, nome da pessoa ou outro grupo administrativo como equipe.",
-                "Volte ao BI e clique…30830 tokens truncated…ending_backlog: int
+                "Volte ao BI e clique em Atualizar para revalidar os dados."
+            ]
+        },
+        "configuration_mapping_required": {
+            "id": "configuration_mapping_required",
+            "severity": "review",
+            "title": "Grupo ainda não classificado",
+            "description": "O agente possui um grupo no Pipeimob, mas o BI ainda não consegue confirmar se esse grupo representa uma equipe comercial.",
+            "impact": "A validação comercial da equipe está pendente até que o ID do grupo seja mapeado.",
+            "pipeimob_location": "Configuração do sistema (Render → PIPEIMOB_OFFICIAL_TEAM_GROUPS_JSON).",
+            "correction_steps": [
+                "O agente possui um grupo no Pipeimob, mas o BI ainda não consegue confirmar se esse grupo representa uma equipe comercial. Revise a configuração oficial de equipes."
+            ]
+        },
+        "inconsistent_team_assignment": {
+            "id": "inconsistent_team_assignment",
+            "severity": "review",
+            "title": "Vínculo inconsistente de equipe",
+            "description": "O agente está associado a mais de uma equipe oficial diferente durante o período analisado.",
+            "impact": "O histórico do agente apresenta conflito de equipes nas transações do período.",
+            "pipeimob_location": "Pipeimob → cadastro do agente ou usuário → grupos/equipes a que pertence.",
+            "correction_steps": [
+                "Revise os negócios do corretor e ajuste o cadastro para garantir o pertencimento a uma única equipe oficial ativa no período."
+            ]
+        },
+        "missing_manager_assignment": {
+            "id": "missing_manager_assignment",
+            "severity": "high",
+            "title": "Gestor ausente",
+            "description": "A transação não possui um agente gestor identificado.",
+            "impact": "A transação fica sem atribuição a um corretor ou equipe responsável.",
+            "pipeimob_location": "Pipeimob → Negócio → Responsável/Gestor.",
+            "correction_steps": [
+                "A transação não possui agente gestor identificado. Abra o negócio no Pipeimob, vincule o responsável correto e salve."
+            ]
+        }
+    }
+
+    issue_counts = collections.defaultdict(lambda: {"agents": set(), "tx_count": 0})
+    for eval_item in tx_evals:
+        agent_key = eval_item["agent_key"]
+        for issue_id in (eval_item["confirmed"] | eval_item["review"]):
+            if agent_key:
+                issue_counts[issue_id]["agents"].add(agent_key)
+            issue_counts[issue_id]["tx_count"] += 1
+
+    issues_list = []
+    for issue_id, counts in issue_counts.items():
+        if issue_id in issue_template:
+            tpl = issue_template[issue_id].copy()
+            tpl["affected_agents_count"] = len(counts["agents"])
+            tpl["affected_transactions_count"] = counts["tx_count"]
+            issues_list.append(tpl)
+
+    affected_agents_list = []
+    review_agents_list = []
+
+    for agent_key, info in distinct_agents.items():
+        state = agent_status_map[agent_key]
+        confirmed = sorted(list(agent_confirmed_issues[agent_key]))
+        review = sorted(list(agent_review_issues[agent_key]))
+
+        detail = {
+            "agent_name": info["name"],
+            "confirmed_issue_ids": confirmed,
+            "review_issue_ids": review,
+            "branch_value": info["branch"],
+            "affected_transactions_count": agent_affected_tx_count[agent_key]
+        }
+
+        resolved_group_names = []
+        for gval in info["groups_seen"]:
+            if gval in group_mapping:
+                resolved_group_names.append(group_mapping[gval]["name"])
+            else:
+                resolved_group_names.append("Grupo Não Classificado")
+
+        detail["current_team_values"] = sorted(list(set(resolved_group_names)))
+
+        if state == "affected":
+            affected_agents_list.append(detail)
+        elif state == "review_only":
+            review_agents_list.append(detail)
+
+    affected_agents_list.sort(key=lambda x: x["agent_name"])
+    review_agents_list.sort(key=lambda x: x["agent_name"])
+
+    distinct_agents_count = len(distinct_agents)
+
+    agent_compliance_ratio = (
+        round(compliant_agents_count / distinct_agents_count, 4)
+        if distinct_agents_count > 0 else 0.0
+    )
+    transaction_compliance_ratio = (
+        round(compliant_transactions_count / len(filtered), 4)
+        if len(filtered) > 0 else 0.0
+    )
+
+    if len(filtered) == 0:
+        overall_status = "no_data"
+    elif affected_agents_count == 0 and review_only_agents_count == 0 and unassigned_manager_transactions_count == 0 and review_only_transactions_count == 0:
+        overall_status = "ok"
+    else:
+        if distinct_agents_count > 0 and (affected_agents_count / distinct_agents_count) > 0.30:
+            overall_status = "critical"
+        else:
+            overall_status = "attention"
+
+    agents_reconciled = (compliant_agents_count + affected_agents_count + review_only_agents_count == distinct_agents_count)
+    transactions_reconciled = (compliant_transactions_count + affected_transactions_count + review_only_transactions_count == len(filtered))
+
+    dq_summary = {
+        "status": overall_status,
+        "distinct_agents_count": distinct_agents_count,
+        "compliant_agents_count": compliant_agents_count,
+        "affected_agents_count": affected_agents_count,
+        "review_only_agents_count": review_only_agents_count,
+        "compliant_transactions_count": compliant_transactions_count,
+        "affected_transactions_count": affected_transactions_count,
+        "review_only_transactions_count": review_only_transactions_count,
+        "unassigned_manager_transactions_count": unassigned_manager_transactions_count,
+        "agent_compliance_ratio": agent_compliance_ratio,
+        "transaction_compliance_ratio": transaction_compliance_ratio
+    }
+
+    dq_teams = {
+        "source_fields": {
+            "primary": "agente_gestor_grupos_a_que_pertence",
+            "primary_type": "array_of_group_ids",
+            "legacy_text_fields": [
+                "agente_gestor_grupos_a_que_pertence1",
+                "agente_gestor_grupos_a_que_pertence2",
+                "agente_gestor_grupos_a_que_pertence3"
+            ]
+        },
+        "configuration_status": config_status,
+        "official_teams_configured": config_configured,
+        "official_teams": config_official_teams,
+        "issues": issues_list,
+        "affected_agents": affected_agents_list,
+        "review_agents": review_agents_list,
+        "reconciliation": {
+            "agents_reconciled": agents_reconciled,
+            "transactions_reconciled": transactions_reconciled
+        }
+    }
+
+    timestamp_utc = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    data_quality = {
+        "period_basis": "ccv",
+        "generated_at": timestamp_utc,
+        "transaction_count": len(filtered),
+        "summary": dq_summary,
+        "teams": dq_teams
+    }
+
+    return {
+        "summary": summary,
+        "origins": origins,
+        "stages": stages,
+        "managers": managers,
+        "payments": payments,
+        "commissions": commissions_payload,
+        "timeline": timeline,
+        "unclassified": unclassified_payload,
+        "reconciliation": reconciliation,
+        "commission_financials": commission_financials,
+        "sales_cycle": sales_cycle,
+        "data_quality": data_quality
+    }
+
+
+
+def sanitize_transaction(tx: dict) -> dict:
+    # 1. compradores count
+    compradores_raw = tx.get("compradores")
+    if compradores_raw is None:
+        # Fallback to checking tx.get("clientes")
+        clientes = tx.get("clientes") or []
+        compradores_count = sum(1 for c in clientes if isinstance(c, dict) and c.get("papel") == "Comprador")
+    else:
+        compradores_count = len(compradores_raw) if isinstance(compradores_raw, list) else int(compradores_raw or 0)
+
+    # 2. vendedores count
+    vendedores_raw = tx.get("vendedores")
+    if vendedores_raw is None:
+        # Fallback to checking tx.get("clientes")
+        clientes = tx.get("clientes") or []
+        vendedores_count = sum(1 for c in clientes if isinstance(c, dict) and c.get("papel") == "Vendedor")
+    else:
+        vendedores_count = len(vendedores_raw) if isinstance(vendedores_raw, list) else int(vendedores_raw or 0)
+
+    # 3. forma_pagamento summarized (natureza/nome e valor)
+    forma_pagamento_raw = tx.get("forma_pagamento") or []
+    forma_pagamento_clean = []
+    if isinstance(forma_pagamento_raw, list):
+        for fp in forma_pagamento_raw:
+            if isinstance(fp, dict):
+                nome = fp.get("nome") or fp.get("natureza") or "Forma de Pagamento"
+                valor = fp.get("valor") or 0.0
+                try:
+                    fp_val = float(valor)
+                except ValueError:
+                    fp_val = 0.0
+                forma_pagamento_clean.append({"nome": nome, "valor": fp_val})
+
+    # 4. comissionados sanitizados (apenas nome, tipo e valor)
+    comissionados_raw = tx.get("comissionados") or []
+    comissionados_clean = []
+    if isinstance(comissionados_raw, list):
+        for c in comissionados_raw:
+            if isinstance(c, dict):
+                nome = c.get("nome") or c.get("comissionado_nome") or "Comissionado"
+                tipo = c.get("tipo") or c.get("participacao") or c.get("papel") or "Corretor"
+                valor = c.get("valor") or c.get("comissionado_valor") or 0.0
+                is_imob = c.get("comissionado_imobiliária")
+                if is_imob is None:
+                    is_imob = c.get("comissionado_imobiliaria")
+                try:
+                    c_val = float(valor)
+                except ValueError:
+                    c_val = 0.0
+                try:
+                    c_val_comm = float(c.get("comissionado_valor") or valor)
+                except ValueError:
+                    c_val_comm = 0.0
+                comissionados_clean.append({
+                    "nome": nome,
+                    "tipo": tipo,
+                    "valor": c_val,
+                    "comissionado_imobiliaria": bool(is_imob) if is_imob is not None else False,
+                    "comissionado_valor": c_val_comm
+                })
+
+    # 5. Build sanitized object
+    return {
+        "transacao_unique_id_pipeimob": tx.get("transacao_unique_id_pipeimob"),
+        "codigo_contrato": tx.get("codigo_contrato"),
+        "codigo_imovel": tx.get("codigo_imovel"),
+        "titulo_nome_negocio": tx.get("titulo_nome_negocio"),
+        "data_contrato": tx.get("data_contrato"),
+        "data_inicio_venda": tx.get("data_inicio_venda"),
+        "data_captacao": tx.get("data_captacao"),
+        "data_assinatura_ccv": tx.get("data_assinatura_ccv"),
+        "data_ccv": tx.get("data_ccv"),
+        "data_assinatura": tx.get("data_assinatura"),
+        "data_criacao": tx.get("data_criacao"),
+        "created_at": tx.get("created_at"),
+        "endereco_bairro": tx.get("endereco_bairro"),
+        "endereco_cidade": tx.get("endereco_cidade"),
+        "endereco_uf": tx.get("endereco_uf"),
+        "categoria_crm": tx.get("categoria_crm"),
+        "residencial_comercial": tx.get("residencial_comercial"),
+        "area_total": tx.get("area_total"),
+        "area_util": tx.get("area_util"),
+        "qtd_quartos": tx.get("qtd_quartos"),
+        "qtd_vagas": tx.get("qtd_vagas"),
+        "agente_gestor": tx.get("agente_gestor"),
+        "valor_contrato": tx.get("valor_contrato"),
+        "total_comissao": tx.get("total_comissao"),
+        "comissao_imobiliaria": tx.get("comissao_imobiliaria"),
+        "data_recebimento_comissao": tx.get("data_recebimento_comissao"),
+        "valor_recebido": tx.get("valor_recebido"),
+        "valor_comissao_recebida": tx.get("valor_comissao_recebida"),
+        "saldo_comissao": tx.get("saldo_comissao"),
+        "status_recebimento": tx.get("status_recebimento"),
+        "midia_origem_compradores": tx.get("midia_origem_compradores"),
+        "midia_origem_vendedores": tx.get("midia_origem_vendedores"),
+        "etapa_atual": tx.get("etapa_atual"),
+        "diasemestoque": tx.get("diasemestoque"),
+        "financiamento": tx.get("financiamento"),
+        "financiamento_banco": tx.get("financiamento_banco"),
+        "forma_pagamento": forma_pagamento_clean,
+        "compradores": compradores_count,
+        "vendedores": vendedores_count,
+        "comissionados": comissionados_clean
+    }
+
+
+def process_transactions_exposure(dataset: list) -> list:
+    expose_raw = os.getenv("EXPOSE_RAW_TRANSACTIONS", "false").strip().lower() == "true"
+    if expose_raw:
+        return dataset
+    return [sanitize_transaction(tx) for tx in dataset]
+
+
+# Pydantic Schemas for OpenAPI documentation
+class HealthResponse(BaseModel):
+    status: str = Field(..., description="Status of the API service", json_schema_extra={"example": "ok"})
+    service: str = Field(..., description="Name of the service", json_schema_extra={"example": "pipeimob-report"})
+    version: str = Field(..., description="Version of the service", json_schema_extra={"example": "0.1.0"})
+    api_version: str = Field(..., description="API version of the service", json_schema_extra={"example": "v2"})
+    pipeimob_connection: str = Field(..., description="Connection status to Pipeimob CRM", json_schema_extra={"example": "pending_configuration"})
+    data_mode: str = Field(..., description="Active data mode: demo, live, or unconfigured", json_schema_extra={"example": "unconfigured"})
+    timestamp: str = Field(..., description="Current timestamp in UTC ISO-8601 format", json_schema_extra={"example": "2026-07-15T12:00:00Z"})
+
+class ResourceCatalog(BaseModel):
+    id: str = Field(..., description="Unique resource ID", json_schema_extra={"example": "transactions"})
+    name: str = Field(..., description="Resource name", json_schema_extra={"example": "Transações"})
+    backend_endpoint: str = Field(..., description="Local backend endpoint for the resource", json_schema_extra={"example": "/api/transactions"})
+    pipeimob_endpoint: Optional[str] = Field(None, description="Confirmed Pipeimob endpoint (null if unconfirmed or divergent)", json_schema_extra={"example": "/api/v2/negocios/transacoes"})
+    status: str = Field(..., description="Status of the resource integration", json_schema_extra={"example": "implemented_pending_live_configuration"})
+    implemented: bool = Field(..., description="Indicates if the resource integration is fully implemented", json_schema_extra={"example": True})
+    validated: bool = Field(..., description="Indicates if the resource integration is validated with live credentials", json_schema_extra={"example": False})
+    description: str = Field(..., description="Description of the resource", json_schema_extra={"example": "Transações comerciais do Pipeimob"})
+    primary_key: str = Field(..., description="Primary key of the resource records", json_schema_extra={"example": "transacao_unique_id_pipeimob"})
+    available_fields: List[str] = Field(..., description="List of available fields for extraction")
+    supported_filters: List[str] = Field(..., description="List of supported query filters")
+    filters_api_direct: List[str] = Field(..., description="List of filters processed directly at the Pipeimob CRM side")
+    filters_local_backend: List[str] = Field(..., description="List of filters applied locally at the backend after fetch")
+    pagination_parameters: List[str] = Field(default_factory=list, description="List of pagination parameters accepted by the API")
+    pending_items: List[str] = Field(..., description="List of pending implementation items")
+
+class CatalogResponse(BaseModel):
+    api_version: str = Field(..., description="API version of the service", json_schema_extra={"example": "v2"})
+    resources: List[ResourceCatalog] = Field(..., description="List of supported resources in the catalog")
+
+class IntegrationUnavailableResponse(BaseModel):
+    detail: str = Field(..., description="Error message detail", json_schema_extra={"example": "Configuration pending. Please set PIPEIMOB_DATA_MODE environment variable."})
+    error_code: str = Field(..., description="Standardized error code classification", json_schema_extra={"example": "integration_unconfigured"})
+    data_mode: str = Field(..., description="Active data mode", json_schema_extra={"example": "unconfigured"})
+    pipeimob_connection: str = Field(..., description="Active connection status", json_schema_extra={"example": "pending_configuration"})
+
+RESPONSES_503 = {
+    503: {
+        "model": IntegrationUnavailableResponse,
+        "description": "503 — Integração Pipeimob não configurada ou temporariamente indisponível.",
+        "content": {
+            "application/json": {
+                "examples": {
+                    "integration_unconfigured": {
+                        "summary": "Integração não configurada — produção",
+                        "value": {
+                            "detail": "Configuration pending. Please set PIPEIMOB_DATA_MODE environment variable.",
+                            "error_code": "integration_unconfigured",
+                            "data_mode": "unconfigured",
+                            "pipeimob_connection": "pending_configuration"
+                        }
+                    },
+                    "missing_credentials": {
+                        "summary": "Modo live sem credenciais",
+                        "value": {
+                            "detail": "Pipeimob credentials are not configured on the server.",
+                            "error_code": "missing_credentials",
+                            "data_mode": "live",
+                            "pipeimob_connection": "missing_credentials"
+                        }
+                    },
+                    "authentication_failed": {
+                        "summary": "Autenticação falhou",
+                        "value": {
+                            "detail": "Failed to authenticate with Pipeimob CRM API. Check credentials.",
+                            "error_code": "authentication_failed",
+                            "data_mode": "live",
+                            "pipeimob_connection": "authentication_failed"
+                        }
+                    },
+                    "pipeimob_unavailable": {
+                        "summary": "Integração temporariamente indisponível",
+                        "value": {
+                            "detail": "Pipeimob API is temporarily unavailable.",
+                            "error_code": "pipeimob_unavailable",
+                            "data_mode": "live",
+                            "pipeimob_connection": "unavailable"
+                        }
+                    },
+                    "pipeimob_timeout": {
+                        "summary": "Timeout de requisição",
+                        "value": {
+                            "detail": "Pipeimob CRM API request timed out.",
+                            "error_code": "pipeimob_timeout",
+                            "data_mode": "live",
+                            "pipeimob_connection": "unavailable"
+                        }
+                    },
+                    "invalid_pipeimob_response": {
+                        "summary": "Resposta inválida ou vazia",
+                        "value": {
+                            "detail": "Pipeimob CRM API returned empty transactions dataset.",
+                            "error_code": "invalid_pipeimob_response",
+                            "data_mode": "live",
+                            "pipeimob_connection": "unavailable"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+class AuthErrorResponse(BaseModel):
+    detail: str = Field(..., description="Error message detail", json_schema_extra={"example": "Authentication required."})
+    error_code: str = Field(..., description="Standardized error code classification", json_schema_extra={"example": "authentication_required"})
+
+RESPONSES_AUTH = {
+    401: {
+        "model": AuthErrorResponse,
+        "description": "401 — Autenticação necessária ou token inválido/expirado.",
+        "content": {
+            "application/json": {
+                "examples": {
+                    "authentication_required": {
+                        "summary": "Token de autenticação ausente",
+                        "value": {
+                            "detail": "Authentication required.",
+                            "error_code": "authentication_required"
+                        }
+                    },
+                    "invalid_access_token": {
+                        "summary": "Token inválido ou expirado",
+                        "value": {
+                            "detail": "Invalid or expired access token.",
+                            "error_code": "invalid_access_token"
+                        }
+                    }
+                }
+            }
+        }
+    },
+    403: {
+        "model": AuthErrorResponse,
+        "description": "403 — Usuário não autorizado.",
+        "content": {
+            "application/json": {
+                "examples": {
+                    "forbidden": {
+                        "summary": "Permissão negada (domínio/e-mail fora da allowlist)",
+                        "value": {
+                            "detail": "User is not authorized to access this resource.",
+                            "error_code": "forbidden"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+class SanitizedPaymentMethod(BaseModel):
+    nome: Optional[str] = Field(None, description="Nome ou natureza da forma de pagamento", json_schema_extra={"example": "Sinal"})
+    valor: Optional[float] = Field(None, description="Valor pago", json_schema_extra={"example": 50000.0})
+
+class SanitizedCommissioned(BaseModel):
+    nome: Optional[str] = Field(None, description="Nome do comissionado", json_schema_extra={"example": "Corretor X"})
+    tipo: Optional[str] = Field(None, description="Tipo de participação ou papel", json_schema_extra={"example": "Captador"})
+    valor: Optional[float] = Field(None, description="Valor da comissão em R$", json_schema_extra={"example": 4000.0})
+
+class SanitizedTransaction(BaseModel):
+    transacao_unique_id_pipeimob: Optional[str] = Field(None, description="ID único do Pipeimob")
+    codigo_contrato: Optional[str] = Field(None, description="Código do contrato")
+    codigo_imovel: Optional[str] = Field(None, description="Código do imóvel")
+    data_contrato: Optional[str] = Field(None, description="Data do contrato")
+    data_inicio_venda: Optional[str] = Field(None, description="Data de início da venda")
+    endereco_bairro: Optional[str] = Field(None, description="Bairro")
+    endereco_cidade: Optional[str] = Field(None, description="Cidade")
+    endereco_uf: Optional[str] = Field(None, description="UF")
+    categoria_crm: Optional[str] = Field(None, description="Categoria do imóvel")
+    residencial_comercial: Optional[str] = Field(None, description="Finalidade residencial ou comercial")
+    area_total: Optional[float] = Field(None, description="Área total")
+    area_util: Optional[float] = Field(None, description="Área útil")
+    qtd_quartos: Optional[int] = Field(None, description="Quantidade de quartos")
+    qtd_vagas: Optional[int] = Field(None, description="Quantidade de vagas de garagem")
+    agente_gestor: Optional[str] = Field(None, description="Agente gestor da transação")
+    valor_contrato: Optional[float] = Field(None, description="Valor do contrato")
+    total_comissao: Optional[float] = Field(None, description="Total geral de comissão (VGC)")
+    comissao_imobiliaria: Optional[float] = Field(None, description="Fração de comissão destinada à imobiliária")
+    midia_origem_compradores: Optional[str] = Field(None, description="Origem da mídia do comprador")
+    midia_origem_vendedores: Optional[str] = Field(None, description="Origem da mídia do vendedor")
+    etapa_atual: Optional[str] = Field(None, description="Etapa atual da transação no CRM")
+    diasemestoque: Optional[int] = Field(None, description="Dias em estoque")
+    financiamento: Optional[bool] = Field(None, description="Indica se houve financiamento bancário")
+    financiamento_banco: Optional[str] = Field(None, description="Banco financiador")
+    forma_pagamento: List[SanitizedPaymentMethod] = Field(default_factory=list, description="Formas de pagamento resumidas")
+    compradores: int = Field(0, description="Quantidade de compradores")
+    vendedores: int = Field(0, description="Quantidade de vendedores")
+    comissionados: List[SanitizedCommissioned] = Field(default_factory=list, description="Lista de comissionados sanitizada")
+
+class TransactionsDataPayload(BaseModel):
+    count: int = Field(..., description="Count of returned transactions", json_schema_extra={"example": 60})
+    transactions: List[dict] = Field(..., description="List of transaction objects (sanitized by default in production)")
+
+class TransactionsListResponse(BaseModel):
+    data_mode: str = Field(..., description="Active data mode: demo, live, or unconfigured", json_schema_extra={"example": "live"})
+    source: str = Field(..., description="Source of data", json_schema_extra={"example": "pipeimob_api_v2"})
+    generated_at: str = Field(..., description="ISO-8601 UTC timestamp", json_schema_extra={"example": "2026-07-15T12:00:00Z"})
+    data: TransactionsDataPayload = Field(...)
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "summary": "Resposta live — exemplo estrutural",
+                    "description": "Resposta retornada em modo de integração real com a API do Pipeimob.",
+                    "value": {
+                        "data_mode": "live",
+                        "source": "pipeimob_api_v2",
+                        "generated_at": "2026-07-15T12:00:00Z",
+                        "data": {
+                            "count": 0,
+                            "transactions": []
+                        }
+                    }
+                },
+                {
+                    "summary": "Resposta demo — somente desenvolvimento/testes",
+                    "description": "Exemplo demonstrativo utilizado apenas em desenvolvimento ou testes. Não representa dados reais do Pipeimob.",
+                    "value": {
+                        "data_mode": "demo",
+                        "source": "synthetic_mock",
+                        "generated_at": "2026-07-15T12:00:00Z",
+                        "data": {
+                            "count": 60,
+                            "transactions": []
+                        }
+                    }
+                }
+            ]
+        }
+    }
+
+class TransactionDetailResponse(BaseModel):
+    data_mode: str = Field(..., description="Active data mode: demo, live, or unconfigured", json_schema_extra={"example": "live"})
+    source: str = Field(..., description="Source of data", json_schema_extra={"example": "pipeimob_api_v2"})
+    generated_at: str = Field(..., description="ISO-8601 UTC timestamp", json_schema_extra={"example": "2026-07-15T12:00:00Z"})
+    data: dict = Field(..., description="Detailed transaction object")
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "summary": "Resposta live — exemplo estrutural",
+                    "description": "Resposta retornada em modo de integração real com a API do Pipeimob.",
+                    "value": {
+                        "data_mode": "live",
+                        "source": "pipeimob_api_v2",
+                        "generated_at": "2026-07-15T12:00:00Z",
+                        "data": {}
+                    }
+                },
+                {
+                    "summary": "Resposta demo — somente desenvolvimento/testes",
+                    "description": "Exemplo demonstrativo utilizado apenas em desenvolvimento ou testes. Não representa dados reais do Pipeimob.",
+                    "value": {
+                        "data_mode": "demo",
+                        "source": "synthetic_mock",
+                        "generated_at": "2026-07-15T12:00:00Z",
+                        "data": {}
+                    }
+                }
+            ]
+        }
+    }
+
+class SummaryDataPayload(BaseModel):
+    total_sales: float = Field(..., description="Sum of all contract values", json_schema_extra={"example": 323764790.0})
+    total_commissions: float = Field(..., description="Sum of all commission values", json_schema_extra={"example": 17409771.0})
+    avg_commission_rate: float = Field(..., description="Weighted average commission percentage", json_schema_extra={"example": 5.50})
+    transaction_count: int = Field(..., description="Total count of deals/transactions", json_schema_extra={"example": 60})
+
+class DashboardSummaryResponse(BaseModel):
+    data_mode: str = Field(..., json_schema_extra={"example": "live"})
+    source: str = Field(..., json_schema_extra={"example": "pipeimob_api_v2"})
+    generated_at: str = Field(..., json_schema_extra={"example": "2026-07-15T12:00:00Z"})
+    data: SummaryDataPayload = Field(...)
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "summary": "Resposta live — exemplo estrutural",
+                    "description": "Resposta retornada em modo de integração real com a API do Pipeimob.",
+                    "value": {
+                        "data_mode": "live",
+                        "source": "pipeimob_api_v2",
+                        "generated_at": "2026-07-15T12:00:00Z",
+                        "data": {
+                            "total_sales": 1000000.0,
+                            "total_commissions": 60000.0,
+                            "avg_commission_rate": 6.0,
+                            "transaction_count": 1
+                        }
+                    }
+                },
+                {
+                    "summary": "Resposta demo — somente desenvolvimento/testes",
+                    "description": "Exemplo demonstrativo utilizado apenas em desenvolvimento ou testes. Não representa dados reais do Pipeimob.",
+                    "value": {
+                        "data_mode": "demo",
+                        "source": "synthetic_mock",
+                        "generated_at": "2026-07-15T12:00:00Z",
+                        "data": {
+                            "total_sales": 145800000.0,
+                            "total_commissions": 8715600.0,
+                            "avg_commission_rate": 5.98,
+                            "transaction_count": 60
+                        }
+                    }
+                }
+            ]
+        }
+    }
+
+class OriginMetric(BaseModel):
+    origin: str = Field(..., description="Lead source name", json_schema_extra={"example": "PORTAL ZAP"})
+    count: int = Field(..., description="Number of transactions from this origin", json_schema_extra={"example": 15})
+    volume: float = Field(..., description="Total sales volume from this origin", json_schema_extra={"example": 12500000.0})
+
+class OriginsDataPayload(BaseModel):
+    origins: List[OriginMetric] = Field(...)
+
+class DashboardOriginsResponse(BaseModel):
+    data_mode: str = Field(..., json_schema_extra={"example": "live"})
+    source: str = Field(..., json_schema_extra={"example": "pipeimob_api_v2"})
+    generated_at: str = Field(..., json_schema_extra={"example": "2026-07-15T12:00:00Z"})
+    data: OriginsDataPayload = Field(...)
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "summary": "Resposta live — exemplo estrutural",
+                    "description": "Resposta retornada em modo de integração real com a API do Pipeimob.",
+                    "value": {
+                        "data_mode": "live",
+                        "source": "pipeimob_api_v2",
+                        "generated_at": "2026-07-15T12:00:00Z",
+                        "data": {
+                            "origins": []
+                        }
+                    }
+                },
+                {
+                    "summary": "Resposta demo — somente desenvolvimento/testes",
+                    "description": "Exemplo demonstrativo utilizado apenas em desenvolvimento ou testes. Não representa dados reais do Pipeimob.",
+                    "value": {
+                        "data_mode": "demo",
+                        "source": "synthetic_mock",
+                        "generated_at": "2026-07-15T12:00:00Z",
+                        "data": {
+                            "origins": [
+                                {
+                                    "origin": "Indicação Direta",
+                                    "count": 9,
+                                    "volume": 24240000.0
+                                }
+                            ]
+                        }
+                    }
+                }
+            ]
+        }
+    }
+
+class StageMetric(BaseModel):
+    stage: str = Field(..., description="Pipeline stage name", json_schema_extra={"example": "Fechamento"})
+    count: int = Field(..., description="Number of transactions in this stage", json_schema_extra={"example": 12})
+    volume: float = Field(..., description="Total sales volume in this stage", json_schema_extra={"example": 18500000.0})
+
+class StagesDataPayload(BaseModel):
+    stages: List[StageMetric] = Field(...)
+
+class DashboardStagesResponse(BaseModel):
+    data_mode: str = Field(..., json_schema_extra={"example": "live"})
+    source: str = Field(..., json_schema_extra={"example": "pipeimob_api_v2"})
+    generated_at: str = Field(..., json_schema_extra={"example": "2026-07-15T12:00:00Z"})
+    data: StagesDataPayload = Field(...)
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "summary": "Resposta live — exemplo estrutural",
+                    "description": "Resposta retornada em modo de integração real com a API do Pipeimob.",
+                    "value": {
+                        "data_mode": "live",
+                        "source": "pipeimob_api_v2",
+                        "generated_at": "2026-07-15T12:00:00Z",
+                        "data": {
+                            "stages": []
+                        }
+                    }
+                },
+                {
+                    "summary": "Resposta demo — somente desenvolvimento/testes",
+                    "description": "Exemplo demonstrativo utilizado apenas em desenvolvimento ou testes. Não representa dados reais do Pipeimob.",
+                    "value": {
+                        "data_mode": "demo",
+                        "source": "synthetic_mock",
+                        "generated_at": "2026-07-15T12:00:00Z",
+                        "data": {
+                            "stages": [
+                                {
+                                    "stage": "Fechamento",
+                                    "count": 12,
+                                    "volume": 18500000.0
+                                }
+                            ]
+                        }
+                    }
+                }
+            ]
+        }
+    }
+
+class ManagerMetric(BaseModel):
+    manager: str = Field(..., description="Name of the agent/manager", json_schema_extra={"example": "Corretor Alfa"})
+    count: int = Field(..., description="Number of deals closed", json_schema_extra={"example": 10})
+    volume: float = Field(..., description="Total sales volume closed", json_schema_extra={"example": 15210759.0})
+    ticket_medio: float = Field(..., description="Average contract value", json_schema_extra={"example": 1521075.9})
+
+class ManagersDataPayload(BaseModel):
+    managers: List[ManagerMetric] = Field(...)
+
+class DashboardManagersResponse(BaseModel):
+    data_mode: str = Field(..., json_schema_extra={"example": "live"})
+    source: str = Field(..., json_schema_extra={"example": "pipeimob_api_v2"})
+    generated_at: str = Field(..., json_schema_extra={"example": "2026-07-15T12:00:00Z"})
+    data: ManagersDataPayload = Field(...)
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "summary": "Resposta live — exemplo estrutural",
+                    "description": "Resposta retornada em modo de integração real com a API do Pipeimob.",
+                    "value": {
+                        "data_mode": "live",
+                        "source": "pipeimob_api_v2",
+                        "generated_at": "2026-07-15T12:00:00Z",
+                        "data": {
+                            "managers": []
+                        }
+                    }
+                },
+                {
+                    "summary": "Resposta demo — somente desenvolvimento/testes",
+                    "description": "Exemplo demonstrativo utilizado apenas em desenvolvimento ou testes. Não representa dados reais do Pipeimob.",
+                    "value": {
+                        "data_mode": "demo",
+                        "source": "synthetic_mock",
+                        "generated_at": "2026-07-15T12:00:00Z",
+                        "data": {
+                            "managers": [
+                                {
+                                    "manager": "Corretor Alfa",
+                                    "count": 10,
+                                    "volume": 15210759.0,
+                                    "ticket_medio": 1521075.9
+                                }
+                            ]
+                        }
+                    }
+                }
+            ]
+        }
+    }
+
+class BankMetric(BaseModel):
+    bank: str = Field(..., description="Name of financing bank", json_schema_extra={"example": "Instituição A"})
+    count: int = Field(..., description="Number of financed deals", json_schema_extra={"example": 15})
+    volume: float = Field(..., description="Total contract value volume", json_schema_extra={"example": 18200000.0})
+
+class PaymentMethodMetric(BaseModel):
+    method: str = Field(..., description="Payment method name", json_schema_extra={"example": "Sinal"})
+    volume: float = Field(..., description="Total volume allocated", json_schema_extra={"example": 6500000.0})
+
+class PaymentsDataPayload(BaseModel):
+    financed_count: int = Field(..., description="Number of financed transactions", json_schema_extra={"example": 40})
+    cash_count: int = Field(..., description="Number of cash/direct transactions", json_schema_extra={"example": 20})
+    financing_ratio: float = Field(..., description="Percentage of deals financed", json_schema_extra={"example": 66.67})
+    banks: List[BankMetric] = Field(..., description="Financing banks distribution")
+    methods: List[PaymentMethodMetric] = Field(..., description="Payment methods distribution")
+
+class DashboardPaymentsResponse(BaseModel):
+    data_mode: str = Field(..., json_schema_extra={"example": "live"})
+    source: str = Field(..., json_schema_extra={"example": "pipeimob_api_v2"})
+    generated_at: str = Field(..., json_schema_extra={"example": "2026-07-15T12:00:00Z"})
+    data: PaymentsDataPayload = Field(...)
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "summary": "Resposta live — exemplo estrutural",
+                    "description": "Resposta retornada em modo de integração real com a API do Pipeimob.",
+                    "value": {
+                        "data_mode": "live",
+                        "source": "pipeimob_api_v2",
+                        "generated_at": "2026-07-15T12:00:00Z",
+                        "data": {
+                            "financed_count": 0,
+                            "cash_count": 0,
+                            "financing_ratio": 0.0,
+                            "banks": [],
+                            "methods": []
+                        }
+                    }
+                },
+                {
+                    "summary": "Resposta demo — somente desenvolvimento/testes",
+                    "description": "Exemplo demonstrativo utilizado apenas em desenvolvimento ou testes. Não representa dados reais do Pipeimob.",
+                    "value": {
+                        "data_mode": "demo",
+                        "source": "synthetic_mock",
+                        "generated_at": "2026-07-15T12:00:00Z",
+                        "data": {
+                            "financed_count": 40,
+                            "cash_count": 20,
+                            "financing_ratio": 66.67,
+                            "banks": [],
+                            "methods": []
+                        }
+                    }
+                }
+            ]
+        }
+    }
+
+class CommissionMetric(BaseModel):
+    transaction_id: str = Field(..., description="Transaction unique ID", json_schema_extra={"example": "tx_demo_101"})
+    contract_code: str = Field(..., description="Contract code / ID Negócio", json_schema_extra={"example": "CONTRATO-DEMO-1001"})
+    value: float = Field(..., description="Contract value", json_schema_extra={"example": 1750000.0})
+    commission: float = Field(..., description="Total commission value", json_schema_extra={"example": 105000.0})
+    rate: float = Field(..., description="Commission rate percentage", json_schema_extra={"example": 6.0})
+    manager: str = Field(..., description="Agent manager", json_schema_extra={"example": "Corretor Alfa"})
+
+class CommissionsDataPayload(BaseModel):
+    total_commissions: float = Field(..., description="Sum of all commissions", json_schema_extra={"example": 17409771.0})
+    avg_commission_rate: float = Field(..., description="Overall average commission rate percentage", json_schema_extra={"example": 5.50})
+    commissions: List[CommissionMetric] = Field(..., description="List of individual commission rates")
+
+class DashboardCommissionsResponse(BaseModel):
+    data_mode: str = Field(..., json_schema_extra={"example": "live"})
+    source: str = Field(..., json_schema_extra={"example": "pipeimob_api_v2"})
+    generated_at: str = Field(..., json_schema_extra={"example": "2026-07-15T12:00:00Z"})
+    data: CommissionsDataPayload = Field(...)
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "summary": "Resposta live — exemplo estrutural",
+                    "description": "Resposta retornada em modo de integração real com a API do Pipeimob.",
+                    "value": {
+                        "data_mode": "live",
+                        "source": "pipeimob_api_v2",
+                        "generated_at": "2026-07-15T12:00:00Z",
+                        "data": {
+                            "total_commissions": 0.0,
+                            "avg_commission_rate": 0.0,
+                            "commissions": []
+                        }
+                    }
+                },
+                {
+                    "summary": "Resposta demo — somente desenvolvimento/testes",
+                    "description": "Exemplo demonstrativo utilizado apenas em desenvolvimento ou testes. Não representa dados reais do Pipeimob.",
+                    "value": {
+                        "data_mode": "demo",
+                        "source": "synthetic_mock",
+                        "generated_at": "2026-07-15T12:00:00Z",
+                        "data": {
+                            "total_commissions": 17409771.0,
+                            "avg_commission_rate": 5.50,
+                            "commissions": []
+                        }
+                    }
+                }
+            ]
+        }
+    }
+
+class DashboardTimelineMetric(BaseModel):
+    bucket_key: str = Field(..., description="Unique key for the bucket (e.g. 2026-07-01, 2026-07-06_2026-07-12, 2026-07)")
+    period_start: str = Field(..., description="Start date of the bucket period (YYYY-MM-DD)")
+    period_end: str = Field(..., description="End date of the bucket period (YYYY-MM-DD)")
+    label: str = Field(..., description="Display label for the bucket (e.g. 06–12 jul, 01/07, Jul/26)")
+    month: Optional[str] = Field(None, description="Month key (YYYY-MM) for month granularity, None for day/week")
+    transaction_count: int = Field(..., description="Number of transactions during the bucket period")
+    total_sales: str = Field(..., description="Total sales volume as string")
+    total_commissions: str = Field(..., description="Total commissions as string")
+    average_commission_rate: float = Field(0.0, description="Weighted average commission rate percentage for the bucket")
+
+class TimelineMetric(BaseModel):
+    month: str = Field(..., description="Month key (e.g. YYYY-MM)", json_schema_extra={"example": "2026-01"})
+    label: str = Field(..., description="Month/Year label (e.g. Jan/26)", json_schema_extra={"example": "Jan/26"})
+    transaction_count: int = Field(..., description="Number of transactions during the month", json_schema_extra={"example": 12})
+    total_sales: str = Field(..., description="Total sales volume during the month as string", json_schema_extra={"example": "15000000.00"})
+    total_commissions: str = Field(..., description="Total commissions during the month as string", json_schema_extra={"example": "50000.00"})
+
+class UnclassifiedTimeline(BaseModel):
+    transaction_count: int = Field(..., description="Number of unclassified transactions")
+    total_sales: str = Field(..., description="Total sales volume of unclassified transactions as string")
+    total_commissions: str = Field(..., description="Total commissions of unclassified transactions as string")
+    missing_date_count: int = Field(..., description="Number of transactions missing date field completely")
+    invalid_date_count: int = Field(..., description="Number of transactions with invalid/unparseable date string")
+    out_of_range_count: int = Field(0, description="Number of transactions with valid dates but outside requested period")
+
+class TimelineReconciliation(BaseModel):
+    summary_transaction_count: int = Field(..., description="Total transactions in summary")
+    timeline_transaction_count: int = Field(..., description="Total classified transactions in timeline")
+    unclassified_transaction_count: int = Field(..., description="Total unclassified transactions")
+    is_reconciled: bool = Field(..., description="Flag indicating if timeline count + unclassified count equals summary count")
+
+class TimelineDataPayload(BaseModel):
+    timeline: List[TimelineMetric] = Field(...)
+    unclassified: UnclassifiedTimeline = Field(...)
+    reconciliation: TimelineReconciliation = Field(...)
+
+class DashboardTimelineResponse(BaseModel):
+    data_mode: str = Field(..., json_schema_extra={"example": "live"})
+    source: str = Field(..., json_schema_extra={"example": "pipeimob_api_v2"})
+    generated_at: str = Field(..., json_schema_extra={"example": "2026-07-15T12:00:00Z"})
+    data: TimelineDataPayload = Field(...)
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "summary": "Resposta live — exemplo estrutural",
+                    "description": "Resposta retornada em modo de integração real com a API do Pipeimob.",
+                    "value": {
+                        "data_mode": "live",
+                        "source": "pipeimob_api_v2",
+                        "generated_at": "2026-07-15T12:00:00Z",
+                        "data": {
+                            "timeline": []
+                        }
+                    }
+                },
+                {
+                    "summary": "Resposta demo — somente desenvolvimento/testes",
+                    "description": "Exemplo demonstrativo utilizado apenas em desenvolvimento ou testes. Não representa dados reais do Pipeimob.",
+                    "value": {
+                        "data_mode": "demo",
+                        "source": "synthetic_mock",
+                        "generated_at": "2026-07-15T12:00:00Z",
+                        "data": {
+                            "timeline": [
+                                {
+                                    "month": "Jan/26",
+                                    "volume": 15000000.0,
+                                    "count": 12
+                                }
+                            ]
+                        }
+                    }
+                }
+            ]
+        }
+    }
+
+class VGCComposition(BaseModel):
+    gralha: str
+    demais_participantes: str
+    reconciliation_difference: str
+    reconciled: bool
+
+class VGCReceived(BaseModel):
+    total: str
+    gralha: str
+    demais_participantes: str
+    transaction_count: int
+
+class VGCPending(BaseModel):
+    total: str
+    gralha: str
+    demais_participantes: str
+    transaction_count: int
+    without_date_count: int
+
+class VGCUnknown(BaseModel):
+    total: str
+    gralha: str
+    demais_participantes: str
+    transaction_count: int
+    invalid_date_count: int
+    future_date_count: int
+
+class ReceiptDateSources(BaseModel):
+    data_recebimento_comissao: int
+    data_pagamento_comissao: int
+    data_pagamento_comissao_prevista: Optional[int] = None
+    missing: int
+
+class VGCCompositionDetail(BaseModel):
+    amount: str
+    ratio: float
+    received: str
+    pending: str
+    unknown: str
+
+class VGCCompositionTotal(BaseModel):
+    amount: str
+    ratio: float = 1.0
+
+class VGCCompositionDataQuality(BaseModel):
+    records_count: int
+    valid_split_count: int
+    valid_zero_company_share_count: int
+    missing_array_count: int
+    malformed_array_count: int
+    invalid_item_value_count: int
+    reconciliation_mismatch_count: int
+    reconciliation_difference: str
+
+class VGCCompositionV2(BaseModel):
+    source_field: str = "comissionados[].comissionado_valor"
+    company_identification_rule: str = "comissionado_imobiliária_or_comissionado_filial"
+    calculation_status: str = "validated"
+    total: VGCCompositionTotal
+    gralha: VGCCompositionDetail
+    demais_participantes: VGCCompositionDetail
+    corretores_equipe: VGCCompositionDetail
+    unclassified: VGCCompositionDetail
+    data_quality: VGCCompositionDataQuality
+
+class ReceiptDataQuality(BaseModel):
+    received_date_count: int
+    missing_date_count: int
+    invalid_date_count: int
+    future_date_count: int
+
+class CommissionFinancials(BaseModel):
+    period_basis: str = "ccv"
+    as_of_date: str
+    timezone: str = "America/Sao_Paulo"
+    calculation_method: str = "registered_receipt_date_v1"
+    allocation_method: str = "status_only"
+    receipt_date_sources: ReceiptDateSources
+    vgc_total: str
+    composition: Optional[VGCComposition] = None
+    vgc_composition: VGCCompositionV2
+    received: VGCReceived
+    pending: VGCPending
+    unknown: VGCUnknown
+    received_ratio: float
+    semantic_validation: str = "provisional_v1"
+    disclaimer: Optional[str] = None
+    received_transactions_count: int
+    pending_transactions_count: int
+    unknown_transactions_count: int
+    receipt_data_quality: ReceiptDataQuality
+
+class SalesCycleBucket(BaseModel):
+    key: str
+    label: str
+    min_days: int
+    max_days: Optional[int] = None
+    count: int
+    ratio: float
+
+class SalesCycleTimelineItem(BaseModel):
+    month: str
+    label: str
+    transaction_count: int
+    average_days: float
+    median_days: float
+    p75_days: float
+    within_90_days_count: int
+    within_90_days_ratio: float
+
+class SalesCycleExcluded(BaseModel):
+    missing_capture_date_count: int
+    missing_signature_date_count: int
+    invalid_date_count: int
+    negative_duration_count: int
+
+class SalesCycleExtreme(BaseModel):
+    days: int
+    property_code: Optional[str] = None
+    deal_title: Optional[str] = None
+
+class SalesCyclePayload(BaseModel):
+    period_basis: str = "ccv"
+    start_field: str = "data_captacao"
+    end_field: str = "data_assinatura_ccv"
+    calculation_unit: str = "days"
+    transaction_count: int
+    valid_transaction_count: int
+    excluded: SalesCycleExcluded
+    average_days: float
+    median_days: float
+    p25_days: float
+    p75_days: float
+    p90_days: float
+    minimum_days: int
+    maximum_days: int
+    within_30_days_count: int
+    within_60_days_count: int
+    within_90_days_count: int
+    within_90_days_ratio: float
+    buckets: List[SalesCycleBucket]
+    timeline: List[SalesCycleTimelineItem]
+    fastest_sale: Optional[SalesCycleExtreme] = None
+    longest_sale: Optional[SalesCycleExtreme] = None
+
+class DashboardPeriod(BaseModel):
+    start: Optional[str] = None
+    end: Optional[str] = None
+
+class DataQualityIssue(BaseModel):
+    id: str
+    severity: str
+    title: str
+    description: str
+    affected_agents_count: int
+    affected_transactions_count: int
+    impact: str
+    pipeimob_location: str
+    correction_steps: List[str]
+
+class DataQualityAgentDetail(BaseModel):
+    agent_name: str
+    confirmed_issue_ids: List[str]
+    review_issue_ids: List[str]
+    current_team_values: List[str]
+    branch_value: Optional[str] = None
+    affected_transactions_count: int
+
+class DataQualitySummary(BaseModel):
+    status: str
+    distinct_agents_count: int
+    compliant_agents_count: int
+    affected_agents_count: int
+    review_only_agents_count: int
+    compliant_transactions_count: int
+    affected_transactions_count: int
+    review_only_transactions_count: int
+    unassigned_manager_transactions_count: int
+    agent_compliance_ratio: float
+    transaction_compliance_ratio: float
+
+class DataQualityTeams(BaseModel):
+    source_fields: dict
+    configuration_status: str
+    official_teams_configured: bool
+    official_teams: List[str]
+    issues: List[DataQualityIssue]
+    affected_agents: List[DataQualityAgentDetail]
+    review_agents: List[DataQualityAgentDetail]
+    reconciliation: dict
+
+class DataQualityPayload(BaseModel):
+    period_basis: str
+    generated_at: str
+    transaction_count: int
+    summary: DataQualitySummary
+    teams: DataQualityTeams
+
+class DashboardFullResponse(BaseModel):
+    data_mode: str
+    source: str
+    period: DashboardPeriod
+    requested_granularity: str = "month"
+    applied_granularity: str = "month"
+    available_granularities: List[str] = Field(default_factory=lambda: ["day", "week", "month"])
+    pages_fetched: int
+    transaction_count: int
+    summary: SummaryDataPayload
+    origins: List[OriginMetric]
+    stages: List[StageMetric]
+    managers: List[ManagerMetric]
+    payments: PaymentsDataPayload
+    commissions: CommissionsDataPayload
+    timeline: List[DashboardTimelineMetric]
+    unclassified: Optional[UnclassifiedTimeline] = None
+    reconciliation: Optional[TimelineReconciliation] = None
+    sales_cycle: Optional[SalesCyclePayload] = None
+    schema_version: Optional[str] = "1.0"
+    generated_at: Optional[str] = None
+    filters_applied: Optional[dict] = None
+    commission_financials: Optional[CommissionFinancials] = None
+    debug_metrics: Optional[dict] = None
+    data_quality: Optional[DataQualityPayload] = None
+
+# Helper to format and add X-Data-Mode response headers
+def get_metadata_wrapper(data_mode: str, source: str):
+    timestamp_utc = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return {
+        "data_mode": data_mode,
+        "source": source,
+        "generated_at": timestamp_utc
+    }
+# Endpoint routes
+@app.get(
+    "/api/health",
+    response_model=HealthResponse,
+    summary="Get Service Health Status",
+    description="Returns HTTP 200 and health info when service is running. Does not perform auth or external network calls."
+)
+async def get_health():
+    timestamp_utc = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    data_mode, conn_status = get_current_data_mode_and_connection()
+
+    return HealthResponse(
+        status="ok",
+        service="pipeimob-report",
+        version="0.1.0",
+        api_version="v2",
+        pipeimob_connection=conn_status,
+        data_mode=data_mode,
+        timestamp=timestamp_utc
+    )
+
+@app.get(
+    "/api/catalog",
+    response_model=CatalogResponse,
+    summary="Get Resource Catalog",
+    description="Returns the integration roadmap status, available fields, filters and pending items for Pipeimob resources."
+)
+async def get_catalog():
+    transactions_resource = ResourceCatalog(
+        id="transactions",
+        name="Transações",
+        backend_endpoint="/api/transactions",
+        pipeimob_endpoint="/api/v2/negocios/transacoes",
+        status="implemented_pending_live_validation",
+        implemented=True,
+        validated=False,
+        description="Transações comerciais do Pipeimob",
+        primary_key="transacao_unique_id_pipeimob",
+        available_fields=[
+            "transacao_unique_id_pipeimob",
+            "codigo_contrato",
+            "codigo_imovel",
+            "etapa_atual",
+            "data_contrato",
+            "data_inicio_venda",
+            "valor_contrato",
+            "total_comissao",
+            "comissao_imobiliaria",
+            "agente_gestor",
+            "midia_origem_compradores",
+            "forma_pagamento",
+            "comissionados",
+            "clientes"
+        ],
+        supported_filters=[
+            "data_inicio_criacao",
+            "data_fim_criacao",
+            "data_inicio_ccv",
+            "data_fim_ccv",
+            "data_arquivamento_inicio",
+            "data_arquivamento_fim",
+            "codigo_imovel",
+            "codigo_contrato",
+            "transacao_unique_id"
+        ],
+        filters_api_direct=[
+            "data_inicio_criacao",
+            "data_fim_criacao",
+            "data_inicio_ccv",
+            "data_fim_ccv",
+            "data_arquivamento_inicio",
+            "data_arquivamento_fim",
+            "codigo_imovel",
+            "codigo_contrato",
+            "transacao_unique_id"
+        ],
+        filters_local_backend=[
+            "agent",
+            "category",
+            "financing",
+            "etapa_atual"
+        ],
+        pagination_parameters=[
+            "pagina"
+        ],
+        pending_items=[
+            "etapa_atual é texto livre",
+            "agrupamentos por etapa exigem normalização local"
+        ]
+    )
+
+    return CatalogResponse(
+        api_version="v2",
+        resources=[transactions_resource]
+    )
+
+_jwk_clients = {}
+
+def get_jwk_client(jwks_url: Optional[str] = None):
+    """Return one cached JWKS client per explicitly trusted Supabase project."""
+    global _jwk_clients
+    jwks_url = jwks_url or os.getenv("SUPABASE_JWKS_URL")
+    if not jwks_url:
+        return None
+    if jwks_url not in _jwk_clients:
+        from jwt import PyJWKClient
+        _jwk_clients[jwks_url] = PyJWKClient(jwks_url)
+    return _jwk_clients[jwks_url]
+
+
+def _configured_asymmetric_auth_projects():
+    """Build the exact issuer -> JWKS allowlist used for asymmetric JWTs."""
+    projects = []
+    primary_issuer = os.getenv("SUPABASE_ISSUER")
+    primary_jwks_url = os.getenv("SUPABASE_JWKS_URL")
+    secondary_issuer = os.getenv("SUPABASE_SECONDARY_ISSUER")
+    secondary_jwks_url = os.getenv("SUPABASE_SECONDARY_JWKS_URL")
+
+    if primary_issuer and primary_jwks_url:
+        projects.append((primary_issuer.rstrip("/"), primary_jwks_url))
+
+    if bool(secondary_issuer) != bool(secondary_jwks_url):
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Server configuration error: SUPABASE_SECONDARY_ISSUER and "
+                "SUPABASE_SECONDARY_JWKS_URL must be configured together."
+            ),
+        )
+
+    if secondary_issuer and secondary_jwks_url:
+        normalized_secondary = secondary_issuer.rstrip("/")
+        if not any(issuer == normalized_secondary for issuer, _ in projects):
+            projects.append((normalized_secondary, secondary_jwks_url))
+
+    return projects
+
+
+authorization_role_status = "unresolved"
+
+
+def _log_auth_failure(reason: str, *, alg: Optional[str] = None, error_type: Optional[str] = None) -> None:
+    """Registra somente metadados seguros para diagnosticar rejeições JWT."""
+    event = {
+        "event": "auth_validation_failed",
+        "reason": reason,
+    }
+    if alg:
+        event["alg"] = alg
+    if error_type:
+        event["error_type"] = error_type
+    print(f"SECURE_LOG: {json.dumps(event)}")
+
+def get_db_session():
+    try:
+        from database import SessionLocal
+        if not SessionLocal:
+            session_factory = None
+        else:
+            session_factory = SessionLocal
+    except Exception:
+        session_factory = None
+
+    if session_factory is None:
+        yield None
+        return
+
+    db = session_factory()
+    try:
+        yield db
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+@app.exception_handler(DatasetWarmingError)
+async def dataset_warming_exception_handler(request: Request, exc: DatasetWarmingError):
+    return JSONResponse(
+        status_code=503,
+        headers={"Retry-After": str(exc.retry_after)},
+        content={
+            "code": "dataset_warming",
+            "error_code": "dataset_warming",
+            "retry_after_seconds": exc.retry_after,
+            "detail": "O dataset do Pipeimob está sendo carregado no servidor. Por favor, tente novamente em alguns segundos."
+        }
+    )
+
+class AuthException(Exception):
+    def __init__(self, status_code: int, detail: str, error_code: str):
+        self.status_code = status_code
+        self.detail = detail
+        self.error_code = error_code
+
+@app.exception_handler(AuthException)
+async def auth_exception_handler(request: Request, exc: AuthException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "detail": exc.detail,
+            "error_code": exc.error_code
+        }
+    )
+
+# CORS Configuration
+allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "")
+allowed_origins: List[str] = []
+if allowed_origins_env:
+    allowed_origins = [o.strip() for o in allowed_origins_env.split(",") if o.strip()]
+else:
+    allowed_origins = ["*"]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_origin_regex=r"https://.*--happy-data-hugger\.lovable\.app",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.get(
+    "/api/version",
+    summary="Get Service Build Version Info",
+    description="Returns the deployed commit hash and environment."
+)
+async def get_version():
+    commit_hash = os.getenv("RENDER_GIT_COMMIT") or "unknown"
+    app_env = os.getenv("APP_ENV", "production").lower()
+    res = {
+        "commit_hash": commit_hash,
+        "app_env": app_env
+    }
+    if app_env != "production":
+        branch = os.getenv("RENDER_GIT_BRANCH")
+        if branch:
+            res["branch"] = branch
+    return res
+
+
+
+async def verify_backend_api_key(
+    authorization: Optional[str] = Header(None)
+):
+    import jwt
+    import time
+
+    if not authorization:
+        _log_auth_failure("authorization_missing")
+        raise AuthException(
+            status_code=401,
+            detail="Authentication required.",
+            error_code="authentication_required"
+        )
+
+    if not authorization.startswith("Bearer "):
+        _log_auth_failure("authorization_scheme_invalid")
+        raise AuthException(
+            status_code=401,
+            detail="Invalid or expired access token.",
+            error_code="invalid_access_token"
+        )
+
+    token = authorization.split(" ")[1]
+
+    try:
+        app_env = os.getenv("APP_ENV", "production").lower()
+        jwt_secret = os.getenv("SUPABASE_JWT_SECRET") or ("secret" if app_env not in ["production", "staging"] else None)
+        expected_aud = os.getenv("SUPABASE_JWT_AUDIENCE", "authenticated")
+        expected_iss = os.getenv("SUPABASE_ISSUER")
+
+        if app_env in ["production", "staging"] and not expected_iss:
+            raise HTTPException(
+                status_code=500,
+                detail="Server configuration error: SUPABASE_ISSUER environment variable is required in production and staging."
+            )
+
+        try:
+            header = jwt.get_unverified_header(token)
+            alg = header.get("alg")
+        except Exception as exc:
+            _log_auth_failure("token_header_invalid", error_type=type(exc).__name__)
+            raise AuthException(
+                status_code=401,
+                detail="Invalid or expired access token.",
+                error_code="invalid_access_token"
+            )
+
+        ALLOWED_ALGORITHMS = ["HS256", "RS256", "ES256"]
+        if not alg or alg not in ALLOWED_ALGORITHMS:
+            _log_auth_failure("algorithm_not_allowed", alg=alg)
+            raise AuthException(
+                status_code=401,
+                detail="Invalid or expired access token.",
+                error_code="invalid_access_token"
+            )
+
+        if alg == "HS256":
+            if not jwt_secret:
+                _log_auth_failure("hs256_secret_missing", alg=alg)
+                raise AuthException(
+                    status_code=401,
+                    detail="Invalid or expired access token.",
+                    error_code="invalid_access_token"
+                )
+            try:
+                payload = jwt.decode(
+                    token,
+                    jwt_secret,
+                    algorithms=["HS256"],
+                    audience=expected_aud,
+                    issuer=expected_iss,
+                    options={"require": ["exp", "sub"]}
+                )
+            except AuthException:
+                raise
+            except Exception as exc:
+                _log_auth_failure("hs256_decode_failed", alg=alg, error_type=type(exc).__name__)
+                raise AuthException(
+                    status_code=401,
+                    detail="Invalid or expired access token.",
+                    error_code="invalid_access_token"
+                )
+
+        elif alg in ["RS256", "ES256"]:
+            # Require 'kid' header for asymmetric tokens
+            if not isinstance(header, dict) or "kid" not in header or not header["kid"]:
+                _log_auth_failure("asymmetric_kid_missing", alg=alg)
+                raise AuthException(
+                    status_code=401,
+                    detail="Invalid or expired access token.",
+                    error_code="invalid_access_token"
+                )
+
+            auth_projects = _configured_asymmetric_auth_projects()
+            if not auth_projects:
+                _log_auth_failure("jwks_url_missing", alg=alg)
+                raise AuthException(
+                    status_code=401,
+                    detail="Invalid or expired access token.",
+                    error_code="invalid_access_token"
+                )
+
+            try:
+                unverified_payload = jwt.decode(
+                    token,
+                    options={
+                        "verify_signature": False,
+                        "verify_aud": False,
+                        "verify_exp": False,
+                    },
+                )
+                token_issuer = str(unverified_payload.get("iss") or "").rstrip("/")
+            except Exception as exc:
+                _log_auth_failure("token_payload_invalid", alg=alg, error_type=type(exc).__name__)
+                raise AuthException(
+                    status_code=401,
+                    detail="Invalid or expired access token.",
+                    error_code="invalid_access_token"
+                )
+
+            selected_project = next(
+                (
+                    (issuer, project_jwks_url)
+                    for issuer, project_jwks_url in auth_projects
+                    if issuer == token_issuer
+                ),
+                None,
+            )
+            if selected_project is None:
+                _log_auth_failure("issuer_not_trusted", alg=alg)
+                raise AuthException(
+                    status_code=401,
+                    detail="Invalid or expired access token.",
+                    error_code="invalid_access_token"
+                )
+
+            expected_iss, jwks_url = selected_project
+
+            from jwt.exceptions import PyJWKClientConnectionError
+            client = get_jwk_client(jwks_url)
+            try:
+                jwk_set = client.get_jwk_set()
+            except PyJWKClientConnectionError:
+                _log_auth_failure("jwks_unavailable", alg=alg)
+                raise AuthException(
+                    status_code=503,
+                    detail="Supabase JWKS service is temporarily unavailable.",
+                    error_code="supabase_jwks_unavailable"
+                )
+            except Exception as exc:
+                _log_auth_failure("jwks_invalid", alg=alg, error_type=type(exc).__name__)
+                raise AuthException(
+                    status_code=503,
+                    detail="Supabase JWKS response is malformed or invalid.",
+                    error_code="supabase_jwks_invalid"
+                )
+
+            if not jwk_set or not hasattr(jwk_set, "keys") or not jwk_set.keys:
+                _log_auth_failure("jwks_empty", alg=alg)
+                raise AuthException(
+                    status_code=503,
+                    detail="Supabase JWKS response is empty or invalid.",
+                    error_code="supabase_jwks_invalid"
+                )
+
+
+            try:
+                signing_key = client.get_signing_key_from_jwt(token)
+                payload = jwt.decode(
+                    token,
+                    signing_key.key,
+                    algorithms=[alg],
+                    audience=expected_aud,
+                    issuer=expected_iss,
+                    options={"require": ["exp", "sub"]}
+                )
+            except AuthException:
+                raise
+            except Exception as exc:
+                _log_auth_failure("asymmetric_decode_failed", alg=alg, error_type=type(exc).__name__)
+                raise AuthException(
+                    status_code=401,
+                    detail="Invalid or expired access token.",
+                    error_code="invalid_access_token"
+                )
+
+
+        # Additional required claims validation (both JWKS & Dev)
+        # 1. role must be authenticated
+        if payload.get("role") != "authenticated":
+            _log_auth_failure("role_invalid", alg=alg)
+            raise AuthException(
+                status_code=401,
+                detail="Invalid or expired access token.",
+                error_code="invalid_access_token"
+            )
+
+        # 2. email must be present
+        if not payload.get("email") or not isinstance(payload.get("email"), str):
+            _log_auth_failure("email_claim_missing", alg=alg)
+            raise AuthException(
+                status_code=401,
+                detail="Invalid or expired access token.",
+                error_code="invalid_access_token"
+            )
+
+        # 3. sub must be present
+        if not payload.get("sub") or not isinstance(payload.get("sub"), str):
+            _log_auth_failure("subject_claim_missing", alg=alg)
+            raise AuthException(
+                status_code=401,
+                detail="Invalid or expired access token.",
+                error_code="invalid_access_token"
+            )
+
+        # 4. issuer check if expected
+        if expected_iss and payload.get("iss") != expected_iss:
+            _log_auth_failure("issuer_mismatch", alg=alg)
+            raise AuthException(
+                status_code=401,
+                detail="Invalid or expired access token.",
+                error_code="invalid_access_token"
+            )
+
+        # 5. audience check
+        if expected_aud and payload.get("aud") != expected_aud:
+            _log_auth_failure("audience_mismatch", alg=alg)
+            raise AuthException(
+                status_code=401,
+                detail="Invalid or expired access token.",
+                error_code="invalid_access_token"
+            )
+
+    except AuthException:
+        raise
+    except HTTPException:
+        raise
+
+    except jwt.ExpiredSignatureError:
+        raise AuthException(
+            status_code=401,
+            detail="Invalid or expired access token.",
+            error_code="invalid_access_token"
+        )
+    except jwt.InvalidIssuerError:
+        raise AuthException(
+            status_code=401,
+            detail="Invalid or expired access token.",
+            error_code="invalid_access_token"
+        )
+    except jwt.InvalidAudienceError:
+        raise AuthException(
+            status_code=401,
+            detail="Invalid or expired access token.",
+            error_code="invalid_access_token"
+        )
+    except Exception:
+        raise AuthException(
+            status_code=401,
+            detail="Invalid or expired access token.",
+            error_code="invalid_access_token"
+        )
+
+
+
+    user_email = payload.get("email")
+    user_email = user_email.lower().strip()
+    allowed_emails_env = os.getenv("ALLOWED_USER_EMAILS", "")
+    allowed_domains_env = os.getenv("ALLOWED_EMAIL_DOMAINS", "gralhaimoveis.com.br")
+
+    allowed_emails = [e.strip().lower() for e in allowed_emails_env.split(",") if e.strip()]
+    allowed_domains = [d.strip().lower() for d in allowed_domains_env.split(",") if d.strip()]
+
+    email_parts = user_email.split("@")
+    user_domain = email_parts[1] if len(email_parts) > 1 else ""
+
+    is_authorized = False
+    if user_email in allowed_emails:
+        is_authorized = True
+    elif user_domain in allowed_domains:
+        is_authorized = True
+
+    if not is_authorized:
+        raise AuthException(
+            status_code=403,
+            detail="User is not authorized to access this resource.",
+            error_code="forbidden"
+        )
+
+    return payload
+
+def get_and_validate_contracts_control_config() -> set:
+    writes_enabled_raw = os.getenv("CONTRACTS_CONTROL_WRITES_ENABLED", "false").lower()
+    if writes_enabled_raw not in ("true", "false"):
+        raise HTTPException(
+            status_code=503,
+            detail="Invalid configuration: WRITES_ENABLED is not a valid boolean."
+        )
+
+    writes_enabled = (writes_enabled_raw == "true")
+    if not writes_enabled:
+        return set()
+
+    raw_subs = os.getenv("CONTRACTS_CONTROL_ADMIN_SUBS", "")
+    if not raw_subs:
+        raise HTTPException(
+            status_code=503,
+            detail="Invalid configuration: ADMIN_SUBS is empty when writes are enabled."
+        )
+
+    items = raw_subs.split(",")
+    seen = set()
+    for item in items:
+        if not item:
+            raise HTTPException(
+                status_code=503,
+                detail="Invalid configuration: ADMIN_SUBS contains empty entries."
+            )
+        if any(c.isspace() for c in item):
+            raise HTTPException(
+                status_code=503,
+                detail="Invalid configuration: ADMIN_SUBS entries cannot contain spaces."
+            )
+        if item in seen:
+            raise HTTPException(
+                status_code=503,
+                detail="Invalid configuration: ADMIN_SUBS contains duplicate entries."
+            )
+        seen.add(item)
+    return seen
+
+async def require_contracts_control_temporary_admin(
+    payload: dict = Depends(verify_backend_api_key)
+) -> str:
+    sub = payload.get("sub")
+    if not sub:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required: claim sub is missing."
+        )
+
+    admin_subs = get_and_validate_contracts_control_config()
+
+    writes_enabled_raw = os.getenv("CONTRACTS_CONTROL_WRITES_ENABLED", "false").lower()
+    if writes_enabled_raw != "true":
+        raise HTTPException(
+            status_code=403,
+            detail="Contracts Control write operations are disabled."
+        )
+
+    if sub not in admin_subs:
+        raise HTTPException(
+            status_code=403,
+            detail="Contracts Control write operations are unauthorized."
+        )
+    return sub
+
+@app.get(
+    "/api/transactions",
+    response_model=TransactionsListResponse,
+    responses={**RESPONSES_503, **RESPONSES_AUTH},
+    summary="List Transactions",
+    description="Returns list of transactions matching the specified query filters. In live mode, period filters (data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv, data_arquivamento_inicio, data_arquivamento_fim) and direct search filters (codigo_imovel, codigo_contrato, transacao_unique_id) are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. The 'pagina' parameter is a pagination parameter and does NOT satisfy the direct filter requirement on its own. Demo mode is restricted to development and tests.",
+    dependencies=[Depends(verify_backend_api_key)]
+)
+async def get_transactions(
+    response: Response,
+    request: Request,
+    data_inicio_criacao: Optional[str] = Query(None),
+    data_fim_criacao: Optional[str] = Query(None),
+    data_inicio_ccv: Optional[str] = Query(None),
+    data_fim_ccv: Optional[str] = Query(None),
+    data_arquivamento_inicio: Optional[str] = Query(None),
+    data_arquivamento_fim: Optional[str] = Query(None),
+    codigo_imovel: Optional[str] = Query(None),
+    codigo_contrato: Optional[str] = Query(None),
+    transacao_unique_id: Optional[str] = Query(None),
+    pagina: Optional[int] = Query(None),
+    agent: Optional[str] = Query(None),
+    category: Optional[str] = Query(None),
+    financing: Optional[bool] = Query(None),
+    etapa_atual: Optional[str] = Query(None)
+):
+    req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
+    mode, src, dataset, pages_fetched, cache_status = await load_transactions_dataset(
+        data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
+        pagina, request_id=req_id
+    )
+    validate_dataset_origin(mode, src, dataset)
+    filtered = get_filtered_transactions(
+        dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
+        agent, category, financing, etapa_atual
+    )
+
+    exposed_txs = process_transactions_exposure(filtered)
+
+    response.headers["X-Data-Mode"] = mode
+    meta = get_metadata_wrapper(mode, src)
+    meta["data"] = TransactionsDataPayload(count=len(exposed_txs), transactions=exposed_txs)
+    return meta
+
+@app.get(
+    "/api/transactions/{id}",
+    response_model=TransactionDetailResponse,
+    responses={**RESPONSES_503, **RESPONSES_AUTH},
+    summary="Get Transaction by ID",
+    description="Returns the details of a single transaction by ID (transacao_unique_id_pipeimob or codigo_contrato). In live mode, fetches real transaction from Pipeimob. Demo mode is restricted to development and tests.",
+    dependencies=[Depends(verify_backend_api_key)]
+)
+async def get_transaction_by_id(
+    id: str,
+    response: Response,
+    request: Request
+):
+    req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
+    # In live mode we must pass at least one direct filter, so we pass both or try to load by transacao_unique_id or codigo_contrato
+    mode, src, dataset, pages_fetched, cache_status = await load_transactions_dataset(transacao_unique_id=id, request_id=req_id)
+    validate_dataset_origin(mode, src, dataset)
+
+    target_tx = None
+    for tx in dataset:
+        if tx.get("transacao_unique_id_pipeimob") == id or tx.get("codigo_contrato") == id:
+            target_tx = tx
+            break
+
+    if not target_tx:
+        try:
+            mode, src, dataset, pages_fetched, cache_status = await load_transactions_dataset(codigo_contrato=id, request_id=req_id)
+            validate_dataset_origin(mode, src, dataset)
+            for tx in dataset:
+                if tx.get("transacao_unique_id_pipeimob") == id or tx.get("codigo_contrato") == id:
+                    target_tx = tx
+                    break
+        except Exception:
+            pass
+
+    if not target_tx:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+
+    expose_raw = os.getenv("EXPOSE_RAW_TRANSACTIONS", "false").strip().lower() == "true"
+    exposed_tx = target_tx if expose_raw else sanitize_transaction(target_tx)
+
+    response.headers["X-Data-Mode"] = mode
+    meta = get_metadata_wrapper(mode, src)
+    meta["data"] = exposed_tx
+    return meta
+
+@app.get(
+    "/api/dashboard/summary",
+    response_model=DashboardSummaryResponse,
+    responses={**RESPONSES_503, **RESPONSES_AUTH},
+    summary="Get Dashboard BI Summary metrics",
+    description="Computes total sales volume, commissions, weighted avg commission rate, and transaction count. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. The 'pagina' parameter is a pagination parameter and does NOT satisfy the direct filter requirement on its own. Demo mode is restricted to development and tests.",
+    dependencies=[Depends(verify_backend_api_key)]
+)
+async def get_dashboard_summary(
+    response: Response,
+    request: Request,
+    data_inicio_criacao: Optional[str] = Query(None),
+    data_fim_criacao: Optional[str] = Query(None),
+    data_inicio_ccv: Optional[str] = Query(None),
+    data_fim_ccv: Optional[str] = Query(None),
+    data_arquivamento_inicio: Optional[str] = Query(None),
+    data_arquivamento_fim: Optional[str] = Query(None),
+    codigo_imovel: Optional[str] = Query(None),
+    codigo_contrato: Optional[str] = Query(None),
+    transacao_unique_id: Optional[str] = Query(None),
+    pagina: Optional[int] = Query(None),
+    agent: Optional[str] = Query(None),
+    category: Optional[str] = Query(None),
+    financing: Optional[bool] = Query(None),
+    etapa_atual: Optional[str] = Query(None)
+):
+    req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
+    mode, src, dataset, pages_fetched, cache_status = await load_transactions_dataset(
+        data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
+        pagina=None, request_id=req_id
+    )
+    validate_dataset_origin(mode, src, dataset)
+    filtered = get_filtered_transactions(
+        dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
+        agent, category, financing, etapa_atual
+    )
+
+    aggregates = compute_dashboard_aggregates(filtered, data_inicio_ccv, data_fim_ccv, data_inicio_criacao, data_fim_criacao)
+
+    response.headers["X-Data-Mode"] = mode
+    meta = get_metadata_wrapper(mode, src)
+    meta["data"] = SummaryDataPayload(**aggregates["summary"])
+    return meta
+
+@app.get(
+    "/api/dashboard/origins",
+    response_model=DashboardOriginsResponse,
+    responses={**RESPONSES_503, **RESPONSES_AUTH},
+    summary="Get Buyer Origins distribution",
+    description="Groups sales volume and transaction count by lead origin source. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. The 'pagina' parameter is a pagination parameter and does NOT satisfy the direct filter requirement on its own. Demo mode is restricted to development and tests.",
+    dependencies=[Depends(verify_backend_api_key)]
+)
+async def get_dashboard_origins(
+    response: Response,
+    request: Request,
+    data_inicio_criacao: Optional[str] = Query(None),
+    data_fim_criacao: Optional[str] = Query(None),
+    data_inicio_ccv: Optional[str] = Query(None),
+    data_fim_ccv: Optional[str] = Query(None),
+    data_arquivamento_inicio: Optional[str] = Query(None),
+    data_arquivamento_fim: Optional[str] = Query(None),
+    codigo_imovel: Optional[str] = Query(None),
+    codigo_contrato: Optional[str] = Query(None),
+    transacao_unique_id: Optional[str] = Query(None),
+    pagina: Optional[int] = Query(None),
+    agent: Optional[str] = Query(None),
+    category: Optional[str] = Query(None),
+    financing: Optional[bool] = Query(None),
+    etapa_atual: Optional[str] = Query(None)
+):
+    req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
+    mode, src, dataset, pages_fetched, cache_status = await load_transactions_dataset(
+        data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
+        pagina=None, request_id=req_id
+    )
+    validate_dataset_origin(mode, src, dataset)
+    filtered = get_filtered_transactions(
+        dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
+        agent, category, financing, etapa_atual
+    )
+
+    aggregates = compute_dashboard_aggregates(filtered, data_inicio_ccv, data_fim_ccv, data_inicio_criacao, data_fim_criacao)
+
+    response.headers["X-Data-Mode"] = mode
+    meta = get_metadata_wrapper(mode, src)
+    meta["data"] = OriginsDataPayload(origins=[OriginMetric(**o) for o in aggregates["origins"]])
+    return meta
+
+@app.get(
+    "/api/dashboard/stages",
+    response_model=DashboardStagesResponse,
+    responses={**RESPONSES_503, **RESPONSES_AUTH},
+    summary="Get Stages distribution",
+    description="Groups sales volume and transaction count by CRM pipeline stage. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. The 'pagina' parameter is a pagination parameter and does NOT satisfy the direct filter requirement on its own. Demo mode is restricted to development and tests.",
+    dependencies=[Depends(verify_backend_api_key)]
+)
+async def get_dashboard_stages(
+    response: Response,
+    request: Request,
+    data_inicio_criacao: Optional[str] = Query(None),
+    data_fim_criacao: Optional[str] = Query(None),
+    data_inicio_ccv: Optional[str] = Query(None),
+    data_fim_ccv: Optional[str] = Query(None),
+    data_arquivamento_inicio: Optional[str] = Query(None),
+    data_arquivamento_fim: Optional[str] = Query(None),
+    codigo_imovel: Optional[str] = Query(None),
+    codigo_contrato: Optional[str] = Query(None),
+    transacao_unique_id: Optional[str] = Query(None),
+    pagina: Optional[int] = Query(None),
+    agent: Optional[str] = Query(None),
+    category: Optional[str] = Query(None),
+    financing: Optional[bool] = Query(None),
+    etapa_atual: Optional[str] = Query(None)
+):
+    req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
+    mode, src, dataset, pages_fetched, cache_status = await load_transactions_dataset(
+        data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
+        pagina=None, request_id=req_id
+    )
+    validate_dataset_origin(mode, src, dataset)
+    filtered = get_filtered_transactions(
+        dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
+        agent, category, financing, etapa_atual
+    )
+
+    aggregates = compute_dashboard_aggregates(filtered, data_inicio_ccv, data_fim_ccv, data_inicio_criacao, data_fim_criacao)
+
+    response.headers["X-Data-Mode"] = mode
+    meta = get_metadata_wrapper(mode, src)
+    meta["data"] = StagesDataPayload(stages=[StageMetric(**s) for s in aggregates["stages"]])
+    return meta
+
+@app.get(
+    "/api/dashboard/managers",
+    response_model=DashboardManagersResponse,
+    responses={**RESPONSES_503, **RESPONSES_AUTH},
+    summary="Get Manager Leaderboard",
+    description="Computes leaderboard ranking of managers by sales volume, transaction count, and average ticket size. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. The 'pagina' parameter is a pagination parameter and does NOT satisfy the direct filter requirement on its own. Demo mode is restricted to development and tests.",
+    dependencies=[Depends(verify_backend_api_key)]
+)
+async def get_dashboard_managers(
+    response: Response,
+    request: Request,
+    data_inicio_criacao: Optional[str] = Query(None),
+    data_fim_criacao: Optional[str] = Query(None),
+    data_inicio_ccv: Optional[str] = Query(None),
+    data_fim_ccv: Optional[str] = Query(None),
+    data_arquivamento_inicio: Optional[str] = Query(None),
+    data_arquivamento_fim: Optional[str] = Query(None),
+    codigo_imovel: Optional[str] = Query(None),
+    codigo_contrato: Optional[str] = Query(None),
+    transacao_unique_id: Optional[str] = Query(None),
+    pagina: Optional[int] = Query(None),
+    agent: Optional[str] = Query(None),
+    category: Optional[str] = Query(None),
+    financing: Optional[bool] = Query(None),
+    etapa_atual: Optional[str] = Query(None)
+):
+    req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
+    mode, src, dataset, pages_fetched, cache_status = await load_transactions_dataset(
+        data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
+        pagina=None, request_id=req_id
+    )
+    validate_dataset_origin(mode, src, dataset)
+    filtered = get_filtered_transactions(
+        dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
+        agent, category, financing, etapa_atual
+    )
+
+    aggregates = compute_dashboard_aggregates(filtered, data_inicio_ccv, data_fim_ccv, data_inicio_criacao, data_fim_criacao)
+
+    response.headers["X-Data-Mode"] = mode
+    meta = get_metadata_wrapper(mode, src)
+    meta["data"] = ManagersDataPayload(managers=[ManagerMetric(**m) for m in aggregates["managers"]])
+    return meta
+
+@app.get(
+    "/api/dashboard/payments",
+    response_model=DashboardPaymentsResponse,
+    responses={**RESPONSES_503, **RESPONSES_AUTH},
+    summary="Get Payment Methods and Financing distribution",
+    description="Aggregates payment direct vs financing ratio, bank distributions, and detailed signals/methods volumes. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. The 'pagina' parameter is a pagination parameter and does NOT satisfy the direct filter requirement on its own. Demo mode is restricted to development and tests.",
+    dependencies=[Depends(verify_backend_api_key)]
+)
+async def get_dashboard_payments(
+    response: Response,
+    request: Request,
+    data_inicio_criacao: Optional[str] = Query(None),
+    data_fim_criacao: Optional[str] = Query(None),
+    data_inicio_ccv: Optional[str] = Query(None),
+    data_fim_ccv: Optional[str] = Query(None),
+    data_arquivamento_inicio: Optional[str] = Query(None),
+    data_arquivamento_fim: Optional[str] = Query(None),
+    codigo_imovel: Optional[str] = Query(None),
+    codigo_contrato: Optional[str] = Query(None),
+    transacao_unique_id: Optional[str] = Query(None),
+    pagina: Optional[int] = Query(None),
+    agent: Optional[str] = Query(None),
+    category: Optional[str] = Query(None),
+    financing: Optional[bool] = Query(None),
+    etapa_atual: Optional[str] = Query(None)
+):
+    req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
+    mode, src, dataset, pages_fetched, cache_status = await load_transactions_dataset(
+        data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
+        pagina=None, request_id=req_id
+    )
+    validate_dataset_origin(mode, src, dataset)
+    filtered = get_filtered_transactions(
+        dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
+        agent, category, financing, etapa_atual
+    )
+
+    aggregates = compute_dashboard_aggregates(filtered, data_inicio_ccv, data_fim_ccv, data_inicio_criacao, data_fim_criacao)
+
+    response.headers["X-Data-Mode"] = mode
+    meta = get_metadata_wrapper(mode, src)
+    meta["data"] = PaymentsDataPayload(
+        financed_count=aggregates["payments"]["financed_count"],
+        cash_count=aggregates["payments"]["cash_count"],
+        financing_ratio=aggregates["payments"]["financing_ratio"],
+        banks=[BankMetric(**b) for b in aggregates["payments"]["banks"]],
+        methods=[PaymentMethodMetric(**m) for m in aggregates["payments"]["methods"]]
+    )
+    return meta
+
+@app.get(
+    "/api/dashboard/commissions",
+    response_model=DashboardCommissionsResponse,
+    responses={**RESPONSES_503, **RESPONSES_AUTH},
+    summary="Get Commission detailed metrics",
+    description="Returns aggregate commission values and individual contract commission details. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. The 'pagina' parameter is a pagination parameter and does NOT satisfy the direct filter requirement on its own. Demo mode is restricted to development and tests.",
+    dependencies=[Depends(verify_backend_api_key)]
+)
+async def get_dashboard_commissions(
+    response: Response,
+    request: Request,
+    data_inicio_criacao: Optional[str] = Query(None),
+    data_fim_criacao: Optional[str] = Query(None),
+    data_inicio_ccv: Optional[str] = Query(None),
+    data_fim_ccv: Optional[str] = Query(None),
+    data_arquivamento_inicio: Optional[str] = Query(None),
+    data_arquivamento_fim: Optional[str] = Query(None),
+    codigo_imovel: Optional[str] = Query(None),
+    codigo_contrato: Optional[str] = Query(None),
+    transacao_unique_id: Optional[str] = Query(None),
+    pagina: Optional[int] = Query(None),
+    agent: Optional[str] = Query(None),
+    category: Optional[str] = Query(None),
+    financing: Optional[bool] = Query(None),
+    etapa_atual: Optional[str] = Query(None)
+):
+    req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
+    mode, src, dataset, pages_fetched, cache_status = await load_transactions_dataset(
+        data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
+        pagina=None, request_id=req_id
+    )
+    validate_dataset_origin(mode, src, dataset)
+    filtered = get_filtered_transactions(
+        dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
+        agent, category, financing, etapa_atual
+    )
+
+    aggregates = compute_dashboard_aggregates(filtered, data_inicio_ccv, data_fim_ccv, data_inicio_criacao, data_fim_criacao)
+
+    response.headers["X-Data-Mode"] = mode
+    meta = get_metadata_wrapper(mode, src)
+    meta["data"] = CommissionsDataPayload(
+        total_commissions=aggregates["commissions"]["total_commissions"],
+        avg_commission_rate=aggregates["commissions"]["avg_commission_rate"],
+        commissions=[CommissionMetric(**c) for c in aggregates["commissions"]["commissions"]]
+    )
+    return meta
+
+MONTHS_PT = {
+    "01": "Jan", "02": "Fev", "03": "Mar", "04": "Abr", "05": "Mai", "06": "Jun",
+    "07": "Jul", "08": "Ago", "09": "Set", "10": "Out", "11": "Nov", "12": "Dez"
+}
+
+@app.get(
+    "/api/dashboard/timeline",
+    response_model=DashboardTimelineResponse,
+    responses={**RESPONSES_503, **RESPONSES_AUTH},
+    summary="Get Monthly Sales Timeline",
+    description="Groups contract sales volume and count chronologically by month. In live mode, period filters and direct search filters are sent directly to Pipeimob CRM. Local filters (agent, category, financing, etapa_atual) are applied locally by the backend. The 'pagina' parameter is a pagination parameter and does NOT satisfy the direct filter requirement on its own. Demo mode is restricted to development and tests.",
+    dependencies=[Depends(verify_backend_api_key)]
+)
+async def get_dashboard_timeline(
+    response: Response,
+    request: Request,
+    data_inicio_criacao: Optional[str] = Query(None),
+    data_fim_criacao: Optional[str] = Query(None),
+    data_inicio_ccv: Optional[str] = Query(None),
+    data_fim_ccv: Optional[str] = Query(None),
+    data_arquivamento_inicio: Optional[str] = Query(None),
+    data_arquivamento_fim: Optional[str] = Query(None),
+    codigo_imovel: Optional[str] = Query(None),
+    codigo_contrato: Optional[str] = Query(None),
+    transacao_unique_id: Optional[str] = Query(None),
+    pagina: Optional[int] = Query(None),
+    agent: Optional[str] = Query(None),
+    category: Optional[str] = Query(None),
+    financing: Optional[bool] = Query(None),
+    etapa_atual: Optional[str] = Query(None)
+):
+    req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
+    mode, src, dataset, pages_fetched, cache_status = await load_transactions_dataset(
+        data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
+        pagina=None, request_id=req_id
+    )
+    validate_dataset_origin(mode, src, dataset)
+    filtered = get_filtered_transactions(
+        dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
+        agent, category, financing, etapa_atual
+    )
+
+    aggregates = compute_dashboard_aggregates(filtered, data_inicio_ccv, data_fim_ccv, data_inicio_criacao, data_fim_criacao)
+
+    response.headers["X-Data-Mode"] = mode
+    meta = get_metadata_wrapper(mode, src)
+    meta["data"] = TimelineDataPayload(
+        timeline=[TimelineMetric(**t) for t in aggregates["timeline"]],
+        unclassified=UnclassifiedTimeline(**aggregates["unclassified"]),
+        reconciliation=TimelineReconciliation(**aggregates["reconciliation"])
+    )
+    return meta
+
+def warm_up_dashboard_cache():
+    raw = os.getenv("DASHBOARD_WARMUP_PERIODS_JSON")
+    if not raw or not raw.strip():
+        return
+
+    try:
+        import json
+        periods = json.loads(raw)
+        if not isinstance(periods, list):
+            return
+    except Exception as e:
+        print(f"WARMUP_ERROR: Failed to parse DASHBOARD_WARMUP_PERIODS_JSON: {e}")
+        return
+
+    import threading
+    threading.Thread(target=_sequential_warmup, args=(periods,), daemon=True).start()
+
+def _sequential_warmup(periods):
+    import time
+    time.sleep(2)
+
+    data_mode, conn_status = get_current_data_mode_and_connection()
+    if data_mode == "live" and conn_status == "missing_credentials":
+        return
+
+    for idx, period in enumerate(periods):
+        if not isinstance(period, dict):
+            continue
+        start_date = period.get("start_date")
+        end_date = period.get("end_date")
+        if not start_date or not end_date:
+            continue
+
+        import re
+        date_pattern = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+        if not date_pattern.match(start_date) or not date_pattern.match(end_date):
+            print(f"WARMUP_ERROR: Invalid date format: start_date={start_date}, end_date={end_date}")
+            continue
+
+        cache_key = generate_dashboard_cache_key(
+            data_inicio_ccv=start_date,
+            data_fim_ccv=end_date
+        )
+        cached_val, cache_status = dashboard_cache.get_status(cache_key)
+        if cache_status in ["fresh", "stale"]:
+            continue
+
+        try:
+            loop = asyncio.new_event_loop()
+            loop.run_until_complete(load_transactions_dataset(
+                data_inicio_ccv=start_date,
+                data_fim_ccv=end_date,
+                request_id=f"startup-warmup-{idx}"
+            ))
+            loop.close()
+        except Exception as e:
+            print(f"WARMUP_ERROR: Failed to warm up cache for {start_date} to {end_date}: {e}")
+
+        time.sleep(1)
+
+@app.on_event("startup")
+async def startup_event():
+    warm_up_dashboard_cache()
+
+@app.get(
+    "/api/dashboard/full",
+    response_model=DashboardFullResponse,
+    responses={**RESPONSES_503, **RESPONSES_AUTH},
+    summary="Get Consolidate Dashboard aggregates",
+    description="Loads all transactions from Pipeimob and returns consolidated summary, origins, stages, managers, payments, commissions, and timeline aggregates in a single response.",
+    dependencies=[Depends(verify_backend_api_key)]
+)
+async def get_dashboard_full(
+    response: Response,
+    request: Request,
+    data_inicio_criacao: Optional[str] = Query(None),
+    data_fim_criacao: Optional[str] = Query(None),
+    data_inicio_ccv: Optional[str] = Query(None),
+    data_fim_ccv: Optional[str] = Query(None),
+    data_arquivamento_inicio: Optional[str] = Query(None),
+    data_arquivamento_fim: Optional[str] = Query(None),
+    codigo_imovel: Optional[str] = Query(None),
+    codigo_contrato: Optional[str] = Query(None),
+    transacao_unique_id: Optional[str] = Query(None),
+    agent: Optional[str] = Query(None),
+    category: Optional[str] = Query(None),
+    financing: Optional[bool] = Query(None),
+    etapa_atual: Optional[str] = Query(None),
+    granularity: Optional[str] = Query(None),
+    refresh: Optional[bool] = Query(None)
+):
+    req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
+
+    requested_granularity = (granularity or "month").strip().lower()
+    if requested_granularity not in ["auto", "day", "week", "month"]:
+        raise GranularityException(
+            status_code=400,
+            detail=f"Invalid granularity value '{granularity}'. Supported values are: auto, day, week, month.",
+            error_code="invalid_granularity"
+        )
+
+    start_str = data_inicio_ccv or data_inicio_criacao
+    end_str = data_fim_ccv or data_fim_criacao
+
+    start_dt_pre = parse_date_to_date_obj(start_str) if start_str else None
+    end_dt_pre = parse_date_to_date_obj(end_str) if end_str else None
+
+    applied_granularity_pre = None
+    if start_dt_pre and end_dt_pre:
+        if start_dt_pre > end_dt_pre:
+            start_dt_pre, end_dt_pre = end_dt_pre, start_dt_pre
+        total_days_pre = (end_dt_pre - start_dt_pre).days + 1
+        if total_days_pre <= 62:
+            avail_pre = ["day", "week", "month"]
+        elif total_days_pre <= 366:
+            avail_pre = ["week", "month"]
+        else:
+            avail_pre = ["month"]
+
+        if requested_granularity == "auto":
+            if total_days_pre <= 14:
+                applied_granularity_pre = "day"
+            elif total_days_pre <= 90:
+                applied_granularity_pre = "week"
+            else:
+                applied_granularity_pre = "month"
+        else:
+            if requested_granularity not in avail_pre:
+                raise GranularityException(
+                    status_code=400,
+                    detail=f"Granularity '{requested_granularity}' is not supported for a period of {total_days_pre} days.",
+                    error_code="unsupported_granularity_for_period"
+                )
+            applied_granularity_pre = requested_granularity
+
+    try:
+        mode, src, dataset, pages_fetched, cache_status = await load_transactions_dataset(
+            data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
+            data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
+            pagina=None, request_id=req_id, refresh=bool(refresh),
+            requested_granularity=requested_granularity,
+            applied_granularity=applied_granularity_pre
+        )
+    except Exception as e:
+        if isinstance(e, IntegrationUnavailableError) or isinstance(e, HTTPException) or isinstance(e, GranularityException):
+            raise e
+        raise IntegrationUnavailableError(
+            status_code=503,
+            detail=f"Failed to load transactions: {e}",
+            error_code="invalid_pipeimob_response",
+            data_mode="live",
+            pipeimob_connection="unavailable"
+        )
+
+    validate_dataset_origin(mode, src, dataset)
+    filtered = get_filtered_transactions(
+        dataset, mode, data_inicio_criacao, data_fim_criacao, data_inicio_ccv, data_fim_ccv,
+        data_arquivamento_inicio, data_arquivamento_fim, codigo_imovel, codigo_contrato, transacao_unique_id,
+        agent, category, financing, etapa_atual
+    )
+
+    start_dt = start_dt_pre
+    end_dt = end_dt_pre
+    if not start_dt or not end_dt:
+        dataset_dates = []
+        for tx in filtered:
+            dt_str = extract_transaction_date(tx)
+            d = parse_date_to_date_obj(dt_str)
+            if d:
+                dataset_dates.append(d)
+        if dataset_dates:
+            if not start_dt:
+                start_dt = min(dataset_dates)
+            if not end_dt:
+                end_dt = max(dataset_dates)
+        else:
+            today = datetime.now(ZoneInfo("America/Sao_Paulo")).date()
+            if not start_dt:
+                start_dt = today.replace(day=1)
+            if not end_dt:
+                end_dt = today
+
+    if start_dt > end_dt:
+        start_dt, end_dt = end_dt, start_dt
+
+    total_days = (end_dt - start_dt).days + 1
+
+    if total_days <= 62:
+        available_granularities = ["day", "week", "month"]
+    elif total_days <= 366:
+        available_granularities = ["week", "month"]
+    else:
+        available_granularities = ["month"]
+
+    if requested_granularity == "auto":
+        if total_days <= 14:
+            applied_granularity = "day"
+        elif total_days <= 90:
+            applied_granularity = "week"
+        else:
+            applied_granularity = "month"
+    else:
+        if requested_granularity not in available_granularities:
+            raise GranularityException(
+                status_code=400,
+                detail=f"Granularity '{requested_granularity}' is not supported for a period of {total_days} days.",
+                error_code="unsupported_granularity_for_period"
+            )
+        applied_granularity = requested_granularity
+
+    try:
+        aggregates = compute_dashboard_aggregates(
+            filtered,
+            data_inicio_ccv, data_fim_ccv,
+            data_inicio_criacao, data_fim_criacao,
+            requested_granularity=requested_granularity,
+            applied_granularity=applied_granularity
+        )
+    except Exception as e:
+        if isinstance(e, GranularityException):
+            raise e
+        raise IntegrationUnavailableError(
+            status_code=503,
+            detail=f"Failed to compute dashboard aggregates: {e}",
+            error_code="aggregation_failed",
+            data_mode=mode,
+            pipeimob_connection="internal_error"
+        )
+
+    response.headers["X-Data-Mode"] = mode
+    response.headers["X-Cache"] = cache_status
+
+    enable_debug = os.getenv("ENABLE_SAFE_DEBUG_METRICS", "false").strip().lower() == "true"
+    debug_metrics = None
+    if enable_debug and dataset:
+        debug_metrics = {}
+        debug_metrics["transaction_count"] = len(dataset)
+
+        top_keys_counts = {}
+        for tx in dataset:
+            for k in tx.keys():
+                top_keys_counts[k] = top_keys_counts.get(k, 0) + 1
+        debug_metrics["top_level_keys_counts"] = top_keys_counts
+
+        priority_keys = [
+            "data_assinatura_ccv",
+            "data_ccv",
+            "data_assinatura",
+            "data_contrato",
+            "data_criacao",
+            "created_at"
+        ]
+
+        presence_counts = {}
+        type_counts = {}
+        parsed_successfully = 0
+        missing_count = 0
+        invalid_count = 0
+
+        nested_paths_counts = {}
+        def check_nested(node, prefix_path=""):
+            if isinstance(node, dict):
+                for k, v in node.items():
+                    current_path = f"{prefix_path}.{k}" if prefix_path else k
+                    k_lower = k.lower()
+                    if any(term in k_lower for term in ["data", "ccv", "date", "created", "assinatura", "criacao"]):
+                        nested_paths_counts[current_path] = nested_paths_counts.get(current_path, 0) + 1
+                    check_nested(v, current_path)
+            elif isinstance(node, list):
+                for idx, item in enumerate(node):
+                    check_nested(item, f"{prefix_path}[{idx}]")
+
+        for tx in dataset:
+            check_nested(tx)
+
+            for pk in priority_keys:
+                val = tx.get(pk)
+                if val is not None and val != "":
+                    presence_counts[pk] = presence_counts.get(pk, 0) + 1
+                    tname = type(val).__name__
+                    if pk not in type_counts:
+                        type_counts[pk] = {}
+                    type_counts[pk][tname] = type_counts[pk].get(tname, 0) + 1
+
+            dt_str = extract_transaction_date(tx)
+            if dt_str:
+                ym = parse_date_to_year_month(dt_str)
+                if ym:
+                    parsed_successfully += 1
+                else:
+                    invalid_count += 1
+            else:
+                missing_count += 1
+
+        debug_metrics["priority_keys_presence"] = presence_counts
+        debug_metrics["priority_keys_types"] = type_counts
+        debug_metrics["nested_paths_counts"] = nested_paths_counts
+        debug_metrics["parsed_successfully"] = parsed_successfully
+        debug_metrics["missing_count"] = missing_count
+        debug_metrics["invalid_count"] = invalid_count
+
+        debug_metrics["stages_validation"] = {
+            "raw_count": len(dataset),
+            "normalized_count": len(dataset),
+            "sanitized_count": len([sanitize_transaction(tx) for tx in dataset]),
+            "aggregator_count": len(filtered)
+        }
+
+    generated_at_utc = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    filters_map = {
+        "data_inicio_ccv": data_inicio_ccv,
+        "data_fim_ccv": data_fim_ccv,
+        "data_inicio_criacao": data_inicio_criacao,
+        "data_fim_criacao": data_fim_criacao,
+        "codigo_imovel": codigo_imovel,
+        "codigo_contrato": codigo_contrato,
+        "transacao_unique_id": transacao_unique_id,
+        "agent": agent,
+        "category": category,
+        "financing": financing,
+        "etapa_atual": etapa_atual,
+        "granularity": granularity
+    }
+    filters_applied = {k: v for k, v in filters_map.items() if v is not None}
+
+    return DashboardFullResponse(
+        data_mode=mode,
+        source=src,
+        period=DashboardPeriod(start=data_inicio_ccv, end=data_fim_ccv),
+        requested_granularity=requested_granularity,
+        applied_granularity=applied_granularity,
+        available_granularities=available_granularities,
+        pages_fetched=pages_fetched,
+        transaction_count=len(filtered),
+        summary=SummaryDataPayload(**aggregates["summary"]),
+        origins=[OriginMetric(**o) for o in aggregates["origins"]],
+        stages=[StageMetric(**s) for s in aggregates["stages"]],
+        managers=[ManagerMetric(**m) for m in aggregates["managers"]],
+        payments=PaymentsDataPayload(**aggregates["payments"]),
+        commissions=CommissionsDataPayload(**aggregates["commissions"]),
+        timeline=[DashboardTimelineMetric(**t) for t in aggregates["timeline"]],
+        unclassified=UnclassifiedTimeline(**aggregates["unclassified"]),
+        reconciliation=TimelineReconciliation(**aggregates["reconciliation"]),
+        sales_cycle=SalesCyclePayload(**aggregates["sales_cycle"]) if aggregates.get("sales_cycle") is not None else None,
+        schema_version="1.0",
+        generated_at=generated_at_utc,
+        filters_applied=filters_applied,
+        commission_financials=CommissionFinancials(**aggregates["commission_financials"]),
+        debug_metrics=debug_metrics,
+        data_quality=DataQualityPayload(**aggregates["data_quality"]) if aggregates.get("data_quality") is not None else None
+    )
+
+
+@app.get(
+    "/api/reconciliation/sales",
+    dependencies=[Depends(verify_backend_api_key)],
+    summary="Reconcile Pipeimob sales with Vista gains",
+    description=(
+        "Uses Pipeimob as the official source for sale count, CCV date and VGV, "
+        "then enriches matched contracts with the commercial ownership available "
+        "in Vista. Client personal data is neither requested nor returned."
+    ),
+)
+async def get_sales_reconciliation(
+    request: Request,
+    response: Response,
+    data_inicio_ccv: str = Query(..., description="Official CCV start date (YYYY-MM-DD)"),
+    data_fim_ccv: str = Query(..., description="Official CCV end date (YYYY-MM-DD)"),
+    date_tolerance_days: int = Query(7, ge=0, le=31),
+    refresh: bool = Query(False),
+):
+    try:
+        start_date = date.fromisoformat(data_inicio_ccv)
+        end_date = date.fromisoformat(data_fim_ccv)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400, detail="CCV dates must use YYYY-MM-DD"
+        ) from exc
+    if start_date > end_date:
+        raise HTTPException(
+            status_code=400, detail="data_inicio_ccv cannot be after data_fim_ccv"
+        )
+
+    request_id = getattr(request.state, "request_id", None) or str(uuid.uuid4())
+    mode, source, dataset, pages_fetched, cache_status = await load_transactions_dataset(
+        data_inicio_ccv=data_inicio_ccv,
+        data_fim_ccv=data_fim_ccv,
+        request_id=request_id,
+        refresh=bool(refresh),
+    )
+    validate_dataset_origin(mode, source, dataset)
+    if mode != "live" or source != "pipeimob_api_v2":
+        raise IntegrationUnavailableError(
+            status_code=503,
+            detail="Official sales reconciliation requires live Pipeimob data.",
+            error_code="reconciliation_requires_live_pipeimob",
+            data_mode=mode,
+            pipeimob_connection="unavailable",
+        )
+
+    official_transactions = []
+    for transaction in dataset:
+        signed_date = parse_date_to_date_obj(
+            pipeimob_official_sale_date(transaction)
+        )
+        if signed_date and start_date <= signed_date <= end_date:
+            official_transactions.append(transaction)
+
+    try:
+        vista_client = VistaSalesClient.from_env()
+        vista_start = start_date - timedelta(days=date_tolerance_days)
+        vista_end = end_date + timedelta(days=date_tolerance_days)
+        vista_gains = await asyncio.to_thread(
+            vista_client.fetch_gains, vista_start, vista_end
+        )
+    except VistaSalesConfigurationError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Vista sales reconciliation is not configured.",
+            headers={"X-Reconciliation-Error": "vista_not_configured"},
+        ) from exc
+    except VistaSalesAPIError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Vista sales data is temporarily unavailable.",
+            headers={"X-Reconciliation-Error": "vista_unavailable"},
+        ) from exc
+
+    official_property_codes = {
+        str(transaction.get("codigo_imovel") or "").strip().upper()
+        for transaction in official_transactions
+        if transaction.get("codigo_imovel") not in (None, "")
+    }
+    relevant_vista_gains = []
+    for gain in vista_gains:
+        gain_date = parse_date_to_date_obj(gain.get("gain_date"))
+        property_code = str(gain.get("property_code") or "").strip().upper()
+        if property_code in official_property_codes or (
+            gain_date and start_date <= gain_date <= end_date
+        ):
+            relevant_vista_gains.append(gain)
+
+    _, teams_configured, pipeimob_group_mapping, _ = parse_official_team_groups()
+    result = reconcile_sales(
+        official_transactions,
+        relevant_vista_gains,
+        date_tolerance_days=date_tolerance_days,
+        pipeimob_group_mapping=(
+            pipeimob_group_mapping if teams_configured else {}
+        ),
+    )
+    result.update(
+        {
+            "period": {"start": data_inicio_ccv, "end": data_fim_ccv},
+            "generated_at": datetime.now(timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z"),
+            "pipeimob_pages_fetched": pages_fetched,
+            "pipeimob_cache_status": cache_status,
+            "vista_pipe_id_configured": True,
+            "commercial_broker_limitation": (
+                "The documented Vista negocios/listar fields do not guarantee a "
+                "commercial broker field. Missing ownership remains pending and is "
+                "never replaced by Pipeimob's fiscal agent."
+            ),
+        }
+    )
+    response.headers["X-Data-Mode"] = "live"
+    response.headers["X-Reconciliation-Contract"] = result["contract_version"]
+    return result
+
+
+@app.get(
+    "/api/reconciliation/sales/ranking",
+    dependencies=[Depends(verify_backend_api_key)],
+    summary="Rank commercial brokers by reconciled official sales",
+    description=(
+        "Counts only signed Pipeimob contracts and attributes them exclusively "
+        "to the commercial broker returned by a matched Vista gain. Returns "
+        "aggregates only and does not expose client personal data."
+    ),
+)
+async def get_sales_ranking(
+    request: Request,
+    response: Response,
+    data_inicio_ccv: str = Query(..., description="Official CCV start date (YYYY-MM-DD)"),
+    data_fim_ccv: str = Query(..., description="Official CCV end date (YYYY-MM-DD)"),
+    metric: Literal["sales_count", "vgv"] = Query("sales_count"),
+    date_tolerance_days: int = Query(7, ge=0, le=31),
+    refresh: bool = Query(False),
+):
+    reconciliation = await get_sales_reconciliation(
+        request=request,
+        response=response,
+        data_inicio_ccv=data_inicio_ccv,
+        data_fim_ccv=data_fim_ccv,
+        date_tolerance_days=date_tolerance_days,
+        refresh=refresh,
+    )
+    ranking = rank_commercial_sales(reconciliation, metric=metric)
+    response.headers["X-Sales-Attribution"] = "vista_commercial_broker"
+    return ranking
+
+
+@app.get(
+    "/api/vista/funnel/cohort",
+    dependencies=[Depends(verify_backend_api_key)],
+    summary="Summarize Vista deals created in a period by current stage",
+    description=(
+        "Uses Vista negocios/listar as the authoritative source for deals created "
+        "in the period. The result groups the cohort by current stage and status. "
+        "It never presents current-stage counts as stage-entry events or proposals "
+        "generated in the period. Client personal data is neither requested nor returned."
+    ),
+)
+async def get_vista_funnel_cohort(
+    response: Response,
+    data_inicio: str = Query(..., description="Deal creation start date (YYYY-MM-DD)"),
+    data_fim: str = Query(..., description="Deal creation end date (YYYY-MM-DD)"),
+):
+    try:
+        start_date = date.fromisoformat(data_inicio)
+        end_date = date.fromisoformat(data_fim)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400, detail="Funnel dates must use YYYY-MM-DD"
+        ) from exc
+    if start_date > end_date:
+        raise HTTPException(
+            status_code=400, detail="data_inicio cannot be after data_fim"
+        )
+    if (end_date - start_date).days > 366:
+        raise HTTPException(
+            status_code=400, detail="Funnel period cannot exceed 366 days"
+        )
+
+    try:
+        vista_client = VistaFunnelClient.from_env()
+        deals = await asyncio.to_thread(
+            vista_client.fetch_created_deals, start_date, end_date
+        )
+    except VistaSalesConfigurationError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Vista funnel integration is not configured.",
+            headers={"X-Funnel-Error": "vista_not_configured"},
+        ) from exc
+    except VistaSalesAPIError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Vista funnel data is temporarily unavailable.",
+            headers={"X-Funnel-Error": "vista_unavailable"},
+        ) from exc
+
+    summary = summarize_created_deal_cohort(deals)
+    response.headers["X-Data-Mode"] = "live"
+    response.headers["X-Funnel-Contract"] = "1.0"
+    response.headers["X-Funnel-Semantics"] = "created_deals_current_stage"
+    return {
+        "contract_version": "1.0",
+        "source": "vista_negocios_listar",
+        "period": {
+            "start": data_inicio,
+            "end": data_fim,
+            "basis": vista_client.created_field,
+        },
+        "semantics": {
+            "cohort": "distinct_deals_created_in_period",
+            "stage_breakdown": "current_stage_at_query_time",
+            "stage_entry_events_available": False,
+            "warning": (
+                "Current-stage counts are not equivalent to entries into a stage "
+                "during the period. Proposal generation requires Vista stage-event history."
+            ),
+        },
+        "generated_at": datetime.now(timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z"),
+        "summary": summary,
+    }
+
+
+# ======================================================================
+# CONTRACTS CONTROL (SECRETARIA DE VENDAS) BI MODULE
+# ======================================================================
+
+from pydantic import BaseModel
+from typing import List, Optional, Dict, Any
+from datetime import date, datetime
+import math
+
+class ContractsControlPeriod(BaseModel):
+    start: Optional[str] = None
+    end: Optional[str] = None
+    basis: str = "data_inicio_venda"
+    as_of_date: str
+
+class ContractsControlExtraction(BaseModel):
+    upstream_endpoint: str
+    upstream_filter_field: str
+    coverage_start: str
+    coverage_end: str
+    pages_fetched: int
+    raw_records_fetched: int
+    coverage_status: str
+
+class ContractsControlCohortSummary(BaseModel):
+    records_count: int
+    completed_count: int
+    in_progress_count: int
+    data_issue_count: int
+    cancelled_count: int
+    average_duration_days: float
+    median_duration_days: float
+    p75_duration_days: float
+    p90_duration_days: float
+    average_open_aging_days: float
+    median_open_aging_days: float
+    without_manager_count: int
+    unknown_modality_count: int
+
+class ContractsControlOperationsSummary(BaseModel):
+    scope: str = "operations"
+    opening_backlog_count: int
+    period_started_count: int
+    period_completed_count: int
+    ending_backlog_count: int
+    excluded_data_issue_count: int
+    provisional: bool = True
+
+class ContractsControlBucket(BaseModel):
+    scope: str = "cohort"
+    key: str
+    label: str
+    count: int
+    ratio: float
+
+class ContractsControlResponsibleMetric(BaseModel):
+    scope: str = "cohort"
+    rank: Optional[int] = None
+    responsible_id: Optional[str] = None
+    responsible: Optional[str] = None
+    ranking_eligible: bool = False
+    ranking_basis: str = "average_duration_days_completed"
+    records_count: int
+    completed_count: int
+    in_progress_count: int
+    current_in_progress_count: int
+    data_issue_count: int
+    average_duration_days: float
+    median_duration_days: float
+    p75_duration_days: float
+    average_open_aging_days: float
+    median_open_aging_days: float
+    completion_ratio: float
+    unknown_modality_count: int
+
+class ContractsControlManagerMetric(BaseModel):
+    scope: str = "cohort"
+    manager: Optional[str] = None
+    records_count: int
+    completed_count: int
+    in_progress_count: int
+    data_issue_count: int
+    average_duration_days: float
+    median_duration_days: float
+    p75_duration_days: float
+    average_open_aging_days: float
+    median_open_aging_days: float
+    completion_ratio: float
+    unknown_modality_count: int
+
+class ContractsControlModalitySummary(BaseModel):
+    scope: str = "cohort"
+    financing_count: int
+    deed_count: int
+    developer_payment_count: int
+    unknown_modality_count: int
+    conflict_count: int
+    financing_amount_known_count: int
+    financing_amount_unknown_count: int
+    financing_ratio_known_count: int
+    financing_total_amount: Optional[float] = None
+    average_financing_ratio: Optional[float] = None
+
+class ContractsControlSourceTypeMetric(BaseModel):
+    scope: str = "cohort"
+    source_type: Optional[str] = None
+    label: str
+    count: int
+    ratio: float
+
+class ContractsControlTimelineMetric(BaseModel):
+    scope: str = "operations"
+    month: str
+    label: str
+    opening_backlog: int
+    started_count: int
+    completed_count: int
+    net_flow: int
+    ending_backlog: int
+    excluded_data_issue_count: int
+    average_duration_days: float
+    median_duration_days: float
+    provisional: bool = True
+
+class ContractsControlWeeklyResponsibleMetric(BaseModel):
+    responsible: Optional[str] = None
+    started_count: int
+
+class ContractsControlWeeklyTimelineMetric(BaseModel):
+    scope: str = "operations"
+    week_start: str
+    week_end: str
+    label: str
+    opening_backlog: int
+    started_count: int
+    completed_count: int
+    net_flow: int
+    ending_backlog: int
     assigned_started_count: int
     unassigned_started_count: int
     assignment_completion_ratio: float
