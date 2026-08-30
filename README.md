@@ -168,7 +168,7 @@ VISTA_DEAL_CREATED_FIELD=DataInicial
 VISTA_DEAL_TEAM_FIELD=
 VISTA_DEAL_AGENCY_FIELD=
 VISTA_DEAL_CAPTURE_SOURCE_FIELD=
-VISTA_DEAL_RESPONSIBLE_FIELD=
+VISTA_DEAL_RESPONSIBLE_FIELD=Responsavel
 ```
 
 `VISTA_SALES_TEAM_FIELD` é opcional e deve ser preenchido somente depois de
@@ -195,6 +195,11 @@ O endpoint só opera com a fonte Pipeimob ao vivo; dados simulados não podem fo
   não é apresentada como "propostas geradas no período". Essa segunda métrica
   permanece `null` até que o contrato de histórico de entrada nas etapas seja
   confirmado no tenant Vista.
+* **Distribuição gerencial:** o contrato MCP `1.2` agrega a fotografia atual de
+  `Proposta` por equipe. A atribuição usa primeiro a equipe retornada pelo Vista
+  e, na ausência dela, o campo `Responsavel` combinado com a referência
+  gerencial vigente. A resposta também informa a cobertura e os registros sem
+  equipe atribuída.
 
 Exemplo:
 

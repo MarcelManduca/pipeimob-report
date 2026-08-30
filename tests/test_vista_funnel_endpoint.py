@@ -15,6 +15,7 @@ class FakeVistaFunnelClient:
                 "created_at": "2026-08-01",
                 "status": "Aberto",
                 "stage_name": "Proposta",
+                "responsible": "Gerente Um",
             },
             {
                 "deal_id": "deal-2",

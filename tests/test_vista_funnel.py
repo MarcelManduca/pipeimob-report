@@ -91,8 +91,8 @@ def test_fetch_created_deals_deduplicates_by_vista_deal_id():
 def test_summary_keeps_current_proposal_stage_separate_from_generated_proposals():
     summary = summarize_created_deal_cohort(
         [
-            {"deal_id": "1", "created_at": "2026-08-01", "status": "Aberto", "stage_name": "Proposta"},
-            {"deal_id": "2", "created_at": "2026-08-02", "status": "Perdido", "stage_name": "Proposta"},
+            {"deal_id": "1", "created_at": "2026-08-01", "status": "Aberto", "stage_name": "Proposta", "responsible": "Gerente Um"},
+            {"deal_id": "2", "created_at": "2026-08-02", "status": "Perdido", "stage_name": "Proposta", "team": "Equipe Direta"},
             {"deal_id": "3", "created_at": "2026-08-03", "status": "Ganho", "stage_name": "Fechamento"},
             {"deal_id": "4", "created_at": "2026-08-04", "status": "Em aberto", "stage_name": "Captação"},
         ]
@@ -122,6 +122,27 @@ def test_summary_keeps_current_proposal_stage_separate_from_generated_proposals(
         summary["proposal"]["proposals_generated_status"]
         == "requires_stage_event_history"
     )
+    assert summary["proposal"]["assignment_breakdown"] == [
+        {
+            "team": None,
+            "responsible": "Gerente Um",
+            "created_date": "2026-08-01",
+            "current_stage_deals_count": 1,
+            "open_deals_count": 1,
+        },
+        {
+            "team": "Equipe Direta",
+            "responsible": None,
+            "created_date": "2026-08-02",
+            "current_stage_deals_count": 1,
+            "open_deals_count": 0,
+        },
+    ]
+    assert summary["data_quality"]["proposal_open_without_direct_team"] == 1
+    assert (
+        summary["data_quality"]["proposal_open_without_assignment_identity"]
+        == 0
+    )
 
 
 def test_funnel_error_never_contains_api_key():
@@ -148,3 +169,15 @@ def test_optional_dimension_field_names_are_validated():
             "pipe-1",
             agency_field="Agency.Name",
         )
+
+
+def test_from_env_requests_vista_responsible_field_by_default(monkeypatch):
+    monkeypatch.setenv("VISTA_API_BASE_URL", "https://tenant.example.com")
+    monkeypatch.setenv("VISTA_API_KEY", "secret-key")
+    monkeypatch.setenv("VISTA_SALES_PIPE_ID", "pipe-1")
+    monkeypatch.delenv("VISTA_DEAL_RESPONSIBLE_FIELD", raising=False)
+
+    client = VistaFunnelClient.from_env()
+
+    assert client.responsible_field == "Responsavel"
+    assert "Responsavel" in client.fields

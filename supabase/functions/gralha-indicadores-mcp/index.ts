@@ -8,7 +8,7 @@ import {
 
 const FUNCTION_SLUG = "gralha-indicadores-mcp";
 const SERVER_NAME = "Gralha — Indicadores Pipeimob × Vista";
-const SERVER_VERSION = "1.9.1";
+const SERVER_VERSION = "1.10.0";
 const JSON_HEADERS = {
   "Content-Type": "application/json; charset=utf-8",
   "Cache-Control": "no-store",
@@ -993,6 +993,7 @@ async function callSalesRanking(
 async function callVistaFunnelCohort(
   token: string,
   args: Record<string, unknown>,
+  userClient: ReturnType<typeof createClient>,
 ): Promise<{ isError: boolean; value: unknown }> {
   const requestedStart = args.data_inicio;
   const requestedEnd = args.data_fim;
@@ -1008,6 +1009,17 @@ async function callVistaFunnelCohort(
   const start = String(requestedStart);
   const requestedEndText = String(requestedEnd);
   const end = requestedEndText > today ? today : requestedEndText;
+  const requestedGroup = String(args.agrupar_por ?? "nenhum");
+  if (!["nenhum", "equipe"].includes(requestedGroup)) {
+    return {
+      isError: true,
+      value: {
+        error: "invalid_group",
+        detail: "O agrupamento do funil deve ser nenhum ou equipe.",
+      },
+    };
+  }
+  const groupBy = requestedGroup === "equipe" ? "equipe" : "nenhum";
   if (start > end) {
     return {
       isError: true,
@@ -1073,12 +1085,197 @@ async function callVistaFunnelCohort(
     summary.proposal && typeof summary.proposal === "object"
       ? (summary.proposal as Record<string, unknown>)
       : {};
+  const assignmentBreakdown = Array.isArray(
+      upstreamProposal.assignment_breakdown,
+    )
+    ? upstreamProposal.assignment_breakdown
+    : [];
+  const {
+    assignment_breakdown: _privateAssignmentBreakdown,
+    ...safeUpstreamProposal
+  } = upstreamProposal;
+
+  let proposalTeamBreakdown: Array<{
+    team: string;
+    open_deals_count: number;
+    current_stage_deals_count: number;
+  }> = [];
+  let proposalTeamCoverage: Record<string, unknown> | null = null;
+  let visualization: Record<string, unknown> | null = null;
+
+  if (groupBy === "equipe") {
+    const { data: referenceRows, error: referenceError } = await userClient
+      .from("manager_team_reference")
+      .select(
+        "manager_key,manager_name,team_key,team_name,valid_from,valid_to,source_updated_through,review_required",
+      )
+      .lte("valid_from", end)
+      .or("valid_to.is.null,valid_to.gte." + start)
+      .order("manager_key", { ascending: true })
+      .order("valid_from", { ascending: true })
+      .limit(1000);
+
+    if (referenceError) {
+      console.error("proposal_team_reference_lookup_failed", {
+        code: referenceError.code,
+      });
+      return {
+        isError: true,
+        value: {
+          error: "team_reference_unavailable",
+          detail:
+            "A separação das propostas por equipe não pôde consultar o vínculo gerencial.",
+        },
+      };
+    }
+
+    const references = (referenceRows ?? []) as ManagerTeamReference[];
+    const historyByManager = buildManagerTeamIndex(references);
+    const grouped = new Map<
+      string,
+      {
+        team: string;
+        open_deals_count: number;
+        current_stage_deals_count: number;
+      }
+    >();
+    let sourceUpdatedThrough: string | null = null;
+    let assignedOpen = 0;
+    let assignedCurrent = 0;
+    let apiTeamOpen = 0;
+    let managerReferenceOpen = 0;
+    let managerReferenceReviewOpen = 0;
+    let ambiguousOpen = 0;
+    let unresolvedOpen = 0;
+
+    for (const reference of references) {
+      const updatedThrough = String(
+        reference.source_updated_through ?? "",
+      ).slice(0, 10);
+      if (
+        updatedThrough &&
+        (!sourceUpdatedThrough || updatedThrough > sourceUpdatedThrough)
+      ) {
+        sourceUpdatedThrough = updatedThrough;
+      }
+    }
+
+    for (const candidate of assignmentBreakdown) {
+      if (!candidate || typeof candidate !== "object") continue;
+      const row = candidate as Record<string, unknown>;
+      const openCount = Math.max(0, asNumber(row.open_deals_count) ?? 0);
+      const currentCount = Math.max(
+        0,
+        asNumber(row.current_stage_deals_count) ?? 0,
+      );
+      let teamName =
+        typeof row.team === "string"
+          ? row.team.replace(/\s+/g, " ").trim()
+          : "";
+      let teamKey = teamName ? normalizeBrokerName(teamName) : "";
+
+      if (teamName) {
+        apiTeamOpen += openCount;
+      } else {
+        const responsible =
+          typeof row.responsible === "string"
+            ? row.responsible.replace(/\s+/g, " ").trim()
+            : "";
+        const createdDate =
+          typeof row.created_date === "string"
+            ? row.created_date.slice(0, 10)
+            : "";
+        const assignment = resolveManagerTeam(
+          historyByManager,
+          responsible,
+          createdDate,
+        );
+        if (assignment.status === "resolved") {
+          teamName = assignment.teamName;
+          teamKey = assignment.teamKey;
+          managerReferenceOpen += openCount;
+          if (assignment.reviewRequired) {
+            managerReferenceReviewOpen += openCount;
+          }
+        } else if (assignment.status === "ambiguous") {
+          ambiguousOpen += openCount;
+        } else {
+          unresolvedOpen += openCount;
+        }
+      }
+
+      if (!teamName || !teamKey) continue;
+      assignedOpen += openCount;
+      assignedCurrent += currentCount;
+      const groupedRow = grouped.get(teamKey) ?? {
+        team: teamName,
+        open_deals_count: 0,
+        current_stage_deals_count: 0,
+      };
+      groupedRow.open_deals_count += openCount;
+      groupedRow.current_stage_deals_count += currentCount;
+      grouped.set(teamKey, groupedRow);
+    }
+
+    proposalTeamBreakdown = [...grouped.values()].sort((a, b) =>
+      b.open_deals_count - a.open_deals_count ||
+      b.current_stage_deals_count - a.current_stage_deals_count ||
+      a.team.localeCompare(b.team, "pt-BR")
+    );
+    const proposalOpenTotal = Math.max(
+      0,
+      asNumber(
+        upstreamProposal.created_deals_in_proposal_stage_with_open_status,
+      ) ?? 0,
+    );
+    const proposalCurrentTotal = Math.max(
+      0,
+      asNumber(upstreamProposal.created_deals_currently_in_proposal) ?? 0,
+    );
+    proposalTeamCoverage = {
+      proposal_open_total: proposalOpenTotal,
+      proposal_current_stage_total: proposalCurrentTotal,
+      assigned_open: assignedOpen,
+      unassigned_open: Math.max(0, proposalOpenTotal - assignedOpen),
+      assigned_current_stage: assignedCurrent,
+      unassigned_current_stage: Math.max(
+        0,
+        proposalCurrentTotal - assignedCurrent,
+      ),
+      open_assignment_rate: proposalOpenTotal
+        ? assignedOpen / proposalOpenTotal
+        : 0,
+      api_team_open: apiTeamOpen,
+      manager_reference_open: managerReferenceOpen,
+      manager_reference_review_open: managerReferenceReviewOpen,
+      ambiguous_manager_reference_open: ambiguousOpen,
+      unresolved_open: unresolvedOpen,
+      reference_updated_through: sourceUpdatedThrough,
+    };
+    visualization = {
+      type: "bar",
+      title: "Propostas em aberto por equipe",
+      metric: "sales_count",
+      unit: "sales",
+      series: proposalTeamBreakdown.slice(0, 10).map((row) => ({
+        label: row.team,
+        value: row.open_deals_count,
+        sales_count: row.open_deals_count,
+        current_stage_deals_count: row.current_stage_deals_count,
+        vgv: null,
+      })),
+      footnote:
+        `${assignedOpen} de ${proposalOpenTotal} propostas em aberto possuem equipe atribuída. ` +
+        "Fotografia atual dos negócios criados no período.",
+    };
+  }
 
   return {
     isError: false,
     value: {
-      contract_version: "1.1",
+      contract_version: "1.2",
       source: root.source ?? "vista_negocios_listar",
+      group_by: groupBy,
       period: root.period ?? { start, end, basis: "DataInicial" },
       coverage: {
         requested: { start, end: requestedEndText },
@@ -1098,7 +1295,13 @@ async function callVistaFunnelCohort(
       summary: {
         ...summary,
         proposal: {
-          ...upstreamProposal,
+          ...safeUpstreamProposal,
+          ...(groupBy === "equipe"
+            ? {
+              team_breakdown: proposalTeamBreakdown,
+              team_coverage: proposalTeamCoverage,
+            }
+            : {}),
           proposals_generated_in_period: null,
           proposals_generated_status: "requires_stage_event_history",
         },
@@ -1109,6 +1312,7 @@ async function callVistaFunnelCohort(
         "como esses negócios estão distribuídos pelas etapas atuais",
         "quantos negócios criados no período estão atualmente em Proposta",
         "quantos negócios da etapa atual Proposta possuem status geral Em aberto",
+        "como os negócios atualmente em Proposta se distribuem por equipe",
       ],
       unsupported_without_stage_history: [
         "quantas propostas foram geradas no período",
@@ -1130,6 +1334,7 @@ async function callVistaFunnelCohort(
         do_not_repeat_user_question: true,
         never_say_contract_confirmation_is_pending: true,
       },
+      visualization,
     },
   };
 }
@@ -1232,7 +1437,7 @@ const TOOLS = [
     name: "consultar_funil_vista",
     title: "Consultar negócios criados e etapa atual no Vista",
     description:
-      "Consulta negócios distintos cadastrados no Vista dentro de um período inclusivo, sem filtrar o status geral, e os agrupa por status, etapa atual e matriz etapa por status. Use para volume de negócios criados, fotografia atual da coorte e quantidade atualmente aberta em cada etapa. Não use a quantidade atualmente em Proposta como se fosse o total de propostas geradas no período: essa última métrica exige um histórico de entrada em etapas ainda não disponível na integração Vista.",
+      "Consulta negócios distintos cadastrados no Vista dentro de um período inclusivo, sem filtrar o status geral, e os agrupa por status, etapa atual e matriz etapa por status. Também separa os negócios atualmente em Proposta por equipe quando agrupar_por=equipe. Use para volume de negócios criados, fotografia atual da coorte e quantidade atualmente aberta em cada etapa. Não use a quantidade atualmente em Proposta como se fosse o total de propostas geradas no período: essa última métrica exige um histórico de entrada em etapas ainda não disponível na integração Vista.",
     annotations: {
       readOnlyHint: true,
       destructiveHint: false,
@@ -1253,6 +1458,13 @@ const TOOLS = [
           format: "date",
           description: "Data final inclusiva de cadastro do negócio, no formato YYYY-MM-DD.",
         },
+        agrupar_por: {
+          type: "string",
+          enum: ["nenhum", "equipe"],
+          default: "nenhum",
+          description:
+            "Use equipe para separar a fotografia atual dos negócios em Proposta por equipe.",
+        },
       },
       required: ["data_inicio", "data_fim"],
     },
@@ -1261,6 +1473,7 @@ const TOOLS = [
       properties: {
         contract_version: { type: "string" },
         source: { type: "string" },
+        group_by: { type: "string" },
         period: { type: "object" },
         coverage: { type: "object" },
         generated_at: { type: "string" },
@@ -1272,10 +1485,12 @@ const TOOLS = [
           items: { type: "string" },
         },
         response_guidance: { type: "object" },
+        visualization: { type: ["object", "null"] },
       },
       required: [
         "contract_version",
         "source",
+        "group_by",
         "period",
         "coverage",
         "generated_at",
@@ -1284,6 +1499,7 @@ const TOOLS = [
         "supported_questions",
         "unsupported_without_stage_history",
         "response_guidance",
+        "visualization",
       ],
     },
   },
@@ -1370,7 +1586,7 @@ Deno.serve(async (request: Request) => {
       capabilities: { tools: { listChanged: false } },
       serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
       instructions:
-        "Use consultar_ranking_vendas para perguntas sobre vendas oficiais e consultar_funil_vista para negócios cadastrados no período, status geral, etapa atual e cruzamento entre etapa e status. Para rankings de equipes, use agrupar_por=equipe; para avaliar uma equipe específica, informe também equipe. Para saber o bairro em que um corretor mais vendeu, use agrupar_por=bairro e informe corretor. Use top_n conforme solicitado, com padrão 10. Quantidade é o critério padrão; VGV deve ser solicitado explicitamente. O fim de períodos futuros é limitado automaticamente à data atual de São Paulo. Quantidade, data e VGV vêm das APIs ao vivo; a planilha é somente uma referência gerencial de responsável para equipe com vigência. Sempre informe período efetivo, cobertura, data da referência e vendas sem atribuição. No funil, diferencie obrigatoriamente negócios criados no período, etapa atual, status geral e eventos históricos de entrada em etapa. Nunca apresente negócios atualmente em Proposta como propostas geradas no período; esta métrica exige histórico de etapas. Se pedirem uma métrica histórica indisponível, não comece pela limitação: responda em no máximo 90 palavras e abra com 'Para gestão atual', apresentando primeiro o total Em aberto na etapa solicitada e depois o total atual nessa etapa. Em seguida, esclareça em uma frase que essa fotografia atual não representa todas as entradas históricas na etapa e que o histórico necessário não está disponível. Não repita a pergunta, não liste fontes, timestamps ou limitações técnicas salvo se forem solicitados e nunca diga que existe confirmação de contrato pendente. Não conclua sobre conversão de pipeline, visitas ou tempo entre etapas sem os dados operacionais correspondentes. A visualização é fornecida como dados estruturados e nunca deve ser substituída por barras ASCII ou código Python.",
+        "Use consultar_ranking_vendas somente para vendas oficiais. Use consultar_funil_vista para negócios cadastrados no período, status geral, etapa atual e cruzamento entre etapa e status. Perguntas sobre propostas ou outras etapas, inclusive pedidos de separação por equipe, pertencem sempre a consultar_funil_vista; envie agrupar_por=equipe quando a equipe for solicitada. Para rankings de vendas por equipes, use consultar_ranking_vendas com agrupar_por=equipe; para avaliar uma equipe de vendas específica, informe também equipe. Para saber o bairro em que um corretor mais vendeu, use agrupar_por=bairro e informe corretor. Use top_n conforme solicitado, com padrão 10. Quantidade é o critério padrão; VGV deve ser solicitado explicitamente. O fim de períodos futuros é limitado automaticamente à data atual de São Paulo. Quantidade, data e VGV vêm das APIs ao vivo; a planilha é somente uma referência gerencial de responsável para equipe com vigência. Sempre informe período efetivo, cobertura, data da referência e vendas sem atribuição. No funil, diferencie obrigatoriamente negócios criados no período, etapa atual, status geral e eventos históricos de entrada em etapa. Nunca apresente negócios atualmente em Proposta como propostas geradas no período; esta métrica exige histórico de etapas. Se pedirem uma métrica histórica indisponível, não comece pela limitação: responda em no máximo 90 palavras e abra com 'Para gestão atual', apresentando primeiro o total Em aberto na etapa solicitada e depois o total atual nessa etapa. Em seguida, esclareça em uma frase que essa fotografia atual não representa todas as entradas históricas na etapa e que o histórico necessário não está disponível. Não repita a pergunta, não liste fontes, timestamps ou limitações técnicas salvo se forem solicitados e nunca diga que existe confirmação de contrato pendente. Não conclua sobre conversão de pipeline, visitas ou tempo entre etapas sem os dados operacionais correspondentes. A visualização é fornecida como dados estruturados e nunca deve ser substituída por barras ASCII ou código Python.",
     });
   }
   if (message.method === "tools/list") {
@@ -1389,7 +1605,7 @@ Deno.serve(async (request: Request) => {
       return rpcError(message.id, -32602, "Unknown tool");
     }
     const result = name === "consultar_funil_vista"
-      ? await callVistaFunnelCohort(auth.token, args)
+      ? await callVistaFunnelCohort(auth.token, args, auth.userClient)
       : await callSalesRanking(auth.token, args, auth.userClient);
     return rpcResult(message.id, {
       content: textContent(result.value),
