@@ -163,7 +163,14 @@ VISTA_API_BASE_URL=https://<tenant-vista>/api
 VISTA_API_KEY=
 VISTA_SALES_PIPE_ID=
 VISTA_HTTP_TIMEOUT_SECONDS=12
+VISTA_SALES_TEAM_FIELD=
 ```
+
+`VISTA_SALES_TEAM_FIELD` é opcional e deve ser preenchido somente depois de
+confirmar, no tenant Vista, o campo de equipe do negócio. Quando ausente, a
+conciliação tenta a equipe pelos grupos oficiais do responsável no Pipeimob;
+o vínculo gerencial por planilha fica reservado à camada de referência com
+vigência e nunca substitui quantidade, data ou VGV das APIs.
 
 Exemplo de consulta:
 

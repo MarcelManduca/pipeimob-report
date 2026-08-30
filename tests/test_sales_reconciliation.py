@@ -5,7 +5,7 @@ from datetime import date
 
 import pytest
 
-from services.sales_reconciliation import reconcile_sales
+from services.sales_reconciliation import rank_commercial_sales, reconcile_sales
 from services.vista_sales_client import VistaSalesAPIError, VistaSalesClient
 
 
@@ -104,6 +104,39 @@ def test_vista_client_resolves_commercial_broker_from_users_endpoint():
     assert "/usuarios/listar?" in requests[1].full_url
     assert gains[0]["commercial_broker_id"] == "77"
     assert gains[0]["commercial_broker_name"] == "Corretor Comercial"
+
+
+def test_vista_client_can_request_a_tenant_confirmed_team_field():
+    requests = []
+
+    def opener(request, timeout):
+        requests.append(request)
+        return FakeResponse(
+            {
+                "1": {
+                    "Codigo": "vista-1",
+                    "CodigoImovel": "44357",
+                    "Status": "Ganho",
+                    "EquipeNegocio": {"Nome": "Equipe Evolução"},
+                },
+                "total": 1,
+                "paginas": 1,
+            }
+        )
+
+    client = VistaSalesClient(
+        "https://tenant.example.com",
+        "secret-key",
+        "pipe-1",
+        team_field="EquipeNegocio",
+        opener=opener,
+    )
+    gains = client.fetch_gains(date(2026, 8, 1), date(2026, 8, 20))
+
+    query = urllib.parse.parse_qs(urllib.parse.urlparse(requests[0].full_url).query)
+    pesquisa = json.loads(query["pesquisa"][0])
+    assert "EquipeNegocio" in pesquisa["fields"]
+    assert gains[0]["commercial_team_name"] == "Equipe Evolução"
 
 
 def test_vista_client_error_never_contains_api_key():
@@ -323,3 +356,180 @@ def test_value_and_date_mismatches_remain_auditable():
         "DIVERGENCIA_VALOR",
         "DIVERGENCIA_DATA",
     ]
+
+
+def test_pipeimob_official_group_resolves_team_without_spreadsheet_sale_match():
+    result = reconcile_sales(
+        [
+            {
+                "transacao_unique_id_pipeimob": "pipe-1",
+                "codigo_imovel": "100",
+                "data_contrato": "2026-08-10",
+                "valor_contrato": "100000",
+                "agente_gestor": "Gerente Pipe",
+                "agente_gestor_grupos_a_que_pertence": ["branch-1", "team-1"],
+            }
+        ],
+        [],
+        pipeimob_group_mapping={
+            "branch-1": {"name": "Florianópolis", "type": "branch"},
+            "team-1": {"name": "Equipe Meta", "type": "team"},
+        },
+    )
+
+    item = result["items"][0]
+    assert item["responsible_manager"] == "Gerente Pipe"
+    assert item["team_name"] == "Equipe Meta"
+    assert item["team_source"] == "pipeimob_responsible_group"
+    assert item["team_resolution_status"] == "resolved"
+    assert result["summary"]["api_team_resolved"] == 1
+
+
+def test_multiple_pipeimob_team_groups_remain_ambiguous():
+    result = reconcile_sales(
+        [
+            {
+                "transacao_unique_id_pipeimob": "pipe-1",
+                "codigo_imovel": "100",
+                "data_contrato": "2026-08-10",
+                "valor_contrato": "100000",
+                "agente_gestor_grupos_a_que_pertence": ["team-1", "team-2"],
+            }
+        ],
+        [],
+        pipeimob_group_mapping={
+            "team-1": {"name": "Equipe Meta", "type": "team"},
+            "team-2": {"name": "Equipe Evolução", "type": "team"},
+        },
+    )
+
+    item = result["items"][0]
+    assert item["team_name"] is None
+    assert item["team_resolution_status"] == "ambiguous_pipeimob_groups"
+    assert result["summary"]["ambiguous_pipeimob_team"] == 1
+
+
+def test_vista_deal_team_has_priority_and_api_conflict_is_auditable():
+    result = reconcile_sales(
+        [
+            {
+                "transacao_unique_id_pipeimob": "pipe-1",
+                "codigo_imovel": "100",
+                "data_contrato": "2026-08-10",
+                "valor_contrato": "100000",
+                "agente_gestor_grupos_a_que_pertence": ["team-1"],
+            }
+        ],
+        [
+            {
+                "deal_id": "vista-1",
+                "property_code": "100",
+                "commercial_team_name": "Equipe Evolução",
+            }
+        ],
+        pipeimob_group_mapping={
+            "team-1": {"name": "Equipe Meta", "type": "team"},
+        },
+    )
+
+    item = result["items"][0]
+    assert item["team_name"] == "Equipe Evolução"
+    assert item["team_source"] == "vista_deal"
+    assert item["vista_team"] == "Equipe Evolução"
+    assert item["pipeimob_team"] == "Equipe Meta"
+    assert item["team_resolution_status"] == "conflict_api_sources"
+    assert result["summary"]["api_team_conflicts"] == 1
+
+
+def test_ranking_uses_official_sales_and_vista_commercial_broker():
+    reconciliation = {
+        "official_source": "pipeimob_api_v2",
+        "commercial_source": "vista_negocio_ganho",
+        "period": {"start": "2026-08-01", "end": "2026-08-31"},
+        "summary": {"official_sales": 4, "official_vgv": "1000000"},
+        "items": [
+            {
+                "pipeimob_transaction_id": "pipe-1",
+                "vista_deal_id": "vista-1",
+                "commercial_broker": "Ana Corretora",
+                "official_value": "200000",
+                "status": "CONCILIADO",
+            },
+            {
+                "pipeimob_transaction_id": "pipe-2",
+                "vista_deal_id": "vista-2",
+                "commercial_broker": " ana   corretora ",
+                "official_value": "300000",
+                "status": "DIVERGENCIA_VALOR",
+            },
+            {
+                "pipeimob_transaction_id": "pipe-3",
+                "vista_deal_id": "vista-3",
+                "commercial_broker": "Bruno Corretor",
+                "official_value": "400000",
+                "status": "CONCILIADO",
+            },
+            {
+                "pipeimob_transaction_id": "pipe-4",
+                "vista_deal_id": None,
+                "commercial_broker": None,
+                "official_value": "100000",
+                "status": "PIPEIMOB_SEM_GANHO_VISTA",
+            },
+            {
+                "pipeimob_transaction_id": None,
+                "vista_deal_id": "vista-only",
+                "commercial_broker": "Bruno Corretor",
+                "official_value": None,
+                "status": "VISTA_SEM_CONTRATO_PIPEIMOB",
+            },
+        ],
+    }
+
+    result = rank_commercial_sales(reconciliation)
+
+    assert result["attribution"] == "vista_commercial_broker"
+    assert result["ranking"][0] == {
+        "commercial_broker": "Ana Corretora",
+        "sales_count": 2,
+        "vgv": "500000",
+        "average_ticket": "250000",
+        "position": 1,
+    }
+    assert result["ranking"][1]["commercial_broker"] == "Bruno Corretor"
+    assert result["summary"] == {
+        "official_sales": 4,
+        "official_vgv": "1000000",
+        "attributed_sales": 3,
+        "attributed_vgv": "900000",
+        "unattributed_sales": 1,
+        "unattributed_vgv": "100000",
+    }
+
+
+def test_ranking_can_order_by_vgv():
+    reconciliation = {
+        "summary": {"official_sales": 3, "official_vgv": "900000"},
+        "items": [
+            {
+                "pipeimob_transaction_id": "1",
+                "commercial_broker": "Mais contratos",
+                "official_value": "100000",
+            },
+            {
+                "pipeimob_transaction_id": "2",
+                "commercial_broker": "Mais contratos",
+                "official_value": "100000",
+            },
+            {
+                "pipeimob_transaction_id": "3",
+                "commercial_broker": "Maior VGV",
+                "official_value": "700000",
+            },
+        ],
+    }
+
+    result = rank_commercial_sales(reconciliation, metric="vgv")
+
+    assert result["ranking"][0]["commercial_broker"] == "Maior VGV"
+    assert result["ranking"][0]["position"] == 1

@@ -3,7 +3,7 @@
 from collections import Counter, defaultdict
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
-from typing import Any, DefaultDict, Dict, List, Optional, Sequence
+from typing import Any, DefaultDict, Dict, List, Literal, Optional, Sequence
 
 
 MATCHED = "CONCILIADO"
@@ -35,12 +35,16 @@ def reconcile_sales(
     pipeimob_transactions: Sequence[Dict[str, Any]],
     vista_gains: Sequence[Dict[str, Any]],
     date_tolerance_days: int = 7,
+    pipeimob_group_mapping: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Return official Pipeimob totals enriched by Vista commercial ownership."""
     if date_tolerance_days < 0:
         raise ValueError("date_tolerance_days cannot be negative")
 
-    pipe_sales = [_normalize_pipe_sale(row) for row in pipeimob_transactions]
+    pipe_sales = [
+        _normalize_pipe_sale(row, pipeimob_group_mapping or {})
+        for row in pipeimob_transactions
+    ]
     gains = [_normalize_vista_gain(row) for row in vista_gains]
     _assert_unique(pipe_sales, "transaction_id")
     _assert_unique(gains, "deal_id")
@@ -106,6 +110,7 @@ def reconcile_sales(
                 commercial_broker
             )
 
+        team_resolution = _resolve_api_team(sale, selected)
         items.append(
             {
                 **_base_pipe_item(sale, issues[0] if issues else MATCHED),
@@ -129,6 +134,7 @@ def reconcile_sales(
                 "commercial_broker": commercial_broker,
                 "broker_roles_differ": broker_roles_differ,
                 "vista_stage": selected["stage_name"],
+                **team_resolution,
             }
         )
 
@@ -154,6 +160,16 @@ def reconcile_sales(
                     "commercial_broker_id": gain["commercial_broker_id"],
                     "commercial_broker": gain["commercial_broker_name"],
                     "fiscal_broker": None,
+                    "responsible_manager": None,
+                    "team_name": gain["commercial_team_name"],
+                    "team_source": (
+                        "vista_deal" if gain["commercial_team_name"] else None
+                    ),
+                    "team_resolution_status": (
+                        "resolved" if gain["commercial_team_name"] else "unresolved"
+                    ),
+                    "vista_team": gain["commercial_team_name"],
+                    "pipeimob_team": None,
                 }
             )
 
@@ -172,9 +188,21 @@ def reconcile_sales(
         for item in items
         if item.get("vista_deal_id") and not item.get("commercial_broker")
     )
+    official_items = [item for item in items if item.get("pipeimob_transaction_id")]
+    api_team_resolved = sum(1 for item in official_items if item.get("team_name"))
+    api_team_conflicts = sum(
+        1
+        for item in official_items
+        if item.get("team_resolution_status") == "conflict_api_sources"
+    )
+    ambiguous_pipeimob_team = sum(
+        1
+        for item in official_items
+        if item.get("team_resolution_status") == "ambiguous_pipeimob_groups"
+    )
 
     return {
-        "contract_version": "1.0",
+        "contract_version": "1.1",
         "official_source": "pipeimob_api_v2",
         "commercial_source": "vista_negocio_ganho",
         "summary": {
@@ -188,19 +216,131 @@ def reconcile_sales(
             "no_automatic_link": status_counts[NO_LINK],
             "source_data_incomplete": status_counts[SOURCE_DATA_INCOMPLETE],
             "missing_commercial_broker": missing_commercial_broker,
+            "api_team_resolved": api_team_resolved,
+            "api_team_unresolved": max(len(pipe_sales) - api_team_resolved, 0),
+            "api_team_conflicts": api_team_conflicts,
+            "ambiguous_pipeimob_team": ambiguous_pipeimob_team,
         },
         "items": items,
     }
 
 
-def _normalize_pipe_sale(row: Dict[str, Any]) -> Dict[str, Any]:
+def rank_commercial_sales(
+    reconciliation: Dict[str, Any],
+    metric: Literal["sales_count", "vgv"] = "sales_count",
+) -> Dict[str, Any]:
+    """Aggregate official Pipeimob sales by Vista's commercial broker.
+
+    Only records backed by an official Pipeimob transaction are counted. A
+    linked sale remains attributable when its date or value differs between
+    systems; those differences are reconciliation issues, not evidence that
+    the signed contract stopped being an official sale.
+    """
+    if metric not in ("sales_count", "vgv"):
+        raise ValueError("metric must be sales_count or vgv")
+
+    grouped: Dict[str, Dict[str, Any]] = {}
+    attributed_sales = 0
+    attributed_vgv = Decimal("0")
+
+    for item in reconciliation.get("items") or []:
+        if not isinstance(item, dict) or not item.get("pipeimob_transaction_id"):
+            continue
+
+        broker = _clean(item.get("commercial_broker"))
+        if not broker:
+            continue
+
+        normalized = _normalize_text(broker)
+        row = grouped.setdefault(
+            normalized,
+            {
+                "commercial_broker": broker,
+                "sales_count": 0,
+                "vgv": Decimal("0"),
+            },
+        )
+        value = _parse_decimal(item.get("official_value")) or Decimal("0")
+        row["sales_count"] += 1
+        row["vgv"] += value
+        attributed_sales += 1
+        attributed_vgv += value
+
+    ranking = []
+    for row in grouped.values():
+        sales_count = int(row["sales_count"])
+        vgv = row["vgv"]
+        ranking.append(
+            {
+                "commercial_broker": row["commercial_broker"],
+                "sales_count": sales_count,
+                "vgv": str(vgv),
+                "average_ticket": str(
+                    vgv / Decimal(sales_count) if sales_count else Decimal("0")
+                ),
+            }
+        )
+
+    if metric == "vgv":
+        ranking.sort(
+            key=lambda row: (
+                -Decimal(row["vgv"]),
+                -row["sales_count"],
+                _normalize_text(row["commercial_broker"]),
+            )
+        )
+    else:
+        ranking.sort(
+            key=lambda row: (
+                -row["sales_count"],
+                -Decimal(row["vgv"]),
+                _normalize_text(row["commercial_broker"]),
+            )
+        )
+
+    for position, row in enumerate(ranking, start=1):
+        row["position"] = position
+
+    summary = reconciliation.get("summary") or {}
+    official_sales = int(summary.get("official_sales") or 0)
+    official_vgv = _parse_decimal(summary.get("official_vgv")) or Decimal("0")
+    return {
+        "contract_version": "1.0",
+        "official_source": reconciliation.get("official_source"),
+        "commercial_source": reconciliation.get("commercial_source"),
+        "attribution": "vista_commercial_broker",
+        "metric": metric,
+        "period": reconciliation.get("period"),
+        "generated_at": reconciliation.get("generated_at"),
+        "summary": {
+            "official_sales": official_sales,
+            "official_vgv": str(official_vgv),
+            "attributed_sales": attributed_sales,
+            "attributed_vgv": str(attributed_vgv),
+            "unattributed_sales": max(official_sales - attributed_sales, 0),
+            "unattributed_vgv": str(max(official_vgv - attributed_vgv, Decimal("0"))),
+        },
+        "ranking": ranking,
+    }
+
+
+def _normalize_pipe_sale(
+    row: Dict[str, Any],
+    group_mapping: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
+    responsible_manager = _clean(row.get("agente_gestor"))
+    pipeimob_team = _resolve_pipeimob_group_team(row, group_mapping)
     return {
         "transaction_id": _clean(row.get("transacao_unique_id_pipeimob")),
         "contract_code": _clean(row.get("codigo_contrato")),
         "property_code": _normalize_code(row.get("codigo_imovel")),
         "official_date": _parse_date(pipeimob_official_sale_date(row)),
         "official_value": _parse_decimal(row.get("valor_contrato")),
-        "fiscal_broker": _clean(row.get("agente_gestor")),
+        # Kept for backwards compatibility. Pipeimob's agente_gestor is the
+        # transaction's responsible manager, not the commercial broker.
+        "fiscal_broker": responsible_manager,
+        "responsible_manager": responsible_manager,
+        **pipeimob_team,
     }
 
 
@@ -212,8 +352,108 @@ def _normalize_vista_gain(row: Dict[str, Any]) -> Dict[str, Any]:
         "deal_value": _parse_decimal(row.get("deal_value")),
         "commercial_broker_id": _clean(row.get("commercial_broker_id")),
         "commercial_broker_name": _clean(row.get("commercial_broker_name")),
+        "commercial_team_name": _clean(row.get("commercial_team_name")),
         "stage_name": _clean(row.get("stage_name")),
     }
+
+
+def _resolve_api_team(
+    sale: Dict[str, Any], gain: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Prefer transaction-specific API evidence and expose any disagreement."""
+    vista_team = gain.get("commercial_team_name")
+    pipeimob_team = sale.get("pipeimob_team_name")
+    pipeimob_status = sale.get("pipeimob_team_status")
+
+    if vista_team:
+        conflict = bool(
+            pipeimob_team
+            and _normalize_text(str(vista_team))
+            != _normalize_text(str(pipeimob_team))
+        )
+        return {
+            "team_name": vista_team,
+            "team_source": "vista_deal",
+            "team_resolution_status": (
+                "conflict_api_sources" if conflict else "resolved"
+            ),
+            "vista_team": vista_team,
+            "pipeimob_team": pipeimob_team,
+        }
+
+    if pipeimob_team:
+        return {
+            "team_name": pipeimob_team,
+            "team_source": "pipeimob_responsible_group",
+            "team_resolution_status": "resolved",
+            "vista_team": None,
+            "pipeimob_team": pipeimob_team,
+        }
+
+    return {
+        "team_name": None,
+        "team_source": None,
+        "team_resolution_status": (
+            "ambiguous_pipeimob_groups"
+            if pipeimob_status == "ambiguous"
+            else "unresolved"
+        ),
+        "vista_team": None,
+        "pipeimob_team": None,
+    }
+
+
+def _resolve_pipeimob_group_team(
+    row: Dict[str, Any], group_mapping: Dict[str, Dict[str, Any]]
+) -> Dict[str, Any]:
+    group_ids = _extract_pipeimob_group_ids(row)
+    teams: Dict[str, str] = {}
+    for group_id in group_ids:
+        configured = group_mapping.get(group_id)
+        if not isinstance(configured, dict) or configured.get("type") != "team":
+            continue
+        name = _clean(configured.get("name"))
+        if name:
+            teams[_normalize_text(name)] = name
+
+    if len(teams) == 1:
+        return {
+            "pipeimob_group_ids": group_ids,
+            "pipeimob_team_name": next(iter(teams.values())),
+            "pipeimob_team_status": "resolved",
+        }
+    return {
+        "pipeimob_group_ids": group_ids,
+        "pipeimob_team_name": None,
+        "pipeimob_team_status": "ambiguous" if len(teams) > 1 else "unresolved",
+    }
+
+
+def _extract_pipeimob_group_ids(row: Dict[str, Any]) -> List[str]:
+    values: List[Any] = []
+    primary = row.get("agente_gestor_grupos_a_que_pertence")
+    if isinstance(primary, (list, tuple, set)):
+        values.extend(primary)
+    elif primary not in (None, ""):
+        values.append(primary)
+
+    for field in (
+        "agente_gestor_grupos_a_que_pertence1",
+        "agente_gestor_grupos_a_que_pertence2",
+        "agente_gestor_grupos_a_que_pertence3",
+    ):
+        value = row.get(field)
+        if value not in (None, ""):
+            values.append(value)
+
+    result: List[str] = []
+    seen = set()
+    for value in values:
+        group_id = _clean(value)
+        if group_id and group_id not in seen:
+            seen.add(group_id)
+            result.append(group_id)
+    return result
 
 
 def _select_candidate(
@@ -275,7 +515,23 @@ def _base_pipe_item(
         ),
         "vista_value": None,
         "fiscal_broker": sale["fiscal_broker"],
+        "responsible_manager": sale["responsible_manager"],
         "commercial_broker": None,
+        "team_name": sale["pipeimob_team_name"],
+        "team_source": (
+            "pipeimob_responsible_group" if sale["pipeimob_team_name"] else None
+        ),
+        "team_resolution_status": (
+            "resolved"
+            if sale["pipeimob_team_name"]
+            else (
+                "ambiguous_pipeimob_groups"
+                if sale["pipeimob_team_status"] == "ambiguous"
+                else "unresolved"
+            )
+        ),
+        "vista_team": None,
+        "pipeimob_team": sale["pipeimob_team_name"],
     }
 
 

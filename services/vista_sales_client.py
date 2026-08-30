@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -41,6 +42,7 @@ class VistaSalesClient:
         api_key: str,
         pipe_id: str,
         timeout_seconds: int = 12,
+        team_field: Optional[str] = None,
         opener: Optional[Callable[..., Any]] = None,
     ) -> None:
         if not str(base_url or "").strip():
@@ -49,11 +51,22 @@ class VistaSalesClient:
             raise VistaSalesConfigurationError("VISTA_API_KEY is required")
         if not str(pipe_id or "").strip():
             raise VistaSalesConfigurationError("VISTA_SALES_PIPE_ID is required")
+        normalized_team_field = str(team_field or "").strip() or None
+        if normalized_team_field and not re.fullmatch(
+            r"[A-Za-z][A-Za-z0-9_]*", normalized_team_field
+        ):
+            raise VistaSalesConfigurationError(
+                "VISTA_SALES_TEAM_FIELD must be a Vista field identifier"
+            )
 
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.pipe_id = str(pipe_id).strip()
         self.timeout_seconds = max(1, min(30, int(timeout_seconds)))
+        self.team_field = normalized_team_field
+        self.fields = list(self.FIELDS)
+        if self.team_field and self.team_field not in self.fields:
+            self.fields.append(self.team_field)
         self.opener = opener or urllib.request.urlopen
 
     @classmethod
@@ -63,6 +76,7 @@ class VistaSalesClient:
             api_key=os.getenv("VISTA_API_KEY", ""),
             pipe_id=os.getenv("VISTA_SALES_PIPE_ID", ""),
             timeout_seconds=int(os.getenv("VISTA_HTTP_TIMEOUT_SECONDS", "12")),
+            team_field=os.getenv("VISTA_SALES_TEAM_FIELD"),
         )
 
     def fetch_gains(self, start_date: date, end_date: date) -> List[Dict[str, Any]]:
@@ -167,7 +181,7 @@ class VistaSalesClient:
         self, start_date: date, end_date: date, page: int
     ) -> Dict[str, Any]:
         pesquisa = {
-            "fields": self.FIELDS,
+            "fields": self.fields,
             "filter": {
                 "Status": "Ganho",
                 "DataFinal": [start_date.isoformat(), end_date.isoformat()],
@@ -208,8 +222,7 @@ class VistaSalesClient:
             raise VistaSalesAPIError("Vista response must be a JSON object")
         return payload
 
-    @staticmethod
-    def _normalize_gain(record: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_gain(self, record: Dict[str, Any]) -> Dict[str, Any]:
         """Exclude client fields even if a tenant unexpectedly returns them."""
         return {
             "deal_id": record.get("Codigo"),
@@ -226,7 +239,21 @@ class VistaSalesClient:
                 record, "CorretorNegocio"
             ),
             "commercial_broker_name": None,
+            "commercial_team_name": self._team_value(
+                record.get(self.team_field) if self.team_field else None
+            ),
         }
+
+    @staticmethod
+    def _team_value(value: Any) -> Optional[str]:
+        if isinstance(value, dict):
+            value = VistaSalesClient._first_present(
+                value, "Nome", "name", "Equipe", "team"
+            )
+        if isinstance(value, (list, tuple, set, dict)):
+            return None
+        text = str(value or "").strip()
+        return text or None
 
     @staticmethod
     def _first_present(record: Dict[str, Any], *keys: str) -> Any:

@@ -30,6 +30,7 @@ def test_reconciliation_endpoint_uses_live_pipeimob_and_vista_sources():
             "data_inicio_venda": "2026-07-01",
             "valor_contrato": "100000",
             "agente_gestor": "Agente Fiscal",
+            "agente_gestor_grupos_a_que_pertence": ["team-1"],
         }
     ]
 
@@ -37,6 +38,14 @@ def test_reconciliation_endpoint_uses_live_pipeimob_and_vista_sources():
         with patch(
             "main.load_transactions_dataset",
             return_value=("live", "pipeimob_api_v2", pipe_rows, 1, "fresh"),
+        ), patch(
+            "main.parse_official_team_groups",
+            return_value=(
+                "configured",
+                True,
+                {"team-1": {"name": "Equipe Meta", "type": "team"}},
+                ["Equipe Meta"],
+            ),
         ), patch("main.VistaSalesClient.from_env", return_value=FakeVistaClient()):
             response = TestClient(app).get(
                 "/api/reconciliation/sales"
@@ -51,5 +60,48 @@ def test_reconciliation_endpoint_uses_live_pipeimob_and_vista_sources():
     assert data["summary"]["matched"] == 1
     assert data["items"][0]["commercial_broker"] == "Corretor Comercial"
     assert data["items"][0]["fiscal_broker"] == "Agente Fiscal"
+    assert data["items"][0]["responsible_manager"] == "Agente Fiscal"
+    assert data["items"][0]["team_name"] == "Equipe Meta"
+    assert data["items"][0]["team_source"] == "pipeimob_responsible_group"
     assert data["items"][0]["broker_roles_differ"] is True
-    assert response.headers["X-Reconciliation-Contract"] == "1.0"
+    assert response.headers["X-Reconciliation-Contract"] == "1.1"
+
+
+def test_ranking_endpoint_returns_aggregates_without_transaction_ids():
+    app.dependency_overrides[verify_backend_api_key] = lambda: {"sub": "test"}
+    pipe_rows = [
+        {
+            "transacao_unique_id_pipeimob": "pipe-1",
+            "codigo_imovel": "100",
+            "codigo_contrato": "contract-1",
+            "data_contrato": "2026-08-10",
+            "valor_contrato": "100000",
+            "agente_gestor": "Agente Fiscal",
+        }
+    ]
+
+    try:
+        with patch(
+            "main.load_transactions_dataset",
+            return_value=("live", "pipeimob_api_v2", pipe_rows, 1, "fresh"),
+        ), patch("main.VistaSalesClient.from_env", return_value=FakeVistaClient()):
+            response = TestClient(app).get(
+                "/api/reconciliation/sales/ranking"
+                "?data_inicio_ccv=2026-08-01&data_fim_ccv=2026-08-20"
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ranking"] == [
+        {
+            "commercial_broker": "Corretor Comercial",
+            "sales_count": 1,
+            "vgv": "100000",
+            "average_ticket": "100000",
+            "position": 1,
+        }
+    ]
+    assert "pipeimob_transaction_id" not in response.text
+    assert response.headers["X-Sales-Attribution"] == "vista_commercial_broker"
