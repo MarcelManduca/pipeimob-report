@@ -8,7 +8,7 @@ import {
 
 const FUNCTION_SLUG = "gralha-indicadores-mcp";
 const SERVER_NAME = "Gralha — Indicadores Pipeimob × Vista";
-const SERVER_VERSION = "1.9.0";
+const SERVER_VERSION = "1.9.1";
 const JSON_HEADERS = {
   "Content-Type": "application/json; charset=utf-8",
   "Cache-Control": "no-store",
@@ -1118,8 +1118,16 @@ async function callVistaFunnelCohort(
       ],
       response_guidance: {
         unavailable_metric_max_short_paragraphs: 3,
+        unavailable_metric_max_words: 90,
+        lead_with_management_snapshot: true,
+        management_snapshot_order: [
+          "current_stage_open_status",
+          "current_stage_total",
+          "historical_metric_limitation",
+        ],
         include_verified_current_snapshot_alternative: true,
         avoid_internal_implementation_terms: true,
+        do_not_repeat_user_question: true,
         never_say_contract_confirmation_is_pending: true,
       },
     },
@@ -1362,7 +1370,7 @@ Deno.serve(async (request: Request) => {
       capabilities: { tools: { listChanged: false } },
       serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
       instructions:
-        "Use consultar_ranking_vendas para perguntas sobre vendas oficiais e consultar_funil_vista para negócios cadastrados no período, status geral, etapa atual e cruzamento entre etapa e status. Para rankings de equipes, use agrupar_por=equipe; para avaliar uma equipe específica, informe também equipe. Para saber o bairro em que um corretor mais vendeu, use agrupar_por=bairro e informe corretor. Use top_n conforme solicitado, com padrão 10. Quantidade é o critério padrão; VGV deve ser solicitado explicitamente. O fim de períodos futuros é limitado automaticamente à data atual de São Paulo. Quantidade, data e VGV vêm das APIs ao vivo; a planilha é somente uma referência gerencial de responsável para equipe com vigência. Sempre informe período efetivo, cobertura, data da referência e vendas sem atribuição. No funil, diferencie obrigatoriamente negócios criados no período, etapa atual, status geral e eventos históricos de entrada em etapa. Nunca apresente negócios atualmente em Proposta como propostas geradas no período; esta métrica exige histórico de etapas. Se pedirem uma métrica histórica indisponível, responda em no máximo três parágrafos curtos: diga objetivamente o que falta, apresente como alternativa apenas o total na etapa atual e o total Em aberto nessa etapa quando existirem, e esclareça que são uma fotografia atual. Não repita listas extensas de fontes ou limitações e nunca diga que existe confirmação de contrato pendente. Não conclua sobre conversão de pipeline, visitas ou tempo entre etapas sem os dados operacionais correspondentes. A visualização é fornecida como dados estruturados e nunca deve ser substituída por barras ASCII ou código Python.",
+        "Use consultar_ranking_vendas para perguntas sobre vendas oficiais e consultar_funil_vista para negócios cadastrados no período, status geral, etapa atual e cruzamento entre etapa e status. Para rankings de equipes, use agrupar_por=equipe; para avaliar uma equipe específica, informe também equipe. Para saber o bairro em que um corretor mais vendeu, use agrupar_por=bairro e informe corretor. Use top_n conforme solicitado, com padrão 10. Quantidade é o critério padrão; VGV deve ser solicitado explicitamente. O fim de períodos futuros é limitado automaticamente à data atual de São Paulo. Quantidade, data e VGV vêm das APIs ao vivo; a planilha é somente uma referência gerencial de responsável para equipe com vigência. Sempre informe período efetivo, cobertura, data da referência e vendas sem atribuição. No funil, diferencie obrigatoriamente negócios criados no período, etapa atual, status geral e eventos históricos de entrada em etapa. Nunca apresente negócios atualmente em Proposta como propostas geradas no período; esta métrica exige histórico de etapas. Se pedirem uma métrica histórica indisponível, não comece pela limitação: responda em no máximo 90 palavras e abra com 'Para gestão atual', apresentando primeiro o total Em aberto na etapa solicitada e depois o total atual nessa etapa. Em seguida, esclareça em uma frase que essa fotografia atual não representa todas as entradas históricas na etapa e que o histórico necessário não está disponível. Não repita a pergunta, não liste fontes, timestamps ou limitações técnicas salvo se forem solicitados e nunca diga que existe confirmação de contrato pendente. Não conclua sobre conversão de pipeline, visitas ou tempo entre etapas sem os dados operacionais correspondentes. A visualização é fornecida como dados estruturados e nunca deve ser substituída por barras ASCII ou código Python.",
     });
   }
   if (message.method === "tools/list") {
