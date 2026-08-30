@@ -6,6 +6,8 @@
   em Proposta mesmo quando a fotografia ao vivo do Vista falhar.
 - Recupera sequencialmente apenas as páginas recusadas durante a paginação
   concorrente do Vista.
+- Trata desconexões remotas, resets de conexão e falhas SSL transitórias como
+  erros recuperáveis antes de abandonar uma página do Vista.
 - Reutiliza por até uma hora o último agregado recente quando a atualização do
   funil falhar, identificando a resposta como cache de contingência.
 - Adiciona telemetria sanitizada para falhas do backend do funil.

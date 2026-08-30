@@ -11,9 +11,12 @@ here.
 """
 
 import concurrent.futures
+import http.client
 import json
 import os
 import re
+import socket
+import ssl
 import time
 import urllib.error
 import urllib.parse
@@ -269,7 +272,15 @@ class VistaFunnelClient:
                     raise VistaSalesAPIError(
                         f"Vista funnel request failed with HTTP {exc.code}"
                     ) from exc
-            except (urllib.error.URLError, TimeoutError) as exc:
+            except (
+                urllib.error.URLError,
+                TimeoutError,
+                ConnectionError,
+                socket.timeout,
+                http.client.HTTPException,
+                ssl.SSLError,
+                OSError,
+            ) as exc:
                 if attempt >= self.request_attempts:
                     raise VistaSalesAPIError(
                         "Vista funnel request is unavailable"
