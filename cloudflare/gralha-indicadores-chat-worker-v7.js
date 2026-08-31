@@ -1,5 +1,7 @@
 const MCP_URL =
   "https://kmysinxpdkeszrtdyhid.supabase.co/functions/v1/gralha-indicadores-mcp/mcp";
+const DEFAULT_OPENAI_MODEL = "gpt-5-mini";
+const OPENAI_TIMEOUT_MS = 25_000;
 
 const SECURITY_HEADERS = {
   "Content-Security-Policy":
@@ -199,7 +201,8 @@ async function updatePassword(request, env) {
 }
 
 async function refresh(request, env) {
-  if (!configured(env)) return json({ error: "Portal não configurado." }, 503);
+  if (!authConfigured(env))
+    return json({ error: "Portal não configurado." }, 503);
   let body;
   try {
     body = await parseJson(request);
@@ -648,18 +651,22 @@ async function chat(request, env) {
     }
   }
 
-  const ai = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${env.OPENAI_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: env.OPENAI_MODEL || "gpt-5-mini",
-      store: false,
-      max_output_tokens: 900,
-      reasoning: { effort: "low" },
-      instructions: [
+  const openAiModel = env.OPENAI_MODEL || DEFAULT_OPENAI_MODEL;
+  let ai;
+  try {
+    ai = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${env.OPENAI_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      signal: AbortSignal.timeout(OPENAI_TIMEOUT_MS),
+      body: JSON.stringify({
+        model: openAiModel,
+        store: false,
+        max_output_tokens: 900,
+        reasoning: { effort: "low" },
+        instructions: [
         "Você é o assistente de indicadores comerciais da Gralha Imóveis.",
         "Responda em português do Brasil. Comece pelo número, ranking ou conclusão solicitada, sem bordões ou introduções padronizadas.",
         "Para perguntas sobre vendas oficiais, rankings de vendas, corretores, bairros, VGV ou ticket, use consultar_ranking_vendas. Para perguntas sobre negócios cadastrados no período, status geral, etapa atual do funil ou propostas, use consultar_funil_vista. Um pedido para separar propostas por equipe é uma consulta de funil: chame consultar_funil_vista com agrupar_por=equipe e preserve o período da conversa. Nunca use consultar_ranking_vendas para responder sobre propostas.",
@@ -672,22 +679,42 @@ async function chat(request, env) {
         "Nunca produza gráficos com caracteres, código Python, matplotlib ou instruções para gerar imagem. O portal renderiza a visualização estruturada devolvida pela ferramenta.",
         "Quando útil, use listas curtas em texto simples e evite repetir a mesma confirmação.",
         "Se a ferramenta não trouxer dados suficientes, explique objetivamente o que falta.",
-      ].join(" "),
-      input: messages.map(({ role, content }) => ({ role, content })),
-      tools: [
-        {
-          type: "mcp",
-          server_label: "gralha_indicadores",
-          server_description:
-            "Consulta somente leitura aos rankings de vendas e à coorte de negócios do funil Vista autorizados da Gralha Imóveis.",
-          server_url: MCP_URL,
-          authorization: accessToken,
-          allowed_tools: ["consultar_ranking_vendas", "consultar_funil_vista"],
-          require_approval: "never",
-        },
-      ],
-    }),
-  });
+        ].join(" "),
+        input: messages.map(({ role, content }) => ({ role, content })),
+        tools: [
+          {
+            type: "mcp",
+            server_label: "gralha_indicadores",
+            server_description:
+              "Consulta somente leitura aos rankings de vendas e à coorte de negócios do funil Vista autorizados da Gralha Imóveis.",
+            server_url: MCP_URL,
+            authorization: accessToken,
+            allowed_tools: [
+              "consultar_ranking_vendas",
+              "consultar_funil_vista",
+            ],
+            require_approval: "never",
+          },
+        ],
+      }),
+    });
+  } catch (error) {
+    const timedOut =
+      error instanceof DOMException &&
+      (error.name === "TimeoutError" || error.name === "AbortError");
+    console.error("openai_request_error", {
+      kind: timedOut ? "timeout" : "network_error",
+      model: openAiModel,
+    });
+    return json(
+      {
+        error: timedOut
+          ? "A análise demorou mais do que o esperado. Tente novamente."
+          : "Não foi possível acessar a análise inteligente agora. Tente novamente em instantes.",
+      },
+      timedOut ? 504 : 502,
+    );
+  }
 
   const payload = await ai.json().catch(() => ({}));
   if (!ai.ok) {
@@ -847,7 +874,12 @@ export default {
       )
         return response(HTML);
       if (request.method === "GET" && url.pathname === "/api/health") {
-        return json({ status: "ok", configured: configured(env) });
+        return json({
+          status: "ok",
+          configured: configured(env),
+          auth_configured: authConfigured(env),
+          openai_model: env.OPENAI_MODEL || DEFAULT_OPENAI_MODEL,
+        });
       }
       if (request.method === "POST" && url.pathname === "/api/login")
         return login(request, env);
