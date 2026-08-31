@@ -129,16 +129,24 @@ class VistaFunnelClient:
         self.page_concurrency = max(1, min(8, int(page_concurrency)))
         self.opener = opener or urllib.request.urlopen
 
-        self.fields = list(self.BASE_FIELDS)
+        self.core_fields = list(self.BASE_FIELDS)
+        if self.created_field not in self.core_fields:
+            self.core_fields.append(self.created_field)
+        self.optional_fields = []
         for field in (
-            self.created_field,
             self.team_field,
             self.agency_field,
             self.capture_source_field,
             self.responsible_field,
         ):
-            if field and field not in self.fields:
-                self.fields.append(field)
+            if (
+                field
+                and field not in self.core_fields
+                and field not in self.optional_fields
+            ):
+                self.optional_fields.append(field)
+        self.fields = self.core_fields + self.optional_fields
+        self.optional_fields_rejected = False
 
     @classmethod
     def from_env(cls) -> "VistaFunnelClient":
@@ -172,9 +180,7 @@ class VistaFunnelClient:
             ),
             agency_field=os.getenv("VISTA_DEAL_AGENCY_FIELD"),
             capture_source_field=os.getenv("VISTA_DEAL_CAPTURE_SOURCE_FIELD"),
-            responsible_field=os.getenv(
-                "VISTA_DEAL_RESPONSIBLE_FIELD", "Responsavel"
-            ),
+            responsible_field=os.getenv("VISTA_DEAL_RESPONSIBLE_FIELD"),
             request_attempts=request_attempts,
             retry_backoff_seconds=retry_backoff_seconds,
             page_concurrency=page_concurrency,
@@ -253,8 +259,36 @@ class VistaFunnelClient:
     def _fetch_page(
         self, start_date: date, end_date: date, page: int
     ) -> Dict[str, Any]:
+        fields = (
+            self.core_fields if self.optional_fields_rejected else self.fields
+        )
+        try:
+            return self._fetch_page_with_fields(
+                start_date, end_date, page, fields
+            )
+        except VistaFunnelAPIError as exc:
+            if (
+                page == 1
+                and exc.error_code == "vista_http_400"
+                and self.optional_fields
+                and not self.optional_fields_rejected
+            ):
+                payload = self._fetch_page_with_fields(
+                    start_date, end_date, page, self.core_fields
+                )
+                self.optional_fields_rejected = True
+                return payload
+            raise
+
+    def _fetch_page_with_fields(
+        self,
+        start_date: date,
+        end_date: date,
+        page: int,
+        fields: List[str],
+    ) -> Dict[str, Any]:
         pesquisa = {
-            "fields": self.fields,
+            "fields": fields,
             "filter": {
                 self.created_field: [start_date.isoformat(), end_date.isoformat()]
             },

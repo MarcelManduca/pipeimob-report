@@ -368,7 +368,7 @@ def test_optional_dimension_field_names_are_validated():
         )
 
 
-def test_from_env_requests_vista_responsible_field_by_default(monkeypatch):
+def test_from_env_does_not_assume_an_unconfirmed_responsible_field(monkeypatch):
     monkeypatch.setenv("VISTA_API_BASE_URL", "https://tenant.example.com")
     monkeypatch.setenv("VISTA_API_KEY", "secret-key")
     monkeypatch.setenv("VISTA_SALES_PIPE_ID", "pipe-1")
@@ -376,5 +376,51 @@ def test_from_env_requests_vista_responsible_field_by_default(monkeypatch):
 
     client = VistaFunnelClient.from_env()
 
-    assert client.responsible_field == "Responsavel"
-    assert "Responsavel" in client.fields
+    assert client.responsible_field is None
+    assert "Responsavel" not in client.fields
+
+
+def test_http_400_from_optional_field_retries_with_confirmed_core_fields():
+    requested_fields = []
+
+    def opener(request, timeout):
+        query = urllib.parse.parse_qs(
+            urllib.parse.urlparse(request.full_url).query
+        )
+        fields = json.loads(query["pesquisa"][0])["fields"]
+        requested_fields.append(fields)
+        if "Responsavel" in fields:
+            raise urllib.error.HTTPError(
+                request.full_url, 400, "invalid field", None, None
+            )
+        return FakeResponse(
+            {
+                "1": {
+                    "Codigo": "deal-1",
+                    "DataInicial": "2026-08-01",
+                    "Status": "Em aberto",
+                    "NomeEtapa": "Proposta",
+                },
+                "total": 1,
+                "paginas": 1,
+            }
+        )
+
+    client = VistaFunnelClient(
+        "https://tenant.example.com",
+        "secret-key",
+        "pipe-1",
+        responsible_field="Responsavel",
+        request_attempts=1,
+        opener=opener,
+    )
+
+    deals = client.fetch_created_deals(
+        date(2026, 8, 1), date(2026, 8, 31)
+    )
+
+    assert len(requested_fields) == 2
+    assert "Responsavel" in requested_fields[0]
+    assert "Responsavel" not in requested_fields[1]
+    assert client.optional_fields_rejected is True
+    assert deals[0]["stage_name"] == "Proposta"
