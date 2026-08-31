@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-08-31 — Negociação de campos do Vista e gráfico por equipe no Worker v11
+
+- O funil passa a testar dimensões opcionais individualmente após um HTTP 400, preservando `EquipeNegocio` quando outro campo opcional é rejeitado pelo Vista.
+- `EquipeNegocio` torna-se a dimensão padrão de equipe, com fallback seguro para os campos centrais se o tenant não a aceitar.
+- Respostas e gráficos de propostas em aberto deixam de exibir equipes com contagem zero.
+- Novos testes cobrem a negociação parcial de campos e a remoção de séries zeradas.
+
 ## 2026-08-31 — Renovação de sessão e atribuição do funil no Worker v10
 
 - O Worker agora propaga rejeições de autenticação da Edge Function como HTTP 401, permitindo que o navegador renove a sessão e repita a consulta automaticamente sem chamar a OpenAI.
