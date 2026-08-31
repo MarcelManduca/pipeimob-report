@@ -92,6 +92,88 @@ def test_fetch_created_deals_deduplicates_by_vista_deal_id():
     assert deals[0]["stage_name"] == "Fechamento"
 
 
+def test_fetch_created_deals_resolves_broker_as_assignment_identity():
+    requested_paths = []
+
+    def opener(request, timeout):
+        path = urllib.parse.urlparse(request.full_url).path
+        requested_paths.append(path)
+        if path.endswith("/usuarios/listar"):
+            return FakeResponse(
+                {
+                    "1": {"Codigo": "77", "Nome": "Corretora Comercial"},
+                    "total": 1,
+                    "paginas": 1,
+                }
+            )
+        return FakeResponse(
+            {
+                "1": {
+                    "Codigo": "deal-1",
+                    "DataInicial": "2026-08-01",
+                    "Status": "Em aberto",
+                    "NomeEtapa": "Proposta",
+                    "CorretorNegocio": "77",
+                },
+                "total": 1,
+                "paginas": 1,
+            }
+        )
+
+    client = VistaFunnelClient(
+        "https://tenant.example.com", "secret-key", "pipe-1", opener=opener
+    )
+
+    deals = client.fetch_created_deals(date(2026, 8, 1), date(2026, 8, 30))
+    summary = summarize_created_deal_cohort(deals)
+
+    assert requested_paths == ["/negocios/listar", "/usuarios/listar"]
+    assert deals[0]["commercial_broker_name"] == "Corretora Comercial"
+    assert deals[0]["responsible"] == "Corretora Comercial"
+    assert summary["proposal"]["assignment_breakdown"][0]["responsible"] == (
+        "Corretora Comercial"
+    )
+    assert (
+        summary["data_quality"][
+            "proposal_open_without_assignment_identity"
+        ]
+        == 0
+    )
+
+
+def test_broker_name_lookup_failure_preserves_verified_funnel_totals():
+    def opener(request, timeout):
+        path = urllib.parse.urlparse(request.full_url).path
+        if path.endswith("/usuarios/listar"):
+            raise urllib.error.HTTPError(
+                request.full_url, 503, "unavailable", None, None
+            )
+        return FakeResponse(
+            {
+                "1": {
+                    "Codigo": "deal-1",
+                    "DataInicial": "2026-08-01",
+                    "Status": "Em aberto",
+                    "NomeEtapa": "Proposta",
+                    "CorretorNegocio": "77",
+                },
+                "total": 1,
+                "paginas": 1,
+            }
+        )
+
+    client = VistaFunnelClient(
+        "https://tenant.example.com", "secret-key", "pipe-1", opener=opener
+    )
+
+    deals = client.fetch_created_deals(date(2026, 8, 1), date(2026, 8, 30))
+    summary = summarize_created_deal_cohort(deals)
+
+    assert summary["created_deals"] == 1
+    assert summary["proposal"]["created_deals_currently_in_proposal"] == 1
+    assert deals[0]["responsible"] is None
+
+
 def test_fetch_created_deals_retries_transient_failure_once():
     attempts = 0
 

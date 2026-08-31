@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const workerPath = new URL(
-  "../cloudflare/gralha-indicadores-chat-worker-v9.js",
+  "../cloudflare/gralha-indicadores-chat-worker-v10.js",
   import.meta.url,
 );
 
@@ -161,6 +161,41 @@ test("does not call OpenAI when the required source circuit is open", async () =
     assert.equal(openAiCalls, 0);
     assert.match(payload.answer, /antes do processamento generativo/i);
     assert.match(payload.answer, /42 segundos/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("returns 401 when the MCP rejects an otherwise validated session", async () => {
+  const originalFetch = globalThis.fetch;
+  let openAiCalls = 0;
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.endsWith("/auth/v1/user")) return new Response("{}", { status: 200 });
+    if (url.includes("/functions/v1/gralha-indicadores-mcp/mcp")) {
+      return new Response(
+        JSON.stringify({ error: "invalid access token" }),
+        { status: 401, headers: { "Content-Type": "application/json" } },
+      );
+    }
+    if (url === "https://api.openai.com/v1/responses") {
+      openAiCalls += 1;
+      throw new Error("OpenAI must not run after an MCP authentication failure");
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  try {
+    const worker = await loadWorker();
+    const response = await worker.default.fetch(
+      request("Quantos negócios criados em agosto de 2026 estão atualmente na etapa Proposta?"),
+      env,
+    );
+    const payload = await response.json();
+
+    assert.equal(response.status, 401);
+    assert.equal(openAiCalls, 0);
+    assert.match(payload.error, /sessão expirou/i);
   } finally {
     globalThis.fetch = originalFetch;
   }
