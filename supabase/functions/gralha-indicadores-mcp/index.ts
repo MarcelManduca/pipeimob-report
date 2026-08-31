@@ -8,7 +8,7 @@ import {
 
 const FUNCTION_SLUG = "gralha-indicadores-mcp";
 const SERVER_NAME = "Gralha — Indicadores Pipeimob × Vista";
-const SERVER_VERSION = "1.14.0";
+const SERVER_VERSION = "1.14.1";
 const JSON_HEADERS = {
   "Content-Type": "application/json; charset=utf-8",
   "Cache-Control": "no-store",
@@ -186,30 +186,37 @@ async function authorize(request: Request) {
   if (userError || !user)
     return { ok: false as const, reason: "invalid_token" };
 
+  // Validate the authenticated subject through the existing SECURITY DEFINER
+  // role predicate. Besides checking the requested role, has_role() requires
+  // the matching profile to be active. This avoids a fragile direct RLS read
+  // from user_roles during token refresh without weakening authorization.
   const [
-    { data: profile, error: profileError },
-    { data: roles, error: rolesError },
+    { data: isSuperAdmin, error: superAdminError },
+    { data: isViewer, error: viewerError },
   ] = await Promise.all([
-    userClient
-      .from("profiles")
-      .select("status")
-      .eq("id", user.id)
-      .maybeSingle(),
-    userClient.from("user_roles").select("role").eq("user_id", user.id),
+    userClient.rpc("has_role", {
+      _user_id: user.id,
+      _role: "super_admin",
+    }),
+    userClient.rpc("has_role", {
+      _user_id: user.id,
+      _role: "viewer",
+    }),
   ]);
-  if (profileError || rolesError) {
+  if (superAdminError || viewerError) {
     console.error("authorization_lookup_failed", {
-      profileCode: profileError?.code ?? null,
-      rolesCode: rolesError?.code ?? null,
+      superAdminCode: superAdminError?.code ?? null,
+      viewerCode: viewerError?.code ?? null,
     });
     return { ok: false as const, reason: "authorization_lookup_failed" };
   }
 
-  const role = roles?.find(
-    (candidate) =>
-      typeof candidate.role === "string" && ALLOWED_ROLES.has(candidate.role),
-  )?.role;
-  if (profile?.status !== "active" || !role) {
+  const role = isSuperAdmin === true
+    ? "super_admin"
+    : isViewer === true
+      ? "viewer"
+      : null;
+  if (!role || !ALLOWED_ROLES.has(role)) {
     return { ok: false as const, reason: "access_denied" };
   }
 
