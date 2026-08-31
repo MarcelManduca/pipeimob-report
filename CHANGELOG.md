@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-08-31 — Continuidade conversacional do funil no Worker v9
+
+- Mantém o contexto de Proposta em pedidos subsequentes de separação por equipe
+  e cobertura de atribuição.
+- Separa a fotografia atual da etapa Proposta por status geral sem acionar a
+  OpenAI.
+- Gera diretamente no portal gráficos de barras por status ou por equipe com os
+  dados estruturados retornados pelo Vista.
+- Explica quando a fotografia ao vivo muda durante a conversa, em vez de exibir
+  totais divergentes sem contexto.
+
 ## 2026-08-31 — Compatibilidade dos campos opcionais do Vista
 
 - Deixa de presumir que o campo `Responsavel` existe em todos os tenants.
