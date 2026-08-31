@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-08-31 — Renovação de sessão e atribuição do funil no Worker v10
+
+- O Worker agora propaga rejeições de autenticação da Edge Function como HTTP 401, permitindo que o navegador renove a sessão e repita a consulta automaticamente sem chamar a OpenAI.
+- A coorte do funil resolve `CorretorNegocio` pela API de usuários do Vista e usa o nome do corretor como identidade de atribuição quando não há campo direto de equipe ou responsável.
+- Falhas na resolução auxiliar do corretor não tornam os totais verificados do funil indisponíveis.
+- Novos testes cobrem a corrida de expiração da sessão, a resolução de corretor e a preservação dos totais em falhas parciais.
+
 ## 2026-08-31 — Continuidade conversacional do funil no Worker v9
 
 - Mantém o contexto de Proposta em pedidos subsequentes de separação por equipe
