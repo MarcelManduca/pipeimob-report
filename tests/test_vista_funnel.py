@@ -9,6 +9,7 @@ from datetime import date
 import pytest
 
 from services.vista_funnel_client import (
+    VistaFunnelAPIError,
     VistaFunnelClient,
     summarize_created_deal_cohort,
 )
@@ -323,6 +324,35 @@ def test_funnel_error_never_contains_api_key():
     with pytest.raises(VistaSalesAPIError) as error:
         client.fetch_created_deals(date(2026, 8, 1), date(2026, 8, 30))
 
+    assert "never-expose-me" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_code"),
+    [
+        (401, "vista_http_401"),
+        (403, "vista_http_403"),
+        (429, "vista_http_429"),
+        (422, "vista_http_4xx"),
+        (503, "vista_http_5xx"),
+    ],
+)
+def test_funnel_http_failures_are_safely_classified(status, expected_code):
+    def opener(request, timeout):
+        raise urllib.error.HTTPError(request.full_url, status, "denied", None, None)
+
+    client = VistaFunnelClient(
+        "https://tenant.example.com",
+        "never-expose-me",
+        "pipe-1",
+        request_attempts=1,
+        opener=opener,
+    )
+
+    with pytest.raises(VistaFunnelAPIError) as error:
+        client.fetch_created_deals(date(2026, 8, 1), date(2026, 8, 30))
+
+    assert error.value.error_code == expected_code
     assert "never-expose-me" not in str(error.value)
 
 

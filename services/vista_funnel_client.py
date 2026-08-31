@@ -30,6 +30,29 @@ from services.vista_sales_client import (
 )
 
 
+class VistaFunnelAPIError(VistaSalesAPIError):
+    """Sanitized Vista funnel failure with an operational classification."""
+
+    ALLOWED_CODES = {
+        "vista_http_401",
+        "vista_http_403",
+        "vista_http_429",
+        "vista_http_4xx",
+        "vista_http_5xx",
+        "vista_transport_error",
+        "vista_invalid_json",
+        "vista_invalid_contract",
+    }
+
+    def __init__(self, message: str, error_code: str) -> None:
+        super().__init__(message)
+        self.error_code = (
+            error_code
+            if error_code in self.ALLOWED_CODES
+            else "vista_unavailable"
+        )
+
+
 def _normalize_label(value: Any) -> Optional[str]:
     if isinstance(value, dict):
         for key in ("Nome", "name", "Descricao", "description"):
@@ -269,8 +292,9 @@ class VistaFunnelClient:
             except urllib.error.HTTPError as exc:
                 retryable = exc.code == 429 or 500 <= exc.code <= 599
                 if not retryable or attempt >= self.request_attempts:
-                    raise VistaSalesAPIError(
-                        f"Vista funnel request failed with HTTP {exc.code}"
+                    raise VistaFunnelAPIError(
+                        f"Vista funnel page {page} failed with HTTP {exc.code}",
+                        self._http_error_code(exc.code),
                     ) from exc
             except (
                 urllib.error.URLError,
@@ -282,20 +306,39 @@ class VistaFunnelClient:
                 OSError,
             ) as exc:
                 if attempt >= self.request_attempts:
-                    raise VistaSalesAPIError(
-                        "Vista funnel request is unavailable"
+                    raise VistaFunnelAPIError(
+                        f"Vista funnel page {page} transport failed",
+                        "vista_transport_error",
                     ) from exc
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                raise VistaSalesAPIError(
-                    "Vista funnel returned invalid JSON"
+                raise VistaFunnelAPIError(
+                    f"Vista funnel page {page} returned invalid JSON",
+                    "vista_invalid_json",
                 ) from exc
 
             if self.retry_backoff_seconds:
                 time.sleep(self.retry_backoff_seconds * attempt)
 
         if not isinstance(payload, dict):
-            raise VistaSalesAPIError("Vista funnel response must be a JSON object")
+            raise VistaFunnelAPIError(
+                f"Vista funnel page {page} returned an invalid contract",
+                "vista_invalid_contract",
+            )
         return payload
+
+    @staticmethod
+    def _http_error_code(status: int) -> str:
+        if status == 401:
+            return "vista_http_401"
+        if status == 403:
+            return "vista_http_403"
+        if status == 429:
+            return "vista_http_429"
+        if 400 <= status <= 499:
+            return "vista_http_4xx"
+        if 500 <= status <= 599:
+            return "vista_http_5xx"
+        return "vista_unavailable"
 
     def _normalize_deal(self, record: Dict[str, Any]) -> Dict[str, Any]:
         """Whitelist operational fields and discard client data if returned."""
