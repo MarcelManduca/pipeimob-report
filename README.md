@@ -168,7 +168,7 @@ VISTA_DEAL_CREATED_FIELD=DataInicial
 VISTA_DEAL_TEAM_FIELD=
 VISTA_DEAL_AGENCY_FIELD=
 VISTA_DEAL_CAPTURE_SOURCE_FIELD=
-VISTA_DEAL_RESPONSIBLE_FIELD=Responsavel
+VISTA_DEAL_RESPONSIBLE_FIELD=
 VISTA_FUNNEL_REQUEST_MAX_ATTEMPTS=2
 VISTA_FUNNEL_RETRY_BACKOFF_SECONDS=0.25
 VISTA_FUNNEL_PAGE_CONCURRENCY=4
@@ -201,9 +201,10 @@ O endpoint só opera com a fonte Pipeimob ao vivo; dados simulados não podem fo
   confirmado no tenant Vista.
 * **Distribuição gerencial:** o contrato MCP `1.2` agrega a fotografia atual de
   `Proposta` por equipe. A atribuição usa primeiro a equipe retornada pelo Vista
-  e, na ausência dela, o campo `Responsavel` combinado com a referência
-  gerencial vigente. A resposta também informa a cobertura e os registros sem
-  equipe atribuída.
+  e, na ausência dela, um campo de responsável previamente confirmado no tenant
+  combinado com a referência gerencial vigente. Campos opcionais rejeitados
+  pelo Vista não interrompem os totais do funil; a resposta informa a cobertura
+  e os registros sem equipe atribuída.
 
 Exemplo:
 

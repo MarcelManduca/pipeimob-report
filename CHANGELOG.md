@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-08-31 — Compatibilidade dos campos opcionais do Vista
+
+- Deixa de presumir que o campo `Responsavel` existe em todos os tenants.
+- Repete a primeira página apenas com campos confirmados quando o Vista rejeita
+  dimensões opcionais com HTTP 400.
+- Preserva os totais do funil mesmo quando equipe, agência, origem ou responsável
+  ainda não têm um identificador de API confirmado.
+
 ## 2026-08-31 — Período conversacional e diagnóstico do Vista
 
 - Preserva o mês mais recente citado na conversa e herda apenas o ano quando o
