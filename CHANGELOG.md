@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-08-31 — Período conversacional e diagnóstico do Vista
+
+- Preserva o mês mais recente citado na conversa e herda apenas o ano quando o
+  usuário informa um novo mês sem repeti-lo.
+- Separa a fotografia de negócios atualmente em Proposta da métrica histórica
+  de propostas geradas.
+- Responde diretamente às fotografias de Proposta e aos seus seguimentos por
+  status, sem consumir tokens da OpenAI.
+- Registra o status HTTP exato e sanitizado devolvido pelo Vista para permitir
+  correções direcionadas da integração.
+- Prepara o Worker Cloudflare v8 para publicação manual.
+
 ## 2026-08-30 — Resiliência da consulta de propostas
 
 - Mantém uma resposta objetiva sobre a indisponibilidade do histórico de entrada

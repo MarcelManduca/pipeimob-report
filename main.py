@@ -6,6 +6,7 @@ import socket
 import json
 import ssl
 import time
+import re
 from datetime import datetime, date, timezone, timedelta
 from typing import List, Literal, Optional, Union, Any
 from decimal import Decimal
@@ -5420,15 +5421,10 @@ async def get_vista_funnel_cohort(
             return fallback
         error_code = getattr(exc, "error_code", "vista_unavailable")
         if error_code not in {
-            "vista_http_401",
-            "vista_http_403",
-            "vista_http_429",
-            "vista_http_4xx",
-            "vista_http_5xx",
             "vista_transport_error",
             "vista_invalid_json",
             "vista_invalid_contract",
-        }:
+        } and not re.fullmatch(r"vista_http_[45]\d{2}", error_code):
             error_code = "vista_unavailable"
         raise HTTPException(
             status_code=503,

@@ -333,8 +333,8 @@ def test_funnel_error_never_contains_api_key():
         (401, "vista_http_401"),
         (403, "vista_http_403"),
         (429, "vista_http_429"),
-        (422, "vista_http_4xx"),
-        (503, "vista_http_5xx"),
+        (422, "vista_http_422"),
+        (503, "vista_http_503"),
     ],
 )
 def test_funnel_http_failures_are_safely_classified(status, expected_code):
