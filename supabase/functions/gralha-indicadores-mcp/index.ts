@@ -8,7 +8,7 @@ import {
 
 const FUNCTION_SLUG = "gralha-indicadores-mcp";
 const SERVER_NAME = "Gralha — Indicadores Pipeimob × Vista";
-const SERVER_VERSION = "1.12.0";
+const SERVER_VERSION = "1.13.0";
 const JSON_HEADERS = {
   "Content-Type": "application/json; charset=utf-8",
   "Cache-Control": "no-store",
@@ -236,7 +236,12 @@ function normalizePropertyCode(value: unknown): string {
 async function fetchBackendJson(
   endpoint: URL,
   token: string,
-): Promise<{ reachable: boolean; status: number; payload: unknown }> {
+): Promise<{
+  reachable: boolean;
+  status: number;
+  payload: unknown;
+  funnelError: string | null;
+}> {
   try {
     const response = await fetch(endpoint, {
       headers: {
@@ -252,9 +257,60 @@ async function fetchBackendJson(
     } catch {
       // Never return an unstructured upstream body to the model.
     }
-    return { reachable: true, status: response.status, payload };
+    return {
+      reachable: true,
+      status: response.status,
+      payload,
+      funnelError: response.headers.get("X-Funnel-Error"),
+    };
   } catch {
-    return { reachable: false, status: 0, payload: null };
+    return {
+      reachable: false,
+      status: 0,
+      payload: null,
+      funnelError: null,
+    };
+  }
+}
+
+function safeDiagnosticCode(value: unknown, fallback: string): string {
+  if (typeof value !== "string") return fallback;
+  const normalized = value.trim().toLocaleLowerCase("en-US");
+  return /^[a-z0-9][a-z0-9_:-]{0,79}$/.test(normalized)
+    ? normalized
+    : fallback;
+}
+
+async function recordIntegrationFailure(
+  userClient: ReturnType<typeof createClient>,
+  input: {
+    operation: "vista_funnel_cohort";
+    periodStart: string;
+    periodEnd: string;
+    httpStatus: number;
+    errorCode: string;
+  },
+): Promise<void> {
+  try {
+    const { error } = await userClient.from("integration_failure_diagnostics")
+      .insert({
+        function_slug: FUNCTION_SLUG,
+        function_version: SERVER_VERSION,
+        operation: input.operation,
+        period_start: input.periodStart,
+        period_end: input.periodEnd,
+        http_status: input.httpStatus,
+        error_code: safeDiagnosticCode(input.errorCode, "unclassified"),
+      });
+    if (error) {
+      console.warn("integration_failure_diagnostic_insert_failed", {
+        code: error.code,
+      });
+    }
+  } catch {
+    console.warn("integration_failure_diagnostic_insert_failed", {
+      code: "unexpected",
+    });
   }
 }
 
@@ -1042,6 +1098,15 @@ async function callVistaFunnelCohort(
 
   const result = await fetchBackendJson(endpoint, token);
   if (!result.reachable) {
+    EdgeRuntime.waitUntil(
+      recordIntegrationFailure(userClient, {
+        operation: "vista_funnel_cohort",
+        periodStart: start,
+        periodEnd: end,
+        httpStatus: 0,
+        errorCode: "backend_unreachable",
+      }),
+    );
     return {
       isError: true,
       value: {
@@ -1054,12 +1119,23 @@ async function callVistaFunnelCohort(
     const upstream = result.payload && typeof result.payload === "object"
       ? result.payload as Record<string, unknown>
       : {};
+    const upstreamErrorCode = safeDiagnosticCode(
+      result.funnelError ?? upstream.error_code,
+      result.status === 401 ? "backend_auth_rejected" : "upstream_http_error",
+    );
     console.warn("vista_funnel_backend_failed", {
       status: result.status,
-      errorCode: typeof upstream.error_code === "string"
-        ? upstream.error_code
-        : null,
+      errorCode: upstreamErrorCode,
     });
+    EdgeRuntime.waitUntil(
+      recordIntegrationFailure(userClient, {
+        operation: "vista_funnel_cohort",
+        periodStart: start,
+        periodEnd: end,
+        httpStatus: result.status,
+        errorCode: upstreamErrorCode,
+      }),
+    );
     return {
       isError: true,
       value: {
@@ -1076,6 +1152,15 @@ async function callVistaFunnelCohort(
     };
   }
   if (!result.payload || typeof result.payload !== "object") {
+    EdgeRuntime.waitUntil(
+      recordIntegrationFailure(userClient, {
+        operation: "vista_funnel_cohort",
+        periodStart: start,
+        periodEnd: end,
+        httpStatus: result.status,
+        errorCode: "invalid_upstream_contract",
+      }),
+    );
     return {
       isError: true,
       value: {
