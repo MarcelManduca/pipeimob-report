@@ -34,11 +34,6 @@ class VistaFunnelAPIError(VistaSalesAPIError):
     """Sanitized Vista funnel failure with an operational classification."""
 
     ALLOWED_CODES = {
-        "vista_http_401",
-        "vista_http_403",
-        "vista_http_429",
-        "vista_http_4xx",
-        "vista_http_5xx",
         "vista_transport_error",
         "vista_invalid_json",
         "vista_invalid_contract",
@@ -46,11 +41,10 @@ class VistaFunnelAPIError(VistaSalesAPIError):
 
     def __init__(self, message: str, error_code: str) -> None:
         super().__init__(message)
-        self.error_code = (
-            error_code
-            if error_code in self.ALLOWED_CODES
-            else "vista_unavailable"
-        )
+        safe_http_code = re.fullmatch(r"vista_http_[45]\d{2}", error_code or "")
+        self.error_code = error_code if (
+            error_code in self.ALLOWED_CODES or safe_http_code
+        ) else "vista_unavailable"
 
 
 def _normalize_label(value: Any) -> Optional[str]:
@@ -328,16 +322,8 @@ class VistaFunnelClient:
 
     @staticmethod
     def _http_error_code(status: int) -> str:
-        if status == 401:
-            return "vista_http_401"
-        if status == 403:
-            return "vista_http_403"
-        if status == 429:
-            return "vista_http_429"
-        if 400 <= status <= 499:
-            return "vista_http_4xx"
-        if 500 <= status <= 599:
-            return "vista_http_5xx"
+        if 400 <= status <= 599:
+            return f"vista_http_{status}"
         return "vista_unavailable"
 
     def _normalize_deal(self, record: Dict[str, Any]) -> Dict[str, Any]:
