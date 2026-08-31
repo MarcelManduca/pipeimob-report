@@ -5418,10 +5418,22 @@ async def get_vista_funnel_cohort(
         fallback = stale_fallback("stale-if-error")
         if fallback is not None:
             return fallback
+        error_code = getattr(exc, "error_code", "vista_unavailable")
+        if error_code not in {
+            "vista_http_401",
+            "vista_http_403",
+            "vista_http_429",
+            "vista_http_4xx",
+            "vista_http_5xx",
+            "vista_transport_error",
+            "vista_invalid_json",
+            "vista_invalid_contract",
+        }:
+            error_code = "vista_unavailable"
         raise HTTPException(
             status_code=503,
             detail="Vista funnel data is temporarily unavailable.",
-            headers={"X-Funnel-Error": "vista_unavailable"},
+            headers={"X-Funnel-Error": error_code, "Retry-After": "60"},
         ) from exc
     except asyncio.TimeoutError as exc:
         fallback = stale_fallback("stale-if-timeout")

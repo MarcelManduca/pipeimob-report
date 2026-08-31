@@ -2,6 +2,8 @@ const MCP_URL =
   "https://kmysinxpdkeszrtdyhid.supabase.co/functions/v1/gralha-indicadores-mcp/mcp";
 const DEFAULT_OPENAI_MODEL = "gpt-5-mini";
 const OPENAI_TIMEOUT_MS = 25_000;
+const SOURCE_AVAILABILITY_CACHE_MS = 15_000;
+let sourceAvailabilityCache = { expiresAt: 0, value: null };
 
 const SECURITY_HEADERS = {
   "Content-Security-Policy":
@@ -371,7 +373,27 @@ function fastIntent(messages) {
   return asksSalesTotal ? { type: "monthly_sales_total", period } : null;
 }
 
-async function callMcpToolDirect(accessToken, name, args) {
+function indicatorSource(messages) {
+  const latest = normalizedQuestion(messages.at(-1)?.content);
+  if (
+    /\b(propost|negoci|funil|etapa|status|captacao|oportunidade|visita|fechamento|agenci|placa|veiculo|loja|imovel|lead)/.test(
+      latest,
+    )
+  ) {
+    return "vista_funnel";
+  }
+  if (/\bbairro/.test(latest)) return "sales_neighborhood_detail";
+  if (
+    /\b(venda|vgv|ticket|corretor|equipe|ranking|campeao)/.test(
+      latest,
+    )
+  ) {
+    return "sales";
+  }
+  return null;
+}
+
+async function callMcpToolDirect(accessToken, name, args, timeoutMs = 35_000) {
   let response;
   try {
     response = await fetch(MCP_URL, {
@@ -387,7 +409,7 @@ async function callMcpToolDirect(accessToken, name, args) {
         method: "tools/call",
         params: { name, arguments: args },
       }),
-      signal: AbortSignal.timeout(35_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch {
     return { error: "backend_unreachable" };
@@ -411,6 +433,28 @@ async function callMcpToolDirect(accessToken, name, args) {
   return { error: "invalid_upstream_contract" };
 }
 
+async function sourceAvailability(accessToken) {
+  if (
+    sourceAvailabilityCache.value &&
+    sourceAvailabilityCache.expiresAt > Date.now()
+  ) {
+    return sourceAvailabilityCache.value;
+  }
+  const value = await callMcpToolDirect(
+    accessToken,
+    "verificar_disponibilidade_fontes",
+    {},
+    4_000,
+  );
+  if (!value?.error) {
+    sourceAvailabilityCache = {
+      expiresAt: Date.now() + SOURCE_AVAILABILITY_CACHE_MS,
+      value,
+    };
+  }
+  return value;
+}
+
 function payloadWithMcpValue(value) {
   return {
     output: [
@@ -426,6 +470,13 @@ function fallbackAnswerFromTool(payload) {
   const value = lastMcpValue(payload);
   if (!value || typeof value !== "object") return "";
   if (value.error) {
+    if (value.error === "source_circuit_open") {
+      const retryAfter = Number(value.retry_after_seconds);
+      const retryText = Number.isFinite(retryAfter) && retryAfter > 0
+        ? ` Uma nova tentativa será liberada em até ${Math.ceil(retryAfter)} segundos.`
+        : "";
+      return `${value.detail || "A fonte de dados está em verificação temporária."}${retryText}`;
+    }
     const messages = {
       backend_unreachable:
         "Não consegui consultar o Vista agora. Tente novamente em instantes.",
@@ -605,10 +656,14 @@ async function chat(request, env) {
       },
     );
     if (directValue?.error) {
+      sourceAvailabilityCache = { expiresAt: 0, value: null };
       if (directIntent.type === "proposal_generated") {
+        const operationalStatus = fallbackAnswerFromTool(
+          payloadWithMcpValue(directValue),
+        );
         return json({
           answer:
-            `Não é possível determinar quantas propostas foram geradas em ${directIntent.period.label}, porque a integração atual não recebe o histórico de entrada na etapa Proposta. A fotografia atual não pôde ser atualizada nesta consulta.`,
+            `A quantidade exata de propostas geradas em ${directIntent.period.label} não está disponível porque o Vista não fornece o histórico de entrada na etapa. ${operationalStatus}`,
           visualization: null,
         });
       }
@@ -648,6 +703,30 @@ async function chat(request, env) {
     } else {
       const answer = fallbackAnswerFromTool(payloadWithMcpValue(directValue));
       if (answer) return json({ answer, visualization: null });
+    }
+  }
+
+  const requiredSource = indicatorSource(messages);
+  if (requiredSource) {
+    const availability = await sourceAvailability(accessToken);
+    if (availability?.error) {
+      return json({
+        answer:
+          "Não foi possível confirmar o retorno das APIs agora. A análise foi interrompida antes do processamento generativo.",
+        visualization: null,
+      });
+    }
+    const sourceState = availability?.sources?.[requiredSource];
+    if (sourceState?.available !== true) {
+      const retryAfter = Number(sourceState.retry_after_seconds);
+      const retryText = Number.isFinite(retryAfter) && retryAfter > 0
+        ? ` Nova verificação em até ${Math.ceil(retryAfter)} segundos.`
+        : "";
+      return json({
+        answer:
+          `A fonte necessária está temporariamente indisponível. A análise foi interrompida antes do processamento generativo.${retryText}`,
+        visualization: null,
+      });
     }
   }
 
@@ -739,6 +818,9 @@ async function chat(request, env) {
     );
   }
   const structured = lastMcpValue(payload);
+  if (structured?.error) {
+    sourceAvailabilityCache = { expiresAt: 0, value: null };
+  }
   const answer = structured?.error
     ? fallbackAnswerFromTool(payload)
     : outputText(payload) || fallbackAnswerFromTool(payload);

@@ -160,6 +160,26 @@ def test_vista_funnel_endpoint_serves_recent_stale_result_on_vista_failure():
     assert second.headers["X-Funnel-Semantics"] == "created_deals_current_stage"
 
 
+def test_vista_funnel_endpoint_propagates_sanitized_failure_code():
+    app.dependency_overrides[verify_backend_api_key] = lambda: {"sub": "test"}
+    fake_client = FakeVistaFunnelClient()
+    failure = VistaSalesAPIError("safe failure")
+    failure.error_code = "vista_http_429"
+    fake_client.fetch_created_deals = lambda *_: (_ for _ in ()).throw(failure)
+    try:
+        with patch("main.VistaFunnelClient.from_env", return_value=fake_client):
+            response = TestClient(app).get(
+                "/api/vista/funnel/cohort"
+                "?data_inicio=2026-08-01&data_fim=2026-08-30"
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 503
+    assert response.headers["X-Funnel-Error"] == "vista_http_429"
+    assert response.headers["Retry-After"] == "60"
+
+
 def test_vista_funnel_endpoint_rejects_period_over_one_year():
     app.dependency_overrides[verify_backend_api_key] = lambda: {"sub": "test"}
     try:

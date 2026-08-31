@@ -8,12 +8,20 @@ import {
 
 const FUNCTION_SLUG = "gralha-indicadores-mcp";
 const SERVER_NAME = "Gralha — Indicadores Pipeimob × Vista";
-const SERVER_VERSION = "1.13.0";
+const SERVER_VERSION = "1.14.0";
 const JSON_HEADERS = {
   "Content-Type": "application/json; charset=utf-8",
   "Cache-Control": "no-store",
 };
 const ALLOWED_ROLES = new Set(["super_admin", "viewer"]);
+const CIRCUIT_FAILURE_THRESHOLD = 2;
+const CIRCUIT_WINDOW_MS = 120_000;
+const CIRCUIT_COOLDOWN_MS = 60_000;
+
+type IntegrationOperation =
+  | "sales_reconciliation"
+  | "sales_neighborhood_detail"
+  | "vista_funnel_cohort";
 
 type JsonRpcId = string | number | null;
 type JsonRpcRequest = {
@@ -240,7 +248,7 @@ async function fetchBackendJson(
   reachable: boolean;
   status: number;
   payload: unknown;
-  funnelError: string | null;
+  integrationError: string | null;
 }> {
   try {
     const response = await fetch(endpoint, {
@@ -261,14 +269,16 @@ async function fetchBackendJson(
       reachable: true,
       status: response.status,
       payload,
-      funnelError: response.headers.get("X-Funnel-Error"),
+      integrationError:
+        response.headers.get("X-Funnel-Error") ??
+        response.headers.get("X-Reconciliation-Error"),
     };
   } catch {
     return {
       reachable: false,
       status: 0,
       payload: null,
-      funnelError: null,
+      integrationError: null,
     };
   }
 }
@@ -284,7 +294,7 @@ function safeDiagnosticCode(value: unknown, fallback: string): string {
 async function recordIntegrationFailure(
   userClient: ReturnType<typeof createClient>,
   input: {
-    operation: "vista_funnel_cohort";
+    operation: IntegrationOperation;
     periodStart: string;
     periodEnd: string;
     httpStatus: number;
@@ -312,6 +322,103 @@ async function recordIntegrationFailure(
       code: "unexpected",
     });
   }
+}
+
+async function readIntegrationCircuit(
+  userClient: ReturnType<typeof createClient>,
+  operation: IntegrationOperation,
+): Promise<{
+  verified: boolean;
+  open: boolean;
+  retryAfterSeconds: number;
+  errorCode: string | null;
+  httpStatus: number | null;
+}> {
+  const since = new Date(Date.now() - CIRCUIT_WINDOW_MS).toISOString();
+  const { data, error } = await userClient
+    .from("integration_failure_diagnostics")
+    .select("occurred_at,http_status,error_code")
+    .eq("operation", operation)
+    .gte("occurred_at", since)
+    .order("occurred_at", { ascending: false })
+    .limit(CIRCUIT_FAILURE_THRESHOLD);
+  if (error) {
+    console.warn("integration_circuit_lookup_failed", {
+      operation,
+      code: error.code,
+    });
+    return {
+      verified: false,
+      open: false,
+      retryAfterSeconds: 0,
+      errorCode: null,
+      httpStatus: null,
+    };
+  }
+
+  const failures = data ?? [];
+  const latest = failures[0];
+  if (failures.length < CIRCUIT_FAILURE_THRESHOLD || !latest?.occurred_at) {
+    return {
+      verified: true,
+      open: false,
+      retryAfterSeconds: 0,
+      errorCode: null,
+      httpStatus: null,
+    };
+  }
+  const latestAt = Date.parse(String(latest.occurred_at));
+  const retryAfterSeconds = Number.isFinite(latestAt)
+    ? Math.max(
+      0,
+      Math.ceil((latestAt + CIRCUIT_COOLDOWN_MS - Date.now()) / 1000),
+    )
+    : 0;
+  return {
+    verified: true,
+    open: retryAfterSeconds > 0,
+    retryAfterSeconds,
+    errorCode: safeDiagnosticCode(latest.error_code, "unclassified"),
+    httpStatus: asNumber(latest.http_status),
+  };
+}
+
+async function sourceAvailability(
+  userClient: ReturnType<typeof createClient>,
+): Promise<{ isError: false; value: unknown }> {
+  const [sales, salesNeighborhood, vista] = await Promise.all([
+    readIntegrationCircuit(userClient, "sales_reconciliation"),
+    readIntegrationCircuit(userClient, "sales_neighborhood_detail"),
+    readIntegrationCircuit(userClient, "vista_funnel_cohort"),
+  ]);
+  return {
+    isError: false,
+    value: {
+      checked_at: new Date().toISOString(),
+      sources: {
+        sales: {
+          verified: sales.verified,
+          available: sales.verified && !sales.open,
+          retry_after_seconds: sales.retryAfterSeconds,
+          error_code: sales.open ? sales.errorCode : null,
+        },
+        sales_neighborhood_detail: {
+          verified: salesNeighborhood.verified,
+          available: salesNeighborhood.verified && !salesNeighborhood.open,
+          retry_after_seconds: salesNeighborhood.retryAfterSeconds,
+          error_code: salesNeighborhood.open
+            ? salesNeighborhood.errorCode
+            : null,
+        },
+        vista_funnel: {
+          verified: vista.verified,
+          available: vista.verified && !vista.open,
+          retry_after_seconds: vista.retryAfterSeconds,
+          error_code: vista.open ? vista.errorCode : null,
+        },
+      },
+    },
+  };
 }
 
 async function callSalesRanking(
@@ -388,8 +495,34 @@ async function callSalesRanking(
   reconciliationEndpoint.searchParams.set("data_inicio_ccv", String(start));
   reconciliationEndpoint.searchParams.set("data_fim_ccv", String(end));
 
+  const salesCircuit = await readIntegrationCircuit(
+    userClient,
+    "sales_reconciliation",
+  );
+  if (salesCircuit.open) {
+    return {
+      isError: true,
+      value: {
+        error: "source_circuit_open",
+        source: "sales",
+        retry_after_seconds: salesCircuit.retryAfterSeconds,
+        detail:
+          "A fonte de vendas apresentou falhas recorrentes e está em verificação temporária.",
+      },
+    };
+  }
+
   const reconciliation = await fetchBackendJson(reconciliationEndpoint, token);
   if (!reconciliation.reachable) {
+    EdgeRuntime.waitUntil(
+      recordIntegrationFailure(userClient, {
+        operation: "sales_reconciliation",
+        periodStart: start,
+        periodEnd: end,
+        httpStatus: 0,
+        errorCode: "backend_unreachable",
+      }),
+    );
     return {
       isError: true,
       value: {
@@ -399,6 +532,25 @@ async function callSalesRanking(
     };
   }
   if (reconciliation.status < 200 || reconciliation.status >= 300) {
+    const upstream = reconciliation.payload &&
+        typeof reconciliation.payload === "object"
+      ? reconciliation.payload as Record<string, unknown>
+      : {};
+    const upstreamErrorCode = safeDiagnosticCode(
+      reconciliation.integrationError ?? upstream.error_code,
+      reconciliation.status === 401
+        ? "backend_auth_rejected"
+        : "upstream_http_error",
+    );
+    EdgeRuntime.waitUntil(
+      recordIntegrationFailure(userClient, {
+        operation: "sales_reconciliation",
+        periodStart: start,
+        periodEnd: end,
+        httpStatus: reconciliation.status,
+        errorCode: upstreamErrorCode,
+      }),
+    );
     return {
       isError: true,
       value: {
@@ -415,6 +567,15 @@ async function callSalesRanking(
     };
   }
   if (!reconciliation.payload || typeof reconciliation.payload !== "object") {
+    EdgeRuntime.waitUntil(
+      recordIntegrationFailure(userClient, {
+        operation: "sales_reconciliation",
+        periodStart: start,
+        periodEnd: end,
+        httpStatus: reconciliation.status,
+        errorCode: "invalid_upstream_contract",
+      }),
+    );
     return {
       isError: true,
       value: {
@@ -735,11 +896,36 @@ async function callSalesRanking(
     const transactionsEndpoint = new URL(backend + "/api/transactions");
     transactionsEndpoint.searchParams.set("data_inicio_ccv", String(start));
     transactionsEndpoint.searchParams.set("data_fim_ccv", String(end));
+    const neighborhoodCircuit = await readIntegrationCircuit(
+      userClient,
+      "sales_neighborhood_detail",
+    );
+    if (neighborhoodCircuit.open) {
+      return {
+        isError: true,
+        value: {
+          error: "source_circuit_open",
+          source: "sales_neighborhood_detail",
+          retry_after_seconds: neighborhoodCircuit.retryAfterSeconds,
+          detail:
+            "O detalhamento de bairros apresentou falhas recorrentes e está em verificação temporária.",
+        },
+      };
+    }
     const transactionsResult = await fetchBackendJson(
       transactionsEndpoint,
       token,
     );
     if (!transactionsResult.reachable) {
+      EdgeRuntime.waitUntil(
+        recordIntegrationFailure(userClient, {
+          operation: "sales_neighborhood_detail",
+          periodStart: start,
+          periodEnd: end,
+          httpStatus: 0,
+          errorCode: "backend_unreachable",
+        }),
+      );
       return {
         isError: true,
         value: {
@@ -749,6 +935,25 @@ async function callSalesRanking(
       };
     }
     if (transactionsResult.status < 200 || transactionsResult.status >= 300) {
+      const upstream = transactionsResult.payload &&
+          typeof transactionsResult.payload === "object"
+        ? transactionsResult.payload as Record<string, unknown>
+        : {};
+      const upstreamErrorCode = safeDiagnosticCode(
+        transactionsResult.integrationError ?? upstream.error_code,
+        transactionsResult.status === 401
+          ? "backend_auth_rejected"
+          : "upstream_http_error",
+      );
+      EdgeRuntime.waitUntil(
+        recordIntegrationFailure(userClient, {
+          operation: "sales_neighborhood_detail",
+          periodStart: start,
+          periodEnd: end,
+          httpStatus: transactionsResult.status,
+          errorCode: upstreamErrorCode,
+        }),
+      );
       return {
         isError: true,
         value: {
@@ -1096,6 +1301,23 @@ async function callVistaFunnelCohort(
   endpoint.searchParams.set("data_inicio", start);
   endpoint.searchParams.set("data_fim", end);
 
+  const vistaCircuit = await readIntegrationCircuit(
+    userClient,
+    "vista_funnel_cohort",
+  );
+  if (vistaCircuit.open) {
+    return {
+      isError: true,
+      value: {
+        error: "source_circuit_open",
+        source: "vista_funnel",
+        retry_after_seconds: vistaCircuit.retryAfterSeconds,
+        detail:
+          "A API do Vista apresentou falhas recorrentes e está em verificação temporária.",
+      },
+    };
+  }
+
   const result = await fetchBackendJson(endpoint, token);
   if (!result.reachable) {
     EdgeRuntime.waitUntil(
@@ -1120,7 +1342,7 @@ async function callVistaFunnelCohort(
       ? result.payload as Record<string, unknown>
       : {};
     const upstreamErrorCode = safeDiagnosticCode(
-      result.funnelError ?? upstream.error_code,
+      result.integrationError ?? upstream.error_code,
       result.status === 401 ? "backend_auth_rejected" : "upstream_http_error",
     );
     console.warn("vista_funnel_backend_failed", {
@@ -1438,6 +1660,31 @@ async function callVistaFunnelCohort(
 
 const TOOLS = [
   {
+    name: "verificar_disponibilidade_fontes",
+    title: "Verificar disponibilidade das fontes de indicadores",
+    description:
+      "Consulta somente a telemetria técnica sanitizada recente de Pipeimob/Vista. Use antes de uma análise generativa quando houver falhas recorrentes, evitando novas consultas e consumo de tokens enquanto a fonte estiver em recuperação.",
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {},
+    },
+    outputSchema: {
+      type: "object",
+      properties: {
+        checked_at: { type: "string" },
+        sources: { type: "object" },
+      },
+      required: ["checked_at", "sources"],
+    },
+  },
+  {
     name: "consultar_ranking_vendas",
     title: "Consultar vendas por corretor, equipe ou bairro",
     description:
@@ -1683,7 +1930,7 @@ Deno.serve(async (request: Request) => {
       capabilities: { tools: { listChanged: false } },
       serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
       instructions:
-        "Use consultar_ranking_vendas somente para vendas oficiais. Use consultar_funil_vista para negócios cadastrados no período, status geral, etapa atual e cruzamento entre etapa e status. Perguntas sobre propostas ou outras etapas, inclusive pedidos de separação por equipe, pertencem sempre a consultar_funil_vista; envie agrupar_por=equipe quando a equipe for solicitada. Para rankings de vendas por equipes, use consultar_ranking_vendas com agrupar_por=equipe; para avaliar uma equipe de vendas específica, informe também equipe. Para saber o bairro em que um corretor mais vendeu, use agrupar_por=bairro e informe corretor. Use top_n conforme solicitado, com padrão 10. Quantidade é o critério padrão; VGV deve ser solicitado explicitamente. O fim de períodos futuros é limitado automaticamente à data atual de São Paulo. Quantidade, data e VGV vêm das APIs ao vivo; a planilha é somente uma referência gerencial de responsável para equipe com vigência. Responda primeiro com o número, ranking ou conclusão solicitada, sem bordão ou prefixo padronizado. Perguntas objetivas devem receber uma ou duas frases; acrescente período, cobertura e fonte somente quando forem necessários para evitar interpretação errada ou quando o usuário pedir. Em avaliações gerenciais, apresente fatos, comparação, leitura executiva e ação recomendada apenas quando os dados sustentarem essas conclusões. No funil, diferencie obrigatoriamente negócios criados no período, etapa atual, status geral e eventos históricos de entrada em etapa. Nunca apresente negócios atualmente em Proposta como propostas geradas no período; esta métrica exige histórico de etapas. Se pedirem uma métrica histórica indisponível, apresente primeiro a fotografia atual verificada em no máximo 80 palavras e esclareça a diferença em uma frase. Não repita a pergunta, não liste fontes, timestamps ou limitações técnicas salvo se forem solicitados e nunca diga que existe confirmação de contrato pendente. Se a ferramenta retornar erro, informe a falha em uma frase curta; não transforme valores ausentes em análise. Não conclua sobre conversão de pipeline, visitas ou tempo entre etapas sem os dados operacionais correspondentes. A visualização é fornecida como dados estruturados e nunca deve ser substituída por barras ASCII ou código Python.",
+        "Use verificar_disponibilidade_fontes apenas como verificação técnica antes de uma análise generativa quando houver sinais de falhas recorrentes; se a fonte necessária estiver bloqueada, não execute outra consulta nem produza análise. Use consultar_ranking_vendas somente para vendas oficiais. Use consultar_funil_vista para negócios cadastrados no período, status geral, etapa atual e cruzamento entre etapa e status. Perguntas sobre propostas ou outras etapas, inclusive pedidos de separação por equipe, pertencem sempre a consultar_funil_vista; envie agrupar_por=equipe quando a equipe for solicitada. Para rankings de vendas por equipes, use consultar_ranking_vendas com agrupar_por=equipe; para avaliar uma equipe de vendas específica, informe também equipe. Para saber o bairro em que um corretor mais vendeu, use agrupar_por=bairro e informe corretor. Use top_n conforme solicitado, com padrão 10. Quantidade é o critério padrão; VGV deve ser solicitado explicitamente. O fim de períodos futuros é limitado automaticamente à data atual de São Paulo. Quantidade, data e VGV vêm das APIs ao vivo; a planilha é somente uma referência gerencial de responsável para equipe com vigência. Responda primeiro com o número, ranking ou conclusão solicitada, sem bordão ou prefixo padronizado. Perguntas objetivas devem receber uma ou duas frases; acrescente período, cobertura e fonte somente quando forem necessários para evitar interpretação errada ou quando o usuário pedir. Em avaliações gerenciais, apresente fatos, comparação, leitura executiva e ação recomendada apenas quando os dados sustentarem essas conclusões. No funil, diferencie obrigatoriamente negócios criados no período, etapa atual, status geral e eventos históricos de entrada em etapa. Nunca apresente negócios atualmente em Proposta como propostas geradas no período; esta métrica exige um histórico de entrada em etapas. Se pedirem uma métrica histórica indisponível, apresente primeiro a fotografia atual verificada em no máximo 80 palavras e esclareça a diferença em uma frase. Não repita a pergunta, não liste fontes, timestamps ou limitações técnicas salvo se forem solicitados e nunca diga que existe confirmação de contrato pendente. Se a ferramenta retornar erro, informe a falha em uma frase curta; não transforme valores ausentes em análise. Não conclua sobre conversão de pipeline, visitas ou tempo entre etapas sem os dados operacionais correspondentes. A visualização é fornecida como dados estruturados e nunca deve ser substituída por barras ASCII ou código Python.",
     });
   }
   if (message.method === "tools/list") {
@@ -1696,14 +1943,17 @@ Deno.serve(async (request: Request) => {
         ? (message.params.arguments as Record<string, unknown>)
         : {};
     if (
+      name !== "verificar_disponibilidade_fontes" &&
       name !== "consultar_ranking_vendas" &&
       name !== "consultar_funil_vista"
     ) {
       return rpcError(message.id, -32602, "Unknown tool");
     }
-    const result = name === "consultar_funil_vista"
-      ? await callVistaFunnelCohort(auth.token, args, auth.userClient)
-      : await callSalesRanking(auth.token, args, auth.userClient);
+    const result = name === "verificar_disponibilidade_fontes"
+      ? await sourceAvailability(auth.userClient)
+      : name === "consultar_funil_vista"
+        ? await callVistaFunnelCohort(auth.token, args, auth.userClient)
+        : await callSalesRanking(auth.token, args, auth.userClient);
     return rpcResult(message.id, {
       content: textContent(result.value),
       structuredContent: result.value,
