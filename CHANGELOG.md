@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-09-01 — Identidade Gralha e funil visual premium
+
+- Substitui a identidade verde pela marca oficial Gralha, com predominância de superfícies claras e detalhes em azul institucional, vinho e cinza.
+- Adiciona gráfico de funil responsivo para a distribuição atual dos negócios pelas etapas do Vista.
+- Mantém explícita a diferença entre fotografia atual do funil e conversão histórica entre etapas.
+- Padroniza gráficos de barras e funil em cartões gerenciais claros, com tipografia, espaçamento e hierarquia visual premium.
+- Adiciona teste de regressão para o gráfico de funil sem chamada generativa.
+
 ## 2026-08-31 — Negociação de campos do Vista e gráfico por equipe no Worker v11
 
 - O funil passa a testar dimensões opcionais individualmente após um HTTP 400, preservando `EquipeNegocio` quando outro campo opcional é rejeitado pelo Vista.
