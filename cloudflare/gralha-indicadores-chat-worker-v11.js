@@ -736,8 +736,11 @@ function teamFunnelRows(value) {
 function mentionedTeam(rows, question) {
   const normalized = normalizedQuestion(question);
   return rows.find((row) => {
-    const team = normalizedQuestion(row.team);
-    return team && new RegExp(`(^|\\b)${escapeRegExp(team)}(\\b|$)`).test(normalized);
+    const fullTeam = normalizedQuestion(row.team);
+    const shortTeam = fullTeam.replace(/^(?:equipe|time)\s+/, "").trim();
+    return [fullTeam, shortTeam].filter(Boolean).some((team) =>
+      new RegExp(`(^|\\b)${escapeRegExp(team)}(\\b|$)`).test(normalized)
+    );
   }) || null;
 }
 
