@@ -2,6 +2,8 @@
 
 Backend API para catalogação de dados e geração de indicadores de Business Intelligence (BI) integrados com o CRM Pipeimob.
 
+A arquitetura completa do portal conversacional, histórico, RBAC, serviços utilizados, publicação e recuperação está em [docs/GRALHA_INDICADORES_ARCHITECTURE.md](docs/GRALHA_INDICADORES_ARCHITECTURE.md).
+
 ---
 
 ## 🛠️ Como rodar o backend localmente
