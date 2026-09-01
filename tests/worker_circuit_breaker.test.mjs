@@ -56,6 +56,33 @@ function funnelSnapshotResponse(currentTotal = 66, openTotal = 57) {
   );
 }
 
+function funnelStagesResponse() {
+  return new Response(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: "direct",
+      result: {
+        structuredContent: {
+          summary: {
+            created_deals: 120,
+            current_stage_breakdown: [
+              { stage: "Proposta", deals_count: 24 },
+              { stage: "Captação", deals_count: 48 },
+              { stage: "Visita", deals_count: 31 },
+              { stage: "Fechamento", deals_count: 17 },
+            ],
+            proposal: {
+              created_deals_currently_in_proposal: 24,
+              created_deals_in_proposal_stage_with_open_status: 20,
+            },
+          },
+        },
+      },
+    }),
+    { status: 200, headers: { "Content-Type": "application/json" } },
+  );
+}
+
 function funnelTeamResponse(currentTotal = 67, openTotal = 56) {
   return new Response(
     JSON.stringify({
@@ -554,6 +581,52 @@ test("creates a direct status chart from the latest Proposal follow-up without O
         { label: "Perdido", value: 11 },
       ],
     );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("creates a premium funnel snapshot without treating it as historical conversion", async () => {
+  const originalFetch = globalThis.fetch;
+  let openAiCalls = 0;
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/auth/v1/user")) return new Response("{}", { status: 200 });
+    if (url.includes("/functions/v1/gralha-indicadores-mcp/mcp")) {
+      const body = JSON.parse(init.body);
+      assert.equal(body.params.name, "consultar_funil_vista");
+      assert.equal(body.params.arguments.agrupar_por, "nenhum");
+      return funnelStagesResponse();
+    }
+    if (url === "https://api.openai.com/v1/responses") {
+      openAiCalls += 1;
+      throw new Error("OpenAI should not be called for the direct funnel chart");
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  try {
+    const worker = await loadWorker();
+    const response = await worker.default.fetch(
+      request("Mostre o funil comercial de agosto de 2026"),
+      env,
+    );
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(openAiCalls, 0);
+    assert.equal(payload.visualization.type, "funnel");
+    assert.deepEqual(
+      payload.visualization.series.map(({ label, value }) => ({ label, value })),
+      [
+        { label: "Captação", value: 48 },
+        { label: "Visita", value: 31 },
+        { label: "Proposta", value: 24 },
+        { label: "Fechamento", value: 17 },
+      ],
+    );
+    assert.match(payload.answer, /fotografia do momento/i);
+    assert.match(payload.visualization.footnote, /não representa conversão histórica/i);
   } finally {
     globalThis.fetch = originalFetch;
   }
