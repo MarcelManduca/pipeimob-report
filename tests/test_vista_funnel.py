@@ -454,11 +454,15 @@ def test_from_env_does_not_assume_an_unconfirmed_responsible_field(monkeypatch):
     monkeypatch.setenv("VISTA_API_BASE_URL", "https://tenant.example.com")
     monkeypatch.setenv("VISTA_API_KEY", "secret-key")
     monkeypatch.setenv("VISTA_SALES_PIPE_ID", "pipe-1")
+    monkeypatch.delenv("VISTA_DEAL_TEAM_FIELD", raising=False)
+    monkeypatch.delenv("VISTA_SALES_TEAM_FIELD", raising=False)
     monkeypatch.delenv("VISTA_DEAL_RESPONSIBLE_FIELD", raising=False)
 
     client = VistaFunnelClient.from_env()
 
     assert client.responsible_field is None
+    assert client.team_field == "EquipeNegocio"
+    assert "EquipeNegocio" in client.fields
     assert "Responsavel" not in client.fields
 
 
@@ -505,4 +509,59 @@ def test_http_400_from_optional_field_retries_with_confirmed_core_fields():
     assert "Responsavel" in requested_fields[0]
     assert "Responsavel" not in requested_fields[1]
     assert client.optional_fields_rejected is True
+    assert client.active_optional_fields == []
+    assert client.rejected_optional_fields == ["Responsavel"]
     assert deals[0]["stage_name"] == "Proposta"
+
+
+def test_optional_field_negotiation_keeps_valid_team_dimension():
+    requested_fields = []
+
+    def opener(request, timeout):
+        query = urllib.parse.parse_qs(
+            urllib.parse.urlparse(request.full_url).query
+        )
+        fields = json.loads(query["pesquisa"][0])["fields"]
+        requested_fields.append(fields)
+        if "Responsavel" in fields:
+            raise urllib.error.HTTPError(
+                request.full_url, 400, "invalid field", None, None
+            )
+        return FakeResponse(
+            {
+                "1": {
+                    "Codigo": "deal-1",
+                    "DataInicial": "2026-08-01",
+                    "Status": "Em aberto",
+                    "NomeEtapa": "Proposta",
+                    "EquipeNegocio": {"Nome": "Equipe Elite"},
+                },
+                "total": 1,
+                "paginas": 1,
+            }
+        )
+
+    client = VistaFunnelClient(
+        "https://tenant.example.com",
+        "secret-key",
+        "pipe-1",
+        team_field="EquipeNegocio",
+        responsible_field="Responsavel",
+        request_attempts=1,
+        opener=opener,
+    )
+
+    deals = client.fetch_created_deals(
+        date(2026, 8, 1), date(2026, 8, 31)
+    )
+
+    assert len(requested_fields) == 3
+    assert "EquipeNegocio" in requested_fields[0]
+    assert "Responsavel" in requested_fields[0]
+    assert "EquipeNegocio" in requested_fields[1]
+    assert "Responsavel" not in requested_fields[1]
+    assert "Responsavel" in requested_fields[2]
+    assert "EquipeNegocio" not in requested_fields[2]
+    assert client.active_optional_fields == ["EquipeNegocio"]
+    assert client.rejected_optional_fields == ["Responsavel"]
+    assert deals[0]["team"] == "Equipe Elite"

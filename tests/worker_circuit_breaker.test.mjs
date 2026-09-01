@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const workerPath = new URL(
-  "../cloudflare/gralha-indicadores-chat-worker-v10.js",
+  "../cloudflare/gralha-indicadores-chat-worker-v11.js",
   import.meta.url,
 );
 
@@ -69,6 +69,11 @@ function funnelTeamResponse(currentTotal = 67, openTotal = 56) {
               created_deals_currently_in_proposal: currentTotal,
               created_deals_in_proposal_stage_with_open_status: openTotal,
               team_breakdown: [
+                {
+                  team: "EQUIPE ATITUDE",
+                  open_deals_count: 0,
+                  current_stage_deals_count: 1,
+                },
                 {
                   team: "EQUIPE ELITE",
                   open_deals_count: 21,
@@ -359,7 +364,47 @@ test("routes an open Proposal team follow-up to the team aggregation without Ope
     assert.match(payload.answer, /fotografia do Vista foi atualizada/i);
     assert.match(payload.answer, /agora são 56 negócios em aberto/i);
     assert.match(payload.answer, /EQUIPE ELITE: 21 em aberto/i);
+    assert.doesNotMatch(payload.answer, /EQUIPE ATITUDE/i);
     assert.match(payload.answer, /39 de 56 propostas em aberto têm equipe atribuída/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("omits teams with zero open Proposals from the team chart", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.endsWith("/auth/v1/user")) return new Response("{}", { status: 200 });
+    if (url.includes("/functions/v1/gralha-indicadores-mcp/mcp")) {
+      return funnelTeamResponse();
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  try {
+    const worker = await loadWorker();
+    const response = await worker.default.fetch(
+      conversation([
+        { role: "user", content: "Quantos negócios criados em agosto de 2026 estão atualmente na etapa Proposta?" },
+        { role: "assistant", content: "Há 67 negócios; 56 estão em aberto." },
+        { role: "user", content: "Separe as propostas em aberto por equipe." },
+        { role: "assistant", content: "Propostas em aberto por equipe: EQUIPE ELITE: 21 em aberto." },
+        { role: "user", content: "Crie um gráfico." },
+      ]),
+      env,
+    );
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.visualization.type, "bar");
+    assert.deepEqual(
+      payload.visualization.series.map(({ label, value }) => ({ label, value })),
+      [
+        { label: "EQUIPE ELITE", value: 21 },
+        { label: "EQUIPE CHAMPIONS", value: 18 },
+      ],
+    );
   } finally {
     globalThis.fetch = originalFetch;
   }

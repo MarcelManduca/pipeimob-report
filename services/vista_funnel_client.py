@@ -146,6 +146,8 @@ class VistaFunnelClient:
             ):
                 self.optional_fields.append(field)
         self.fields = self.core_fields + self.optional_fields
+        self.active_optional_fields = list(self.optional_fields)
+        self.rejected_optional_fields: List[str] = []
         self.optional_fields_rejected = False
 
     @classmethod
@@ -177,6 +179,7 @@ class VistaFunnelClient:
             team_field=(
                 os.getenv("VISTA_DEAL_TEAM_FIELD")
                 or os.getenv("VISTA_SALES_TEAM_FIELD")
+                or "EquipeNegocio"
             ),
             agency_field=os.getenv("VISTA_DEAL_AGENCY_FIELD"),
             capture_source_field=os.getenv("VISTA_DEAL_CAPTURE_SOURCE_FIELD"),
@@ -344,9 +347,7 @@ class VistaFunnelClient:
     def _fetch_page(
         self, start_date: date, end_date: date, page: int
     ) -> Dict[str, Any]:
-        fields = (
-            self.core_fields if self.optional_fields_rejected else self.fields
-        )
+        fields = self.core_fields + self.active_optional_fields
         try:
             return self._fetch_page_with_fields(
                 start_date, end_date, page, fields
@@ -358,12 +359,56 @@ class VistaFunnelClient:
                 and self.optional_fields
                 and not self.optional_fields_rejected
             ):
-                payload = self._fetch_page_with_fields(
-                    start_date, end_date, page, self.core_fields
+                return self._negotiate_optional_fields(
+                    start_date, end_date, page
                 )
-                self.optional_fields_rejected = True
-                return payload
             raise
+
+    def _negotiate_optional_fields(
+        self, start_date: date, end_date: date, page: int
+    ) -> Dict[str, Any]:
+        """Keep Vista dimensions that work and reject only invalid fields."""
+        if len(self.optional_fields) == 1:
+            self.active_optional_fields = []
+            self.rejected_optional_fields = list(self.optional_fields)
+            self.optional_fields_rejected = True
+            return self._fetch_page_with_fields(
+                start_date, end_date, page, self.core_fields
+            )
+
+        accepted: List[str] = []
+        rejected: List[str] = []
+        payload_by_field: Dict[str, Dict[str, Any]] = {}
+        for field in self.optional_fields:
+            try:
+                payload_by_field[field] = self._fetch_page_with_fields(
+                    start_date,
+                    end_date,
+                    page,
+                    self.core_fields + [field],
+                )
+                accepted.append(field)
+            except VistaFunnelAPIError as exc:
+                if exc.error_code != "vista_http_400":
+                    raise
+                rejected.append(field)
+
+        self.active_optional_fields = accepted
+        self.rejected_optional_fields = rejected
+        self.optional_fields_rejected = bool(rejected)
+
+        if not accepted:
+            return self._fetch_page_with_fields(
+                start_date, end_date, page, self.core_fields
+            )
+        if len(accepted) == 1:
+            return payload_by_field[accepted[0]]
+        return self._fetch_page_with_fields(
+            start_date,
+            end_date,
+            page,
+            self.core_fields + accepted,
+        )
 
     def _fetch_page_with_fields(
         self,
