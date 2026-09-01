@@ -98,6 +98,32 @@ function funnelTeamResponse(currentTotal = 67, openTotal = 56) {
   );
 }
 
+function funnelTeamUnassignedResponse(currentTotal = 65, openTotal = 54) {
+  return new Response(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: "direct",
+      result: {
+        structuredContent: {
+          group_by: "equipe",
+          summary: {
+            proposal: {
+              created_deals_currently_in_proposal: currentTotal,
+              created_deals_in_proposal_stage_with_open_status: openTotal,
+              team_breakdown: [],
+              team_coverage: {
+                assigned_open: 0,
+                unassigned_open: openTotal,
+              },
+            },
+          },
+        },
+      },
+    }),
+    { status: 200, headers: { "Content-Type": "application/json" } },
+  );
+}
+
 const env = {
   SUPABASE_URL: "https://project.supabase.co",
   SUPABASE_PUBLISHABLE_KEY: "publishable-test-key",
@@ -403,6 +429,45 @@ test("omits teams with zero open Proposals from the team chart", async () => {
       [
         { label: "EQUIPE ELITE", value: 21 },
         { label: "EQUIPE CHAMPIONS", value: 18 },
+      ],
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("falls back to an attribution coverage chart when no team can be resolved", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.endsWith("/auth/v1/user")) return new Response("{}", { status: 200 });
+    if (url.includes("/functions/v1/gralha-indicadores-mcp/mcp")) {
+      return funnelTeamUnassignedResponse();
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  try {
+    const worker = await loadWorker();
+    const response = await worker.default.fetch(
+      conversation([
+        { role: "user", content: "Quantos negócios criados em agosto de 2026 estão atualmente na etapa Proposta? Separe os que estão Em aberto por equipe e mostre a cobertura de atribuição." },
+        { role: "assistant", content: "Nenhuma proposta em aberto retornou uma equipe válida. No total, são 54 negócios em aberto e 65 atualmente na etapa Proposta." },
+        { role: "user", content: "Crie um gráfico." },
+      ]),
+      env,
+    );
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.match(payload.answer, /nenhuma proposta em aberto/i);
+    assert.equal(payload.visualization.type, "bar");
+    assert.match(payload.visualization.title, /cobertura de atribuição/i);
+    assert.deepEqual(
+      payload.visualization.series.map(({ label, value }) => ({ label, value })),
+      [
+        { label: "Com equipe atribuída", value: 0 },
+        { label: "Sem vínculo de equipe", value: 54 },
       ],
     );
   } finally {
