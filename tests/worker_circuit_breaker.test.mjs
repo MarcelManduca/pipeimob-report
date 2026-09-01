@@ -151,7 +151,7 @@ function funnelTeamUnassignedResponse(currentTotal = 65, openTotal = 54) {
   );
 }
 
-function completeTeamFunnelResponse() {
+function completeTeamFunnelResponse(teamBreakdown = null) {
   return new Response(
     JSON.stringify({
       jsonrpc: "2.0",
@@ -168,7 +168,7 @@ function completeTeamFunnelResponse() {
               { stage: "Fechamento", deals_count: 17 },
             ],
             team_funnel: {
-              team_breakdown: [
+              team_breakdown: teamBreakdown ?? [
                 {
                   team: "EQUIPE SYNERGIA",
                   deals_count: 60,
@@ -789,6 +789,41 @@ test("creates separate premium funnels for every attributed team", async () => {
     );
     assert.match(payload.answer, /2 equipes/i);
     assert.match(payload.answer, /105 de 120 negócios possuem equipe atribuída/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("keeps all attributed teams in a large multi-funnel", async () => {
+  const originalFetch = globalThis.fetch;
+  const teams = Array.from({ length: 17 }, (_, index) => ({
+    team: `EQUIPE ${String(index + 1).padStart(2, "0")}`,
+    deals_count: 10,
+    stage_breakdown: [
+      { stage: "Captação", deals_count: 6 },
+      { stage: "Visita", deals_count: 4 },
+    ],
+  }));
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.endsWith("/auth/v1/user")) return new Response("{}", { status: 200 });
+    if (url.includes("/functions/v1/gralha-indicadores-mcp/mcp")) {
+      return completeTeamFunnelResponse(teams);
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  try {
+    const worker = await loadWorker();
+    const response = await worker.default.fetch(
+      request("Mostre o funil separado por equipe em agosto de 2026"),
+      env,
+    );
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.visualization.groups.length, 17);
+    assert.equal(payload.visualization.groups.at(-1).label, "EQUIPE 17");
   } finally {
     globalThis.fetch = originalFetch;
   }
