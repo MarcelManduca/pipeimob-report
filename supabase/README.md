@@ -1,7 +1,9 @@
 # Gralha Indicadores — implantação
 
-Esta pasta contém a migração e a Edge Function preparadas para a próxima
-publicação. Nada nesta pasta é uma fonte alternativa para fatos de venda.
+Esta pasta contém as migrações e as Edge Functions do Gralha Indicadores.
+Nada nesta pasta é uma fonte alternativa para fatos de venda. A arquitetura,
+o modelo de acesso e a publicação estão documentados em
+[`docs/GRALHA_INDICADORES_ARCHITECTURE.md`](../docs/GRALHA_INDICADORES_ARCHITECTURE.md).
 
 ## Hierarquia de dados
 
@@ -16,16 +18,14 @@ A antiga associação por corretor + data + imóvel não é usada. Resultados de
 validação, nomes, contagens e históricos internos devem permanecer fora do
 controle de versão público.
 
-## Ordem de publicação
+## Publicação e validação
 
-1. Revisar registros marcados com `review_required=true` em ambiente privado.
-2. Aplicar a migração de `manager_team_reference`.
-3. Publicar o backend com o contrato de conciliação correspondente.
-4. Validar a resposta do backend em um período conhecido.
-5. Publicar `gralha-indicadores-mcp` com a configuração de autenticação.
-6. Executar testes autenticados de ranking por corretor, equipe e bairro.
+Seguir a ordem de publicação da documentação de arquitetura. Validar o projeto
+de destino antes de aplicar migrações ou publicar funções. A ampliação da
+identificação corretor→equipe é uma fase separada, pausada até o comando
+`INICIAR-VALIDACAO-EQUIPES-GRALHA`.
 
-## Contrato de resposta 1.11.0
+## Respostas e autorização
 
 A Edge Function orienta o consumidor a responder primeiro com o número,
 ranking ou conclusão solicitada. Não existe prefixo obrigatório. Perguntas
@@ -38,4 +38,8 @@ espera pelo backend a 35 segundos.
 
 `verify_jwt=false` desativa apenas a validação automática do gateway. A função
 mantém a autenticação interna: valida o bearer token com `auth.getUser`, exige
-perfil ativo e restringe o acesso aos papéis `super_admin` e `viewer`.
+perfil ativo e consulta `profiles.access_role` e `user_team_access`. CEO, CSO e
+CMO têm acesso geral; diretores acessam as equipes selecionadas e gerentes
+acessam exatamente uma equipe. O resumo do funil e seus gráficos são
+recalculados no MCP a partir das equipes autorizadas. A função
+`gralha-portal-admin` aplica a autorização executiva à gestão de usuários.
