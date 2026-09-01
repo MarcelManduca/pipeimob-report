@@ -11,12 +11,19 @@ import {
 
 const FUNCTION_SLUG = "gralha-indicadores-mcp";
 const SERVER_NAME = "Gralha — Indicadores Pipeimob × Vista";
-const SERVER_VERSION = "1.14.1";
+const SERVER_VERSION = "1.15.0";
 const JSON_HEADERS = {
   "Content-Type": "application/json; charset=utf-8",
   "Cache-Control": "no-store",
 };
-const ALLOWED_ROLES = new Set(["super_admin", "viewer"]);
+const EXECUTIVE_ROLES = new Set(["ceo", "cso", "cmo"]);
+const ACCESS_ROLES = new Set([
+  "ceo",
+  "cso",
+  "cmo",
+  "store_director",
+  "team_manager",
+]);
 const CIRCUIT_FAILURE_THRESHOLD = 2;
 const CIRCUIT_WINDOW_MS = 120_000;
 const CIRCUIT_COOLDOWN_MS = 60_000;
@@ -189,41 +196,51 @@ async function authorize(request: Request) {
   if (userError || !user)
     return { ok: false as const, reason: "invalid_token" };
 
-  // Validate the authenticated subject through the existing SECURITY DEFINER
-  // role predicate. Besides checking the requested role, has_role() requires
-  // the matching profile to be active. This avoids a fragile direct RLS read
-  // from user_roles during token refresh without weakening authorization.
-  const [
-    { data: isSuperAdmin, error: superAdminError },
-    { data: isViewer, error: viewerError },
-  ] = await Promise.all([
-    userClient.rpc("has_role", {
-      _user_id: user.id,
-      _role: "super_admin",
-    }),
-    userClient.rpc("has_role", {
-      _user_id: user.id,
-      _role: "viewer",
-    }),
-  ]);
-  if (superAdminError || viewerError) {
+  const [{ data: profile, error: profileError }, { data: teamRows, error: teamError }] =
+    await Promise.all([
+      userClient
+        .from("profiles")
+        .select("status,access_role")
+        .eq("id", user.id)
+        .maybeSingle(),
+      userClient
+        .from("user_team_access")
+        .select("team_key")
+        .eq("user_id", user.id),
+    ]);
+  if (profileError || teamError) {
     console.error("authorization_lookup_failed", {
-      superAdminCode: superAdminError?.code ?? null,
-      viewerCode: viewerError?.code ?? null,
+      profileCode: profileError?.code ?? null,
+      teamCode: teamError?.code ?? null,
     });
     return { ok: false as const, reason: "authorization_lookup_failed" };
   }
-
-  const role = isSuperAdmin === true
-    ? "super_admin"
-    : isViewer === true
-      ? "viewer"
-      : null;
-  if (!role || !ALLOWED_ROLES.has(role)) {
+  const role = typeof profile?.access_role === "string"
+    ? profile.access_role
+    : "";
+  if (profile?.status !== "active" || !ACCESS_ROLES.has(role)) {
     return { ok: false as const, reason: "access_denied" };
   }
+  const allowedTeamKeys = [...new Set((teamRows ?? []).map((row) =>
+    normalizeBrokerName(String(row.team_key ?? ""))
+  ).filter(Boolean))];
+  const hasGlobalAccess = EXECUTIVE_ROLES.has(role);
+  if (
+    (!hasGlobalAccess && allowedTeamKeys.length === 0) ||
+    (role === "team_manager" && allowedTeamKeys.length !== 1)
+  ) {
+    return { ok: false as const, reason: "invalid_team_scope" };
+  }
 
-  return { ok: true as const, token, userId: user.id, role, userClient };
+  return {
+    ok: true as const,
+    token,
+    userId: user.id,
+    role,
+    userClient,
+    hasGlobalAccess,
+    allowedTeamKeys,
+  };
 }
 
 function asNumber(value: unknown): number | null {
@@ -643,18 +660,6 @@ async function callSalesRanking(
         sourceUpdatedThrough = updatedThrough;
       }
     }
-    for (const reference of brokerReferences) {
-      const updatedThrough = String(
-        reference.source_updated_through ?? "",
-      ).slice(0, 10);
-      if (
-        updatedThrough &&
-        (!sourceUpdatedThrough || updatedThrough > sourceUpdatedThrough)
-      ) {
-        sourceUpdatedThrough = updatedThrough;
-      }
-    }
-
     const grouped = new Map<
       string,
       { team: string; sales_count: number; vgv: number }
@@ -2115,6 +2120,123 @@ const TOOLS = [
   },
 ];
 
+type AuthorizedContext = Extract<Awaited<ReturnType<typeof authorize>>, { ok: true }>;
+
+function teamAllowed(value: unknown, allowedTeamKeys: string[]): boolean {
+  return allowedTeamKeys.includes(normalizeBrokerName(String(value ?? "")));
+}
+
+function sumRows(rows: unknown[], field: string): number {
+  return rows.reduce((total, row) => {
+    if (!row || typeof row !== "object") return total;
+    return total + Math.max(0, asNumber((row as Record<string, unknown>)[field]) ?? 0);
+  }, 0);
+}
+
+function scopeToolResult(value: unknown, auth: AuthorizedContext): unknown {
+  if (auth.hasGlobalAccess || !value || typeof value !== "object") return value;
+  const root = structuredClone(value as Record<string, unknown>);
+  const allowed = auth.allowedTeamKeys;
+
+  if (root.group_by === "team" && Array.isArray(root.ranking)) {
+    const ranking = root.ranking.filter((row) =>
+      row && typeof row === "object" &&
+      teamAllowed((row as Record<string, unknown>).team, allowed)
+    );
+    root.ranking = ranking.map((row, index) => ({
+      ...(row as Record<string, unknown>),
+      position: index + 1,
+    }));
+    root.total_ranked = ranking.length;
+    root.team_filter = null;
+    root.team_evaluation = null;
+    root.summary = {
+      scoped_sales: sumRows(ranking, "sales_count"),
+      scoped_vgv: sumRows(ranking, "vgv"),
+      scope: "authorized_teams_only",
+    };
+    const visualization = root.visualization as Record<string, unknown> | null;
+    if (visualization && Array.isArray(visualization.series)) {
+      visualization.series = visualization.series.filter((row) =>
+        row && typeof row === "object" &&
+        teamAllowed((row as Record<string, unknown>).label, allowed)
+      );
+      visualization.footnote = "Exibição restrita às equipes autorizadas para este usuário.";
+    }
+    return root;
+  }
+
+  const summary = root.summary && typeof root.summary === "object"
+    ? root.summary as Record<string, unknown>
+    : null;
+  const teamFunnel = summary?.team_funnel && typeof summary.team_funnel === "object"
+    ? summary.team_funnel as Record<string, unknown>
+    : null;
+  if (root.group_by === "equipe" && summary && teamFunnel) {
+    const teamRows = (Array.isArray(teamFunnel.team_breakdown)
+      ? teamFunnel.team_breakdown
+      : []).filter((row) =>
+        row && typeof row === "object" &&
+        teamAllowed((row as Record<string, unknown>).team, allowed)
+      );
+    const scopedDeals = sumRows(teamRows, "deals_count");
+    teamFunnel.team_breakdown = teamRows;
+    teamFunnel.selected_team = teamRows.length === 1 ? teamRows[0] : null;
+    teamFunnel.team_filter = null;
+    teamFunnel.team_coverage = {
+      created_deals_total: scopedDeals,
+      assigned_deals: scopedDeals,
+      unassigned_deals: 0,
+      assignment_rate: scopedDeals > 0 ? 1 : 0,
+      scope: "authorized_teams_only",
+    };
+
+    const proposal = summary.proposal && typeof summary.proposal === "object"
+      ? summary.proposal as Record<string, unknown>
+      : null;
+    if (proposal) {
+      const proposalRows = (Array.isArray(proposal.team_breakdown)
+        ? proposal.team_breakdown
+        : []).filter((row) =>
+          row && typeof row === "object" &&
+          teamAllowed((row as Record<string, unknown>).team, allowed)
+        );
+      const scopedOpen = sumRows(proposalRows, "open_deals_count");
+      const scopedCurrent = sumRows(proposalRows, "current_stage_deals_count");
+      proposal.team_breakdown = proposalRows;
+      proposal.created_deals_in_proposal_stage_with_open_status = scopedOpen;
+      proposal.created_deals_currently_in_proposal = scopedCurrent;
+      proposal.team_coverage = {
+        proposal_open_total: scopedOpen,
+        proposal_current_stage_total: scopedCurrent,
+        assigned_open: scopedOpen,
+        assigned_current_stage: scopedCurrent,
+        scope: "authorized_teams_only",
+      };
+    }
+    root.visualization = {
+      type: "multi_funnel",
+      title: "Funil comercial — equipes autorizadas",
+      metric: "deals_count",
+      unit: "deals",
+      groups: teamRows.map((row) => {
+        const record = row as Record<string, unknown>;
+        return {
+          label: String(record.team ?? "Equipe"),
+          series: (Array.isArray(record.stage_breakdown)
+            ? record.stage_breakdown
+            : []).map((stage) => ({
+              label: String((stage as Record<string, unknown>).stage ?? ""),
+              value: asNumber((stage as Record<string, unknown>).deals_count) ?? 0,
+            })),
+        };
+      }),
+      footnote: "Exibição restrita às equipes autorizadas para este usuário.",
+    };
+  }
+  return root;
+}
+
 Deno.serve(async (request: Request) => {
   const url = new URL(request.url);
 
@@ -2215,14 +2337,25 @@ Deno.serve(async (request: Request) => {
     ) {
       return rpcError(message.id, -32602, "Unknown tool");
     }
+    const scopedArgs = auth.hasGlobalAccess || name === "verificar_disponibilidade_fontes"
+      ? args
+      : {
+        ...args,
+        agrupar_por: "equipe",
+        top_n: 50,
+        equipe: undefined,
+      };
     const result = name === "verificar_disponibilidade_fontes"
       ? await sourceAvailability(auth.userClient)
       : name === "consultar_funil_vista"
-        ? await callVistaFunnelCohort(auth.token, args, auth.userClient)
-        : await callSalesRanking(auth.token, args, auth.userClient);
+        ? await callVistaFunnelCohort(auth.token, scopedArgs, auth.userClient)
+        : await callSalesRanking(auth.token, scopedArgs, auth.userClient);
+    const scopedValue = result.isError
+      ? result.value
+      : scopeToolResult(result.value, auth);
     return rpcResult(message.id, {
-      content: textContent(result.value),
-      structuredContent: result.value,
+      content: textContent(scopedValue),
+      structuredContent: scopedValue,
       isError: result.isError,
     });
   }
