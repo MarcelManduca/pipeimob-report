@@ -159,6 +159,12 @@ $$;
 revoke all on function private.current_user_is_executive()
   from public, anon, authenticated, service_role;
 
+-- The helper is referenced by RLS policies. The private schema is not exposed
+-- by the Data API, so this grant permits policy evaluation without publishing
+-- a callable RPC endpoint.
+grant usage on schema private to authenticated;
+grant execute on function private.current_user_is_executive() to authenticated;
+
 alter table public.teams enable row level security;
 alter table public.user_team_access enable row level security;
 alter table public.conversations enable row level security;
