@@ -802,7 +802,7 @@ function teamFunnelVisualization(value, period, question) {
     title: `Funil comercial por equipe — ${period.label}`,
     metric: "deals_count",
     unit: "deals",
-    groups: rows.slice(0, 12).map((row) => ({
+    groups: rows.slice(0, 24).map((row) => ({
       label: row.team,
       series: orderedTeamStages(row.stages).map((stage) => ({
         label: stage.stage,
@@ -931,7 +931,7 @@ function proposalTeamVisualization(value, period) {
 
 function safeVisualization(value) {
   if (value?.type === "multi_funnel" && Array.isArray(value.groups)) {
-    const groups = value.groups.slice(0, 12).flatMap((group) => {
+    const groups = value.groups.slice(0, 24).flatMap((group) => {
       const label = typeof group?.label === "string"
         ? group.label.trim().slice(0, 80)
         : "";
@@ -1469,6 +1469,7 @@ const HTML = `<!doctype html>
     const showChat=()=>{login.classList.add("hidden");chat.classList.remove("hidden");const name=(session?.user?.email||"diretor").split("@")[0].replace(/[._-]+/g," ");$("hello").textContent="Olá, "+name};
     const showLogin=()=>{chat.classList.add("hidden");login.classList.remove("hidden")};
     const api=async(path,body,token)=>fetch(path,{method:"POST",headers:{"Content-Type":"application/json",...(token?{Authorization:"Bearer "+token}:{})},body:JSON.stringify(body)});
+    const chatApi=async(body,token)=>{try{return await api("/api/chat",body,token)}catch(error){await new Promise(resolve=>setTimeout(resolve,500));return api("/api/chat",body,token)}};
     const renew=async()=>{if(!session?.refresh_token)return false;const res=await api("/api/refresh",{refresh_token:session.refresh_token});if(!res.ok){save(null);return false}save(await res.json());return true};
     form.addEventListener("submit",async e=>{e.preventDefault();showError(loginError,"");loginButton.disabled=true;loginButton.textContent="Entrando…";try{const res=await api("/api/login",{email:$("email").value.trim(),password:$("password").value});const data=await res.json();if(!res.ok){showError(loginError,data.error||"Não foi possível entrar.");return}save(data);$("password").value="";showChat()}catch{showError(loginError,"Não foi possível conectar agora. Tente novamente em instantes.")}finally{loginButton.disabled=false;loginButton.textContent="Entrar"}});
     $("forgot-password").addEventListener("click",()=>{$("recover-email").value=$("email").value.trim();showAuthForm("recover")});
@@ -1487,7 +1488,7 @@ const HTML = `<!doctype html>
     function renderChart(data){if(!data)return null;if(data.type==="multi_funnel")return Array.isArray(data.groups)&&data.groups.length?renderMultiFunnelChart(data):null;if(!["bar","funnel"].includes(data.type)||!Array.isArray(data.series)||!data.series.length)return null;return data.type==="funnel"?renderFunnelChart(data):renderBarChart(data)}
     function addMessage(role,content,visualization){const article=document.createElement("article");article.className="message "+role;const who=document.createElement("span");who.className="who";who.textContent=role==="assistant"?"Gralha":"Você";const wrapper=document.createElement("div"),bubble=document.createElement("p");wrapper.className=role==="assistant"?"assistant-content":"";bubble.className="bubble";bubble.textContent=content;wrapper.append(bubble);const chart=role==="assistant"?renderChart(visualization):null;if(chart)wrapper.append(chart);article.append(who,wrapper);conversation.append(article);$("messages").scrollTo({top:$("messages").scrollHeight,behavior:"smooth"})}
     function typing(on){const old=$("typing");if(old)old.remove();if(!on)return;const article=document.createElement("article");article.id="typing";article.className="message assistant";article.innerHTML='<span class="who">Gralha</span><div class="typing"><i></i><i></i><i></i></div>';conversation.append(article);$("messages").scrollTop=$("messages").scrollHeight}
-    async function ask(value){const question=(value||draft.value).trim();if(!question||busy||!session)return;busy=true;send.disabled=true;showError(chatError,"");welcome.classList.add("hidden");conversation.classList.remove("hidden");messages.push({role:"user",content:question});addMessage("user",question);draft.value="";typing(true);try{let res=await api("/api/chat",{messages:messages.slice(-12)},session.access_token);if(res.status===401&&await renew())res=await api("/api/chat",{messages:messages.slice(-12)},session.access_token);const data=await res.json();if(!res.ok||!data.answer){if(res.status===401){save(null);messages=[];conversation.textContent="";showLogin()}showError(chatError,data.error||"Não foi possível obter a resposta agora.");return}messages.push({role:"assistant",content:data.answer});addMessage("assistant",data.answer,data.visualization)}catch{showError(chatError,"A conexão foi interrompida. Tente enviar a pergunta novamente.")}finally{typing(false);busy=false;send.disabled=false}}
+    async function ask(value){const question=(value||draft.value).trim();if(!question||busy||!session)return;busy=true;send.disabled=true;showError(chatError,"");welcome.classList.add("hidden");conversation.classList.remove("hidden");messages.push({role:"user",content:question});addMessage("user",question);draft.value="";typing(true);try{const requestBody={messages:messages.slice(-12)};let res=await chatApi(requestBody,session.access_token);if(res.status===401&&await renew())res=await chatApi(requestBody,session.access_token);const data=await res.json();if(!res.ok||!data.answer){if(res.status===401){save(null);messages=[];conversation.textContent="";showLogin()}showError(chatError,data.error||"Não foi possível obter a resposta agora.");return}messages.push({role:"assistant",content:data.answer});addMessage("assistant",data.answer,data.visualization)}catch{showError(chatError,"A conexão foi interrompida após uma nova tentativa automática. Tente novamente em instantes.")}finally{typing(false);busy=false;send.disabled=false}}
     send.addEventListener("click",()=>ask());draft.addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();ask()}});$("suggestions").addEventListener("click",e=>{if(e.target.tagName==="BUTTON")ask(e.target.textContent)});$("logout").addEventListener("click",()=>{save(null);messages=[];conversation.textContent="";welcome.classList.remove("hidden");conversation.classList.add("hidden");showLogin()});
     if(location.pathname==="/reset-password"){save(null);showLogin();showAuthForm("reset");if(!recoveryToken){showError($("reset-error"),fragment.get("error_description")||"Este link de recuperação é inválido ou expirou. Solicite um novo.");$("reset-button").disabled=true}}else{session=read();if(session?.access_token&&session?.refresh_token)showChat();else{save(null);showLogin();showAuthForm("login")}}
   })();
