@@ -3,6 +3,13 @@
   "name": "gralha-indicadores-chat",
   "main": "cloudflare/gralha-indicadores-chat-worker-v11.js",
   "compatibility_date": "2026-08-30",
+  "keep_vars": true,
+  "vars": {
+    "SUPABASE_URL": "https://kmysinxpdkeszrtdyhid.supabase.co"
+  },
+  "secrets": {
+    "required": ["SUPABASE_PUBLISHABLE_KEY", "OPENAI_API_KEY"]
+  },
   "observability": {
     "enabled": true
   }
