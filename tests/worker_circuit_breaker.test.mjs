@@ -170,7 +170,7 @@ function completeTeamFunnelResponse() {
             team_funnel: {
               team_breakdown: [
                 {
-                  team: "Synergia",
+                  team: "EQUIPE SYNERGIA",
                   deals_count: 60,
                   stage_breakdown: [
                     { stage: "Captação", deals_count: 25 },
@@ -716,7 +716,7 @@ test("answers a current stage count for a named team without OpenAI", async () =
 
     assert.equal(response.status, 200);
     assert.equal(openAiCalls, 0);
-    assert.match(payload.answer, /18 negócios da equipe Synergia/i);
+    assert.match(payload.answer, /18 negócios da equipe EQUIPE SYNERGIA/i);
     assert.match(payload.answer, /atualmente na etapa Visita/i);
     assert.match(payload.answer, /não o total histórico/i);
   } finally {
@@ -785,7 +785,7 @@ test("creates separate premium funnels for every attributed team", async () => {
     assert.equal(payload.visualization.type, "multi_funnel");
     assert.deepEqual(
       payload.visualization.groups.map((group) => group.label),
-      ["Synergia", "Elite"],
+      ["EQUIPE SYNERGIA", "Elite"],
     );
     assert.match(payload.answer, /2 equipes/i);
     assert.match(payload.answer, /105 de 120 negócios possuem equipe atribuída/i);
