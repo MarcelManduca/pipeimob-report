@@ -151,6 +151,62 @@ function funnelTeamUnassignedResponse(currentTotal = 65, openTotal = 54) {
   );
 }
 
+function completeTeamFunnelResponse() {
+  return new Response(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: "direct",
+      result: {
+        structuredContent: {
+          group_by: "equipe",
+          summary: {
+            created_deals: 120,
+            current_stage_breakdown: [
+              { stage: "Captação", deals_count: 48 },
+              { stage: "Visita", deals_count: 31 },
+              { stage: "Proposta", deals_count: 24 },
+              { stage: "Fechamento", deals_count: 17 },
+            ],
+            team_funnel: {
+              team_breakdown: [
+                {
+                  team: "Synergia",
+                  deals_count: 60,
+                  stage_breakdown: [
+                    { stage: "Captação", deals_count: 25 },
+                    { stage: "Visita", deals_count: 18 },
+                    { stage: "Proposta", deals_count: 11 },
+                    { stage: "Fechamento", deals_count: 6 },
+                  ],
+                },
+                {
+                  team: "Elite",
+                  deals_count: 45,
+                  stage_breakdown: [
+                    { stage: "Captação", deals_count: 18 },
+                    { stage: "Visita", deals_count: 10 },
+                    { stage: "Proposta", deals_count: 9 },
+                    { stage: "Fechamento", deals_count: 8 },
+                  ],
+                },
+              ],
+              team_coverage: {
+                created_deals_total: 120,
+                assigned_deals: 105,
+                unassigned_deals: 15,
+              },
+            },
+            proposal: {
+              created_deals_currently_in_proposal: 24,
+              created_deals_in_proposal_stage_with_open_status: 20,
+            },
+          },
+        },
+      },
+    }),
+    { status: 200, headers: { "Content-Type": "application/json" } },
+  );
+}
 const env = {
   SUPABASE_URL: "https://project.supabase.co",
   SUPABASE_PUBLISHABLE_KEY: "publishable-test-key",
@@ -627,6 +683,112 @@ test("creates a premium funnel snapshot without treating it as historical conver
     );
     assert.match(payload.answer, /fotografia do momento/i);
     assert.match(payload.visualization.footnote, /não representa conversão histórica/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+test("answers a current stage count for a named team without OpenAI", async () => {
+  const originalFetch = globalThis.fetch;
+  let openAiCalls = 0;
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/auth/v1/user")) return new Response("{}", { status: 200 });
+    if (url.includes("/functions/v1/gralha-indicadores-mcp/mcp")) {
+      const body = JSON.parse(init.body);
+      assert.equal(body.params.name, "consultar_funil_vista");
+      assert.equal(body.params.arguments.agrupar_por, "equipe");
+      return completeTeamFunnelResponse();
+    }
+    if (url === "https://api.openai.com/v1/responses") {
+      openAiCalls += 1;
+      throw new Error("OpenAI should not be called for a named team stage count");
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  try {
+    const worker = await loadWorker();
+    const response = await worker.default.fetch(
+      request("Quantas visitas em agosto de 2026 teve a Synergia?"),
+      env,
+    );
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(openAiCalls, 0);
+    assert.match(payload.answer, /18 negócios da equipe Synergia/i);
+    assert.match(payload.answer, /atualmente na etapa Visita/i);
+    assert.match(payload.answer, /não o total histórico/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("creates a dedicated funnel for a named team", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/auth/v1/user")) return new Response("{}", { status: 200 });
+    if (url.includes("/functions/v1/gralha-indicadores-mcp/mcp")) {
+      const body = JSON.parse(init.body);
+      assert.equal(body.params.arguments.agrupar_por, "equipe");
+      return completeTeamFunnelResponse();
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  try {
+    const worker = await loadWorker();
+    const response = await worker.default.fetch(
+      request("Mostre o funil da Synergia em agosto de 2026"),
+      env,
+    );
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.visualization.type, "funnel");
+    assert.match(payload.visualization.title, /Synergia/i);
+    assert.deepEqual(
+      payload.visualization.series.map(({ label, value }) => ({ label, value })),
+      [
+        { label: "Captação", value: 25 },
+        { label: "Visita", value: 18 },
+        { label: "Proposta", value: 11 },
+        { label: "Fechamento", value: 6 },
+      ],
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("creates separate premium funnels for every attributed team", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.endsWith("/auth/v1/user")) return new Response("{}", { status: 200 });
+    if (url.includes("/functions/v1/gralha-indicadores-mcp/mcp")) {
+      return completeTeamFunnelResponse();
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  try {
+    const worker = await loadWorker();
+    const response = await worker.default.fetch(
+      request("Mostre o funil separado por equipe em agosto de 2026"),
+      env,
+    );
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.visualization.type, "multi_funnel");
+    assert.deepEqual(
+      payload.visualization.groups.map((group) => group.label),
+      ["Synergia", "Elite"],
+    );
+    assert.match(payload.answer, /2 equipes/i);
+    assert.match(payload.answer, /105 de 120 negócios possuem equipe atribuída/i);
   } finally {
     globalThis.fetch = originalFetch;
   }

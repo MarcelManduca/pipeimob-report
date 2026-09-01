@@ -326,6 +326,10 @@ function normalizedQuestion(value) {
     .toLowerCase();
 }
 
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function monthlyPeriodFromMessages(messages) {
   const monthPattern = MONTHS.join("|");
   const currentYear = Number(todayInSaoPaulo().slice(0, 4));
@@ -379,7 +383,26 @@ function fastIntent(messages) {
   const asksChart = /\b(grafico|visualiz)/.test(latest);
 
   if (/\bfunil\b/.test(latest)) {
-    return { type: "funnel_current_chart", period };
+    const asksTeamFunnel =
+      /\b(equipe|times?|separad|cada)\b/.test(latest) ||
+      /\bfunil\s+(?:da|do|de)\s+\S/.test(latest);
+    return {
+      type: asksTeamFunnel ? "team_funnel_chart" : "funnel_current_chart",
+      period,
+    };
+  }
+
+  const asksCurrentStageCount =
+    /\b(quanto|quantos|quanta|quantas|quantidade|total|todos|todas|numero)\b/.test(latest) &&
+    /\b(captacao|oportunidad|visit|propost|negociacao|fechamento|agend)/.test(
+      latest,
+    ) &&
+    !(
+      /\bpropost/.test(latest) &&
+      (/\bgerad/.test(latest) || /\bcriad/.test(latest))
+    );
+  if (asksCurrentStageCount) {
+    return { type: "team_stage_snapshot", period };
   }
 
   if (asksChart && hasProposalContext) {
@@ -437,7 +460,7 @@ function fastIntent(messages) {
 function indicatorSource(messages) {
   const latest = normalizedQuestion(messages.at(-1)?.content);
   if (
-    /\b(propost|negoci|funil|etapa|status|captacao|oportunidade|visita|fechamento|agenci|placa|veiculo|loja|imovel|lead)/.test(
+    /\b(propost|negoci|funil|etapa|status|captacao|oportunidade|visita|fechamento|agend|agenci|placa|veiculo|loja|imovel|lead)/.test(
       latest,
     )
   ) {
@@ -687,6 +710,128 @@ function funnelCurrentVisualization(value, period) {
   });
 }
 
+function teamFunnelRows(value) {
+  const rows = value?.summary?.team_funnel?.team_breakdown;
+  if (!Array.isArray(rows)) return [];
+  return rows.flatMap((row) => {
+    const team = typeof row?.team === "string" ? row.team.trim() : "";
+    const total = Number(row?.deals_count);
+    const stages = Array.isArray(row?.stage_breakdown)
+      ? row.stage_breakdown.flatMap((stageRow, index) => {
+        const stage = typeof stageRow?.stage === "string"
+          ? stageRow.stage.trim()
+          : "";
+        const count = Number(stageRow?.deals_count);
+        return stage && Number.isFinite(count) && count >= 0
+          ? [{ stage, count, index }]
+          : [];
+      })
+      : [];
+    return team && Number.isFinite(total) && total >= 0
+      ? [{ team, total, stages }]
+      : [];
+  });
+}
+
+function mentionedTeam(rows, question) {
+  const normalized = normalizedQuestion(question);
+  return rows.find((row) => {
+    const team = normalizedQuestion(row.team);
+    return team && new RegExp(`(^|\\b)${escapeRegExp(team)}(\\b|$)`).test(normalized);
+  }) || null;
+}
+
+function requestedStage(question) {
+  const normalized = normalizedQuestion(question);
+  const definitions = [
+    { pattern: /\bagend/, match: /agend/, label: "Agendamento" },
+    { pattern: /\bvisit/, match: /visit/, label: "Visita" },
+    { pattern: /\bcaptacao|\blead|\bcadastro/, match: /captacao|lead|cadastro/, label: "Captação" },
+    { pattern: /\boportunidade/, match: /oportunidade|interesse/, label: "Oportunidade" },
+    { pattern: /\bpropost/, match: /propost/, label: "Proposta" },
+    { pattern: /\bnegociacao/, match: /negociacao/, label: "Negociação" },
+    { pattern: /\bfechamento/, match: /fechamento|ganho|vendido|venda/, label: "Fechamento" },
+  ];
+  return definitions.find((definition) => definition.pattern.test(normalized)) || null;
+}
+
+function orderedTeamStages(stages) {
+  const wrapped = { summary: { current_stage_breakdown: stages.map((row) => ({
+    stage: row.stage,
+    deals_count: row.count,
+  })) } };
+  return funnelStageRows(wrapped);
+}
+
+function teamFunnelAnswer(value, period, question) {
+  const rows = teamFunnelRows(value);
+  if (!rows.length) return "";
+  const selected = mentionedTeam(rows, question);
+  if (selected) {
+    return `${selected.total.toLocaleString("pt-BR")} negócios criados em ${period.label} estão atribuídos à equipe ${selected.team}, distribuídos pelas etapas atuais conforme o funil. Esta é uma fotografia do momento.`;
+  }
+  const coverage = value?.summary?.team_funnel?.team_coverage;
+  const assigned = Number(coverage?.assigned_deals);
+  const total = Number(coverage?.created_deals_total);
+  const coverageText = Number.isFinite(assigned) && Number.isFinite(total)
+    ? ` ${assigned.toLocaleString("pt-BR")} de ${total.toLocaleString("pt-BR")} negócios possuem equipe atribuída.`
+    : "";
+  return `O funil de ${period.label} está separado em ${rows.length.toLocaleString("pt-BR")} equipes.${coverageText}`;
+}
+
+function teamFunnelVisualization(value, period, question) {
+  const rows = teamFunnelRows(value);
+  if (!rows.length) return null;
+  const selected = mentionedTeam(rows, question);
+  if (selected) {
+    const stages = orderedTeamStages(selected.stages);
+    return safeVisualization({
+      type: "funnel",
+      title: `Funil comercial — ${selected.team} — ${period.label}`,
+      metric: "deals_count",
+      unit: "deals",
+      series: stages.map((row) => ({ label: row.stage, value: row.count })),
+      footnote: "Fotografia atual dos negócios criados no período e atribuídos à equipe.",
+    });
+  }
+  return safeVisualization({
+    type: "multi_funnel",
+    title: `Funil comercial por equipe — ${period.label}`,
+    metric: "deals_count",
+    unit: "deals",
+    groups: rows.slice(0, 12).map((row) => ({
+      label: row.team,
+      series: orderedTeamStages(row.stages).map((stage) => ({
+        label: stage.stage,
+        value: stage.count,
+      })),
+    })),
+    footnote: "Cada quadro apresenta a etapa atual dos negócios atribuídos à respectiva equipe.",
+  });
+}
+
+function teamStageAnswer(value, period, question) {
+  const rows = teamFunnelRows(value);
+  const requested = requestedStage(question);
+  if (!rows.length || !requested) return "";
+  const selected = mentionedTeam(rows, question);
+  const globalRows = funnelStageRows(value).map((row) => ({
+    stage: row.stage,
+    count: row.count,
+  }));
+  const stageRows = selected ? selected.stages : globalRows;
+  const matched = stageRows.filter((row) =>
+    requested.match.test(normalizedQuestion(row.stage))
+  );
+  const count = matched.reduce((total, row) => total + row.count, 0);
+  const actualStages = [...new Set(matched.map((row) => row.stage))];
+  const scope = selected ? ` da equipe ${selected.team}` : "";
+  if (!matched.length) {
+    return `Não há uma etapa atual correspondente a “${requested.label}”${scope} entre os negócios criados em ${period.label}.`;
+  }
+  const stageLabel = actualStages.join(" / ");
+  return `${count.toLocaleString("pt-BR")} negócios${scope}, criados em ${period.label}, estão atualmente na etapa ${stageLabel}. Isso representa a fotografia atual, não o total histórico de passagens pela etapa.`;
+}
 function proposalStatusAnswer(value, period) {
   const proposal = value?.summary?.proposal;
   const currentTotal = Number(proposal?.created_deals_currently_in_proposal);
@@ -782,6 +927,38 @@ function proposalTeamVisualization(value, period) {
 }
 
 function safeVisualization(value) {
+  if (value?.type === "multi_funnel" && Array.isArray(value.groups)) {
+    const groups = value.groups.slice(0, 12).flatMap((group) => {
+      const label = typeof group?.label === "string"
+        ? group.label.trim().slice(0, 80)
+        : "";
+      const series = Array.isArray(group?.series)
+        ? group.series.slice(0, 10).flatMap((item) => {
+          const itemLabel = typeof item?.label === "string"
+            ? item.label.trim().slice(0, 80)
+            : "";
+          const numericValue = Number(item?.value);
+          return itemLabel && Number.isFinite(numericValue) && numericValue >= 0
+            ? [{ label: itemLabel, value: numericValue }]
+            : [];
+        })
+        : [];
+      return label && series.length ? [{ label, series }] : [];
+    });
+    if (!groups.length) return null;
+    return {
+      type: "multi_funnel",
+      title: typeof value.title === "string"
+        ? value.title.slice(0, 140)
+        : "Funil por equipe",
+      metric: "deals_count",
+      unit: "deals",
+      groups,
+      footnote: typeof value.footnote === "string"
+        ? value.footnote.slice(0, 320)
+        : "",
+    };
+  }
   if (
     !value ||
     !["bar", "funnel"].includes(value.type) ||
@@ -894,6 +1071,8 @@ async function chat(request, env) {
             agrupar_por: [
                 "proposal_team_snapshot",
                 "proposal_team_chart",
+                "team_funnel_chart",
+                "team_stage_snapshot",
               ].includes(directIntent.type)
               ? "equipe"
               : "nenhum",
@@ -945,6 +1124,27 @@ async function chat(request, env) {
       if (answer && visualization) {
         return json({ answer, visualization });
       }
+    } else if (directIntent.type === "team_funnel_chart") {
+      const answer = teamFunnelAnswer(
+        directValue,
+        directIntent.period,
+        latestQuestion,
+      );
+      const visualization = teamFunnelVisualization(
+        directValue,
+        directIntent.period,
+        latestQuestion,
+      );
+      if (answer && visualization) {
+        return json({ answer, visualization });
+      }
+    } else if (directIntent.type === "team_stage_snapshot") {
+      const answer = teamStageAnswer(
+        directValue,
+        directIntent.period,
+        latestQuestion,
+      );
+      if (answer) return json({ answer, visualization: null });
     } else if (
       directIntent.type === "proposal_generated" ||
       directIntent.type === "proposal_current_snapshot" ||
@@ -1087,11 +1287,11 @@ async function chat(request, env) {
         instructions: [
         "Você é o assistente de indicadores comerciais da Gralha Imóveis.",
         "Responda em português do Brasil. Comece pelo número, ranking ou conclusão solicitada, sem bordões ou introduções padronizadas.",
-        "Para perguntas sobre vendas oficiais, rankings de vendas, corretores, bairros, VGV ou ticket, use consultar_ranking_vendas. Para perguntas sobre negócios cadastrados no período, status geral, etapa atual do funil ou propostas, use consultar_funil_vista. Um pedido para separar propostas por equipe é uma consulta de funil: chame consultar_funil_vista com agrupar_por=equipe e preserve o período da conversa. Nunca use consultar_ranking_vendas para responder sobre propostas.",
+        "Para perguntas sobre vendas oficiais, rankings de vendas, corretores, bairros, VGV ou ticket, use consultar_ranking_vendas. Para perguntas sobre negócios cadastrados no período, status geral, etapa atual do funil, visitas, agendamentos ou propostas, use consultar_funil_vista. Todo pedido de etapa ou funil por equipe deve chamar consultar_funil_vista com agrupar_por=equipe e, quando houver uma equipe específica, também equipe=<nome>. Preserve o período da conversa. Nunca use consultar_ranking_vendas para responder sobre etapas do funil.",
         "Nunca invente valores, nomes, posições, critérios ou períodos.",
         `A data atual em São Paulo é ${currentDate}. Nunca trate datas posteriores como já realizadas; para ano corrente, consulte do primeiro dia do ano até a data atual.`,
         "Em perguntas objetivas, responda em uma ou duas frases. Só acrescente período, critério, fonte ou cobertura quando isso evitar uma interpretação errada ou quando o usuário pedir detalhes.",
-        "Em avaliações gerenciais, separe fatos, comparação, leitura executiva e ação recomendada, mas apenas quando os dados sustentarem essas conclusões. No funil, diferencie negócios criados no período, etapa atual, status geral e eventos históricos de entrada em etapa. Nunca trate negócios atualmente em Proposta como propostas geradas no período. Não atribua causas nem afirme conversão, visitas, propostas geradas ou tempo entre etapas sem dados correspondentes.",
+        "Em avaliações gerenciais, separe fatos, comparação, leitura executiva e ação recomendada, mas apenas quando os dados sustentarem essas conclusões. No funil, diferencie negócios criados no período, etapa atual, status geral e eventos históricos de entrada em etapa. Uma contagem na etapa Visita representa negócios atualmente nessa etapa, não visitas realizadas. Nunca trate negócios atualmente em Proposta como propostas geradas no período. Não atribua causas nem afirme conversão, eventos históricos de visitas, propostas geradas ou tempo entre etapas sem dados correspondentes.",
         "Quando uma métrica histórica não existir, apresente primeiro a fotografia atual verificada, em no máximo 80 palavras, e esclareça a diferença em uma frase. Não use prefixos padronizados. Se a ferramenta retornar erro, não transforme valores ausentes em análise: informe a falha em uma frase curta e solicite nova tentativa.",
         "Quando o usuário pedir Top N, envie top_n=N à ferramenta. O padrão é Top 10.",
         "Nunca produza gráficos com caracteres, código Python, matplotlib ou instruções para gerar imagem. O portal renderiza a visualização estruturada devolvida pela ferramenta.",
@@ -1201,7 +1401,7 @@ const HTML = `<!doctype html>
     .brand{display:flex;align-items:center;gap:12px;font-weight:780;letter-spacing:-.02em}.brand small{display:block;color:var(--muted);font-size:11px;font-weight:550;letter-spacing:0}.mark{width:42px;height:42px;display:grid;place-items:center;border-radius:14px 14px 6px 14px;color:var(--deep);background:var(--lime);font-weight:900;font-size:20px;box-shadow:inset 0 0 0 1px rgba(13,54,38,.09)}
     .eyebrow{margin:0 0 14px;color:var(--forest);font-size:12px;font-weight:850;letter-spacing:.14em;text-transform:uppercase}.login{min-height:100vh;display:grid;grid-template-columns:minmax(0,1.05fr) minmax(420px,.95fr)}.story{position:relative;display:flex;flex-direction:column;justify-content:space-between;padding:48px clamp(38px,7vw,110px);color:#f8fff9;overflow:hidden;background:var(--deep)}.story:before{content:"";position:absolute;right:-12%;bottom:-24%;width:min(700px,72vw);aspect-ratio:1;border-radius:50%;border:1px solid rgba(201,231,111,.35);box-shadow:0 0 0 80px rgba(201,231,111,.035),0 0 0 170px rgba(201,231,111,.025)}.story>*{position:relative;z-index:1}.story .eyebrow{color:var(--lime)}.story h1{margin:0;font-size:clamp(54px,7vw,104px);line-height:.88;letter-spacing:-.072em}.story-copy{max-width:570px;margin:32px 0 0;font-size:clamp(17px,1.5vw,21px);line-height:1.6;color:rgba(248,255,249,.72)}.security{color:rgba(248,255,249,.7);font-size:13px}.panel{display:grid;place-items:center;min-height:100vh;padding:38px;background:var(--surface)}form{width:min(420px,100%);display:grid;gap:22px}form h2{margin:0 0 8px;font-size:clamp(32px,4vw,46px);letter-spacing:-.045em}form .intro{margin:0;color:var(--muted);line-height:1.55}label{display:grid;gap:8px;color:#445149;font-size:13px;font-weight:750}input{height:48px;padding:0 14px;border:1px solid #d8ddd5;border-radius:10px;background:white;color:var(--ink);outline:none}input:focus,textarea:focus{border-color:var(--forest);box-shadow:0 0 0 3px rgba(22,77,54,.12)}.primary{height:50px;border:0;border-radius:12px;background:var(--forest);color:white;font-weight:780}.primary:hover{background:var(--deep)}.primary:disabled{cursor:not-allowed;opacity:.58}.link-button{justify-self:start;padding:0;border:0;background:transparent;color:var(--forest);font-weight:750;text-decoration:underline;text-underline-offset:3px}.error,.success{margin:0;font-size:13px;line-height:1.5}.error{color:var(--danger)}.success{color:var(--forest)}
     .chat{min-height:100vh;display:flex;flex-direction:column}.header{height:74px;display:flex;align-items:center;justify-content:space-between;padding:0 clamp(18px,4vw,54px);background:rgba(255,254,249,.92);border-bottom:1px solid var(--line);backdrop-filter:blur(14px)}.header .mark{width:38px;height:38px;border-radius:12px 12px 5px 12px}.account{display:flex;align-items:center;gap:18px}.connected{display:flex;align-items:center;gap:9px;color:var(--muted);font-size:12px;font-weight:650}.dot{width:7px;height:7px;border-radius:50%;background:#2d9d64;box-shadow:0 0 0 4px rgba(45,157,100,.12)}.logout{border:0;background:transparent;color:var(--muted);font-weight:700;padding:9px}.workspace{min-height:0;flex:1;display:flex;flex-direction:column}.messages{min-height:0;flex:1;overflow:auto;padding:40px clamp(18px,4vw,54px) 28px}.welcome{width:min(820px,100%);margin:clamp(34px,8vh,100px) auto 0;text-align:center}.orb{width:58px;height:58px;display:grid;place-items:center;margin:0 auto 24px;color:var(--deep);background:var(--lime);border-radius:20px 20px 7px 20px;font-size:25px;box-shadow:0 14px 40px rgba(75,103,37,.2)}.welcome h1{margin:0;font-size:clamp(35px,5vw,62px);line-height:1.02;letter-spacing:-.055em}.welcome>.copy{max-width:610px;margin:20px auto 0;color:var(--muted);line-height:1.65}.suggestions{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:36px;text-align:left}.suggestions button{min-height:108px;padding:18px;color:#344139;background:rgba(255,254,249,.78);border:1px solid var(--line);border-radius:16px;text-align:left;font-weight:620;transition:.18s}.suggestions button:hover{transform:translateY(-2px);border-color:#aab9aa;background:white}.conversation{width:min(900px,100%);margin:0 auto;display:grid;gap:28px}.message{display:grid;grid-template-columns:78px minmax(0,1fr);gap:16px;align-items:start}.who{padding-top:3px;color:var(--muted);font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.08em}.bubble{white-space:pre-wrap;margin:0;font-size:16px;line-height:1.75}.user .bubble{display:inline-block;padding:15px 18px;background:white;border:1px solid var(--line);border-radius:4px 18px 18px 18px}.typing{display:flex;gap:5px;padding-top:8px}.typing i{width:7px;height:7px;border-radius:50%;background:var(--forest);animation:bounce 1s infinite ease-in-out}.typing i:nth-child(2){animation-delay:.14s}.typing i:nth-child(3){animation-delay:.28s}@keyframes bounce{0%,60%,100%{transform:translateY(0);opacity:.35}30%{transform:translateY(-5px);opacity:1}}
-    .assistant-content{min-width:0}.assistant-content>.bubble{white-space:pre-wrap}.chart{margin:24px 0 0;padding:24px;background:linear-gradient(145deg,#fff 0%,#f8f9fc 100%);border:1px solid rgba(61,71,136,.14);border-radius:22px;box-shadow:0 20px 50px rgba(33,39,82,.09)}.chart figcaption{margin:0 0 18px;padding-left:14px;border-left:4px solid var(--wine);font-size:16px;font-weight:800;color:var(--ink);letter-spacing:-.01em}.chart svg{display:block;width:100%;height:auto;overflow:visible}.chart .label{fill:var(--ink);font-size:13px;font-weight:650}.chart .value{fill:var(--deep);font-size:12px;font-weight:800}.chart .bar-bg{fill:#e9ebf2}.chart .bar{fill:var(--forest)}.chart .tone-0{fill:#3d4788}.chart .tone-1{fill:#5663a1}.chart .tone-2{fill:#7b3035}.chart .tone-3{fill:#9aa0b9}.chart .funnel-segment{stroke:#fff;stroke-width:3;stroke-linejoin:round}.chart .funnel-label{fill:#fff;font-size:14px;font-weight:800}.chart .funnel-value{fill:rgba(255,255,255,.88);font-size:11px;font-weight:650}.chart .footnote{margin:16px 0 0;padding-top:14px;border-top:1px solid var(--line);color:var(--muted);font-size:11px;line-height:1.55}
+    .assistant-content{min-width:0}.assistant-content>.bubble{white-space:pre-wrap}.chart{margin:24px 0 0;padding:24px;background:linear-gradient(145deg,#fff 0%,#f8f9fc 100%);border:1px solid rgba(61,71,136,.14);border-radius:22px;box-shadow:0 20px 50px rgba(33,39,82,.09)}.chart figcaption{margin:0 0 18px;padding-left:14px;border-left:4px solid var(--wine);font-size:16px;font-weight:800;color:var(--ink);letter-spacing:-.01em}.chart svg{display:block;width:100%;height:auto;overflow:visible}.chart .label{fill:var(--ink);font-size:13px;font-weight:650}.chart .value{fill:var(--deep);font-size:12px;font-weight:800}.chart .bar-bg{fill:#e9ebf2}.chart .bar{fill:var(--forest)}.chart .tone-0{fill:#3d4788}.chart .tone-1{fill:#5663a1}.chart .tone-2{fill:#7b3035}.chart .tone-3{fill:#9aa0b9}.chart .funnel-segment{stroke:#fff;stroke-width:3;stroke-linejoin:round}.chart .funnel-label{fill:#fff;font-size:14px;font-weight:800}.chart .funnel-value{fill:rgba(255,255,255,.88);font-size:11px;font-weight:650}.chart .footnote{margin:16px 0 0;padding-top:14px;border-top:1px solid var(--line);color:var(--muted);font-size:11px;line-height:1.55}.multi-funnel-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.mini-funnel{padding:16px;background:#fff;border:1px solid var(--line);border-radius:16px}.mini-funnel h3{margin:0 0 10px;font-size:13px;color:var(--ink)}.mini-funnel .funnel-label{font-size:11px}.mini-funnel .funnel-value{font-size:9px}@media(max-width:760px){.multi-funnel-grid{grid-template-columns:1fr}}
     .brand-logo{display:block;width:164px;height:auto}.story .brand-logo{width:190px;padding:10px 14px;background:rgba(255,255,255,.86);border:1px solid rgba(61,71,136,.1);border-radius:16px;box-shadow:0 14px 34px rgba(32,36,64,.07)}.header .brand-logo{width:150px}.story{color:var(--ink);background:radial-gradient(circle at 84% 16%,rgba(123,48,53,.08),transparent 31%),radial-gradient(circle at 15% 82%,rgba(61,71,136,.1),transparent 34%),linear-gradient(145deg,#fff 0%,#f5f6fb 100%);border-right:1px solid var(--line)}.story:before{border-color:rgba(61,71,136,.12);box-shadow:0 0 0 80px rgba(61,71,136,.025),0 0 0 170px rgba(123,48,53,.018)}.story .eyebrow{color:var(--wine)}.story-copy{color:var(--muted)}.security{color:#73788d}.panel{background:#fff}.primary,.send{background:linear-gradient(135deg,#4a5594,#343d78);box-shadow:0 10px 24px rgba(61,71,136,.16)}.primary:hover,.send:hover{background:linear-gradient(135deg,#5662a1,#3d4788)}.link-button{color:var(--forest)}.header{background:rgba(255,255,255,.94);box-shadow:0 8px 28px rgba(32,36,64,.045)}.dot{background:#3ba56d}.orb{color:#fff;background:linear-gradient(145deg,#8b3e43,#6d3035);border-radius:50%;box-shadow:0 16px 36px rgba(123,48,53,.16)}.suggestions button{background:rgba(255,255,255,.9);border-color:rgba(61,71,136,.12);box-shadow:0 8px 24px rgba(32,36,64,.04)}.suggestions button:hover{border-color:rgba(61,71,136,.3);box-shadow:0 14px 30px rgba(32,36,64,.07)}.user .bubble{border-color:rgba(61,71,136,.13);box-shadow:0 8px 22px rgba(32,36,64,.04)}.composer{border-color:rgba(61,71,136,.18);box-shadow:0 18px 54px rgba(32,36,64,.1)}.typing i{background:var(--forest)}
     .composer-wrap{width:min(900px,calc(100% - 36px));margin:0 auto;padding:0 0 18px}.composer{display:flex;align-items:flex-end;gap:10px;padding:10px 10px 10px 16px;background:white;border:1px solid #d6ddd4;border-radius:18px;box-shadow:0 16px 50px rgba(23,34,29,.1)}textarea{width:100%;min-height:40px;max-height:140px;padding:9px 0;resize:none;border:0;background:transparent;color:var(--ink);outline:none;line-height:1.5}textarea:focus{box-shadow:none}.send{width:42px;height:42px;flex:0 0 auto;border:0;border-radius:12px;background:var(--forest);color:white;font-size:19px;font-weight:800}.send:disabled{opacity:.45}.notice{margin:9px 0 0;color:#849087;text-align:center;font-size:11px}.chat-error{margin:0 0 8px 4px}
     @media(max-width:840px){.login{grid-template-columns:1fr}.story{min-height:42vh;padding:28px 24px 34px}.story h1{margin-top:70px;font-size:clamp(48px,14vw,74px)}.story-copy{margin-top:22px}.security{display:none}.panel{min-height:58vh;padding:44px 24px}.suggestions{grid-template-columns:1fr}.suggestions button{min-height:76px}}
@@ -1280,7 +1480,8 @@ const HTML = `<!doctype html>
     function finishChart(figure,data){if(data.footnote){const note=document.createElement("p");note.className="footnote";note.textContent=data.footnote;figure.append(note)}return figure}
     function renderBarChart(data){const rows=data.series.slice(0,10),width=760,height=54+rows.length*46,chartX=215,maxBar=400,max=Math.max(...rows.map(item=>Number(item.value)||0),1),ns="http://www.w3.org/2000/svg",figure=chartShell(data),svg=document.createElementNS(ns,"svg");svg.setAttribute("viewBox","0 0 "+width+" "+height);svg.setAttribute("role","img");svg.setAttribute("aria-label",data.title||"Gráfico de barras");rows.forEach((item,index)=>{const y=32+index*46,label=document.createElementNS(ns,"text"),background=document.createElementNS(ns,"rect"),bar=document.createElementNS(ns,"rect"),value=document.createElementNS(ns,"text"),barWidth=Math.max(2,(Number(item.value)||0)/max*maxBar);label.setAttribute("x","0");label.setAttribute("y",String(y+5));label.setAttribute("class","label");label.textContent=item.label.length>27?item.label.slice(0,26)+"…":item.label;background.setAttribute("x",String(chartX));background.setAttribute("y",String(y-14));background.setAttribute("width",String(maxBar));background.setAttribute("height","24");background.setAttribute("rx","7");background.setAttribute("class","bar-bg");bar.setAttribute("x",String(chartX));bar.setAttribute("y",String(y-14));bar.setAttribute("width",String(barWidth));bar.setAttribute("height","24");bar.setAttribute("rx","7");bar.setAttribute("class","bar tone-"+(index%4));value.setAttribute("x",String(Math.min(chartX+barWidth+9,690)));value.setAttribute("y",String(y+4));value.setAttribute("class","value");value.textContent=chartValue(Number(item.value)||0,data.unit);svg.append(label,background,bar,value)});figure.append(svg);return finishChart(figure,data)}
     function renderFunnelChart(data){const rows=data.series.slice(0,8),width=760,rowHeight=68,height=34+rows.length*rowHeight,max=Math.max(...rows.map(item=>Number(item.value)||0),1),ns="http://www.w3.org/2000/svg",figure=chartShell(data),svg=document.createElementNS(ns,"svg");svg.setAttribute("viewBox","0 0 "+width+" "+height);svg.setAttribute("role","img");svg.setAttribute("aria-label",data.title||"Gráfico de funil");rows.forEach((item,index)=>{const value=Number(item.value)||0,nextValue=Number(rows[index+1]?.value)||value,topWidth=Math.max(150,value/max*560),bottomWidth=Math.max(132,nextValue/max*560),y=16+index*rowHeight,cx=380,polygon=document.createElementNS(ns,"polygon"),label=document.createElementNS(ns,"text"),count=document.createElementNS(ns,"text");polygon.setAttribute("points",(cx-topWidth/2)+","+y+" "+(cx+topWidth/2)+","+y+" "+(cx+bottomWidth/2)+","+(y+54)+" "+(cx-bottomWidth/2)+","+(y+54));polygon.setAttribute("class","funnel-segment tone-"+(index%4));label.setAttribute("x",String(cx));label.setAttribute("y",String(y+24));label.setAttribute("class","funnel-label");label.setAttribute("text-anchor","middle");label.textContent=item.label.length>34?item.label.slice(0,33)+"…":item.label;count.setAttribute("x",String(cx));count.setAttribute("y",String(y+43));count.setAttribute("class","funnel-value");count.setAttribute("text-anchor","middle");count.textContent=chartValue(value,data.unit);svg.append(polygon,label,count)});figure.append(svg);return finishChart(figure,data)}
-    function renderChart(data){if(!data||!["bar","funnel"].includes(data.type)||!Array.isArray(data.series)||!data.series.length)return null;return data.type==="funnel"?renderFunnelChart(data):renderBarChart(data)}
+    function renderMultiFunnelChart(data){const figure=chartShell(data),grid=document.createElement("div"),ns="http://www.w3.org/2000/svg";grid.className="multi-funnel-grid";data.groups.slice(0,12).forEach(group=>{const rows=group.series.slice(0,8),card=document.createElement("section"),heading=document.createElement("h3"),width=360,rowHeight=48,height=18+rows.length*rowHeight,max=Math.max(...rows.map(item=>Number(item.value)||0),1),svg=document.createElementNS(ns,"svg");card.className="mini-funnel";heading.textContent=group.label;svg.setAttribute("viewBox","0 0 "+width+" "+height);svg.setAttribute("role","img");svg.setAttribute("aria-label","Funil da equipe "+group.label);rows.forEach((item,index)=>{const value=Number(item.value)||0,nextValue=Number(rows[index+1]?.value)||value,topWidth=Math.max(110,value/max*300),bottomWidth=Math.max(96,nextValue/max*300),y=8+index*rowHeight,cx=180,polygon=document.createElementNS(ns,"polygon"),label=document.createElementNS(ns,"text"),count=document.createElementNS(ns,"text");polygon.setAttribute("points",(cx-topWidth/2)+","+y+" "+(cx+topWidth/2)+","+y+" "+(cx+bottomWidth/2)+","+(y+38)+" "+(cx-bottomWidth/2)+","+(y+38));polygon.setAttribute("class","funnel-segment tone-"+(index%4));label.setAttribute("x",String(cx));label.setAttribute("y",String(y+17));label.setAttribute("class","funnel-label");label.setAttribute("text-anchor","middle");label.textContent=item.label.length>24?item.label.slice(0,23)+"…":item.label;count.setAttribute("x",String(cx));count.setAttribute("y",String(y+31));count.setAttribute("class","funnel-value");count.setAttribute("text-anchor","middle");count.textContent=chartValue(value,data.unit);svg.append(polygon,label,count)});card.append(heading,svg);grid.append(card)});figure.append(grid);return finishChart(figure,data)}
+    function renderChart(data){if(!data)return null;if(data.type==="multi_funnel")return Array.isArray(data.groups)&&data.groups.length?renderMultiFunnelChart(data):null;if(!["bar","funnel"].includes(data.type)||!Array.isArray(data.series)||!data.series.length)return null;return data.type==="funnel"?renderFunnelChart(data):renderBarChart(data)}
     function addMessage(role,content,visualization){const article=document.createElement("article");article.className="message "+role;const who=document.createElement("span");who.className="who";who.textContent=role==="assistant"?"Gralha":"Você";const wrapper=document.createElement("div"),bubble=document.createElement("p");wrapper.className=role==="assistant"?"assistant-content":"";bubble.className="bubble";bubble.textContent=content;wrapper.append(bubble);const chart=role==="assistant"?renderChart(visualization):null;if(chart)wrapper.append(chart);article.append(who,wrapper);conversation.append(article);$("messages").scrollTo({top:$("messages").scrollHeight,behavior:"smooth"})}
     function typing(on){const old=$("typing");if(old)old.remove();if(!on)return;const article=document.createElement("article");article.id="typing";article.className="message assistant";article.innerHTML='<span class="who">Gralha</span><div class="typing"><i></i><i></i><i></i></div>';conversation.append(article);$("messages").scrollTop=$("messages").scrollHeight}
     async function ask(value){const question=(value||draft.value).trim();if(!question||busy||!session)return;busy=true;send.disabled=true;showError(chatError,"");welcome.classList.add("hidden");conversation.classList.remove("hidden");messages.push({role:"user",content:question});addMessage("user",question);draft.value="";typing(true);try{let res=await api("/api/chat",{messages:messages.slice(-12)},session.access_token);if(res.status===401&&await renew())res=await api("/api/chat",{messages:messages.slice(-12)},session.access_token);const data=await res.json();if(!res.ok||!data.answer){if(res.status===401){save(null);messages=[];conversation.textContent="";showLogin()}showError(chatError,data.error||"Não foi possível obter a resposta agora.");return}messages.push({role:"assistant",content:data.answer});addMessage("assistant",data.answer,data.visualization)}catch{showError(chatError,"A conexão foi interrompida. Tente enviar a pergunta novamente.")}finally{typing(false);busy=false;send.disabled=false}}

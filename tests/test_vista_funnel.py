@@ -395,6 +395,43 @@ def test_summary_keeps_current_proposal_stage_separate_from_generated_proposals(
     )
 
 
+def test_summary_exposes_assignment_identity_for_every_current_stage():
+    summary = summarize_created_deal_cohort(
+        [
+            {"deal_id": "1", "created_at": "2026-08-01", "status": "Em aberto", "stage_name": "Visita", "team": "Synergia"},
+            {"deal_id": "2", "created_at": "2026-08-01", "status": "Em aberto", "stage_name": "Visita", "responsible": "Gerente Um"},
+            {"deal_id": "3", "created_at": "2026-08-02", "status": "Ganho", "stage_name": "Fechamento", "team": "Synergia"},
+        ]
+    )
+
+    assert summary["stage_assignment_breakdown"] == [
+        {
+            "team": "Synergia",
+            "responsible": None,
+            "created_date": "2026-08-02",
+            "stage": "Fechamento",
+            "status": "Ganho",
+            "deals_count": 1,
+        },
+        {
+            "team": None,
+            "responsible": "Gerente Um",
+            "created_date": "2026-08-01",
+            "stage": "Visita",
+            "status": "Em aberto",
+            "deals_count": 1,
+        },
+        {
+            "team": "Synergia",
+            "responsible": None,
+            "created_date": "2026-08-01",
+            "stage": "Visita",
+            "status": "Em aberto",
+            "deals_count": 1,
+        },
+    ]
+
+
 def test_funnel_error_never_contains_api_key():
     def opener(request, timeout):
         raise urllib.error.HTTPError(request.full_url, 401, "denied", None, None)

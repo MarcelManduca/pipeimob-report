@@ -558,6 +558,9 @@ def summarize_created_deal_cohort(
     proposal_assignments: Dict[
         Tuple[str, str, str], Dict[str, Any]
     ] = {}
+    stage_assignments: Dict[
+        Tuple[str, str, str, str, str], Dict[str, Any]
+    ] = {}
 
     for deal in deals:
         status = _normalize_label(deal.get("status"))
@@ -576,10 +579,30 @@ def summarize_created_deal_cohort(
         if not deal.get("created_at"):
             missing_created_at += 1
 
+        team = _normalize_label(deal.get("team"))
+        responsible = _normalize_label(deal.get("responsible"))
+        created_date = str(deal.get("created_at") or "")[:10]
+        assignment_key = (
+            team.casefold() if team else "",
+            responsible.casefold() if responsible else "",
+            created_date,
+            stage.casefold() if stage else "",
+            status.casefold() if status else "",
+        )
+        assignment = stage_assignments.setdefault(
+            assignment_key,
+            {
+                "team": team,
+                "responsible": responsible,
+                "created_date": created_date or None,
+                "stage": stage,
+                "status": status,
+                "deals_count": 0,
+            },
+        )
+        assignment["deals_count"] += 1
+
         if stage and stage.casefold() == "proposta":
-            team = _normalize_label(deal.get("team"))
-            responsible = _normalize_label(deal.get("responsible"))
-            created_date = str(deal.get("created_at") or "")[:10]
             assignment_key = (
                 team.casefold() if team else "",
                 responsible.casefold() if responsible else "",
@@ -656,11 +679,23 @@ def summarize_created_deal_cohort(
         for row in proposal_assignment_breakdown
         if not row.get("team") and not row.get("responsible")
     )
+    stage_assignment_breakdown = sorted(
+        stage_assignments.values(),
+        key=lambda row: (
+            str(row.get("stage") or "").casefold(),
+            -int(row["deals_count"]),
+            str(row.get("team") or "").casefold(),
+            str(row.get("responsible") or "").casefold(),
+            str(row.get("created_date") or ""),
+            str(row.get("status") or "").casefold(),
+        ),
+    )
     return {
         "created_deals": len(deals),
         "status_breakdown": rows(status_counts, "status"),
         "current_stage_breakdown": rows(stage_counts, "stage"),
         "stage_status_breakdown": stage_status_breakdown,
+        "stage_assignment_breakdown": stage_assignment_breakdown,
         "proposal": {
             "created_deals_currently_in_proposal": proposal_current_stage_count,
             "current_proposal_stage_status_breakdown": rows(
