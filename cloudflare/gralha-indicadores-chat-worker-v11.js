@@ -672,13 +672,12 @@ function proposalTeamVisualization(value, period) {
   );
   if (upstream) return upstream;
   const rows = value?.summary?.proposal?.team_breakdown;
-  if (!Array.isArray(rows)) return null;
-  return safeVisualization({
+  const teamVisualization = safeVisualization({
     type: "bar",
     title: `Propostas em aberto por equipe — ${period.label}`,
     metric: "sales_count",
     unit: "sales",
-    series: rows
+    series: (Array.isArray(rows) ? rows : [])
       .filter((row) => Number(row?.open_deals_count || 0) > 0)
       .map((row) => ({
         label: String(row?.team || "Equipe não identificada"),
@@ -686,6 +685,41 @@ function proposalTeamVisualization(value, period) {
         sales_count: Number(row?.open_deals_count || 0),
       })),
     footnote: "Fotografia atual; a cobertura de atribuição é informada no texto.",
+  });
+  if (teamVisualization) return teamVisualization;
+
+  const coverage = value?.summary?.proposal?.team_coverage;
+  const openTotal = Number(
+    value?.summary?.proposal?.created_deals_in_proposal_stage_with_open_status,
+  );
+  const assignedOpen = Number(coverage?.assigned_open);
+  const unassignedOpen = Number(coverage?.unassigned_open);
+  if (
+    !Number.isFinite(openTotal) ||
+    !Number.isFinite(assignedOpen) ||
+    !Number.isFinite(unassignedOpen) ||
+    assignedOpen + unassignedOpen !== openTotal
+  ) return null;
+
+  return safeVisualization({
+    type: "bar",
+    title: `Cobertura de atribuição das propostas em aberto — ${period.label}`,
+    metric: "sales_count",
+    unit: "sales",
+    series: [
+      {
+        label: "Com equipe atribuída",
+        value: assignedOpen,
+        sales_count: assignedOpen,
+      },
+      {
+        label: "Sem vínculo de equipe",
+        value: unassignedOpen,
+        sales_count: unassignedOpen,
+      },
+    ],
+    footnote:
+      "A ausência de vínculo gerencial impede a distribuição confiável por equipe.",
   });
 }
 
