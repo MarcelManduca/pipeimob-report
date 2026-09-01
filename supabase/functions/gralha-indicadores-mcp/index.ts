@@ -1,8 +1,11 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 import {
+  buildBrokerTeamIndex,
   buildManagerTeamIndex,
+  resolveBrokerTeam,
   resolveManagerTeam,
+  type BrokerTeamReference,
   type ManagerTeamReference,
 } from "./team_reference.ts";
 
@@ -630,6 +633,17 @@ async function callSalesRanking(
     let sourceUpdatedThrough: string | null = null;
 
     for (const reference of references) {
+      const updatedThrough = String(
+        reference.source_updated_through ?? "",
+      ).slice(0, 10);
+      if (
+        updatedThrough &&
+        (!sourceUpdatedThrough || updatedThrough > sourceUpdatedThrough)
+      ) {
+        sourceUpdatedThrough = updatedThrough;
+      }
+    }
+    for (const reference of brokerReferences) {
       const updatedThrough = String(
         reference.source_updated_through ?? "",
       ).slice(0, 10);
@@ -1454,9 +1468,21 @@ async function callVistaFunnelCohort(
       .order("valid_from", { ascending: true })
       .limit(1000);
 
-    if (referenceError) {
+    const { data: brokerReferenceRows, error: brokerReferenceError } =
+      await userClient
+        .from("sales_team_reference")
+        .select(
+          "broker_key,broker_name,team_key,team_name,sale_date,source_updated_through",
+        )
+        .lte("sale_date", end)
+        .order("broker_key", { ascending: true })
+        .order("sale_date", { ascending: true })
+        .limit(5000);
+
+    if (referenceError || brokerReferenceError) {
       console.error("proposal_team_reference_lookup_failed", {
-        code: referenceError.code,
+        managerCode: referenceError?.code ?? null,
+        brokerCode: brokerReferenceError?.code ?? null,
       });
       return {
         isError: true,
@@ -1470,6 +1496,8 @@ async function callVistaFunnelCohort(
 
     const references = (referenceRows ?? []) as ManagerTeamReference[];
     const historyByManager = buildManagerTeamIndex(references);
+    const brokerReferences = (brokerReferenceRows ?? []) as BrokerTeamReference[];
+    const historyByBroker = buildBrokerTeamIndex(brokerReferences);
     const grouped = new Map<
       string,
       {
@@ -1482,6 +1510,8 @@ async function callVistaFunnelCohort(
     let assignedOpen = 0;
     let assignedCurrent = 0;
     let apiTeamOpen = 0;
+    let brokerReferenceOpen = 0;
+    let ambiguousBrokerReferenceOpen = 0;
     let managerReferenceOpen = 0;
     let managerReferenceReviewOpen = 0;
     let ambiguousOpen = 0;
@@ -1510,6 +1540,8 @@ async function callVistaFunnelCohort(
     >();
     let assignedDeals = 0;
     let apiTeamDeals = 0;
+    let brokerReferenceDeals = 0;
+    let ambiguousBrokerReferenceDeals = 0;
     let managerReferenceDeals = 0;
     let managerReferenceReviewDeals = 0;
     let ambiguousDeals = 0;
@@ -1545,22 +1577,35 @@ async function callVistaFunnelCohort(
           typeof row.created_date === "string"
             ? row.created_date.slice(0, 10)
             : "";
-        const assignment = resolveManagerTeam(
-          historyByManager,
+        const brokerAssignment = resolveBrokerTeam(
+          historyByBroker,
           responsible,
           createdDate,
         );
-        if (assignment.status === "resolved") {
-          teamName = assignment.teamName;
-          teamKey = assignment.teamKey;
-          managerReferenceDeals += dealsCount;
-          if (assignment.reviewRequired) {
-            managerReferenceReviewDeals += dealsCount;
-          }
-        } else if (assignment.status === "ambiguous") {
-          ambiguousDeals += dealsCount;
+        if (brokerAssignment.status === "resolved") {
+          teamName = brokerAssignment.teamName;
+          teamKey = brokerAssignment.teamKey;
+          brokerReferenceDeals += dealsCount;
+        } else if (brokerAssignment.status === "ambiguous") {
+          ambiguousBrokerReferenceDeals += dealsCount;
         } else {
-          unresolvedDeals += dealsCount;
+          const managerAssignment = resolveManagerTeam(
+            historyByManager,
+            responsible,
+            createdDate,
+          );
+          if (managerAssignment.status === "resolved") {
+            teamName = managerAssignment.teamName;
+            teamKey = managerAssignment.teamKey;
+            managerReferenceDeals += dealsCount;
+            if (managerAssignment.reviewRequired) {
+              managerReferenceReviewDeals += dealsCount;
+            }
+          } else if (managerAssignment.status === "ambiguous") {
+            ambiguousDeals += dealsCount;
+          } else {
+            unresolvedDeals += dealsCount;
+          }
         }
       }
 
@@ -1617,6 +1662,8 @@ async function callVistaFunnelCohort(
       unassigned_deals: Math.max(0, totalCreatedDeals - assignedDeals),
       assignment_rate: totalCreatedDeals ? assignedDeals / totalCreatedDeals : 0,
       api_team_deals: apiTeamDeals,
+      broker_reference_deals: brokerReferenceDeals,
+      ambiguous_broker_reference_deals: ambiguousBrokerReferenceDeals,
       manager_reference_deals: managerReferenceDeals,
       manager_reference_review_deals: managerReferenceReviewDeals,
       ambiguous_manager_reference_deals: ambiguousDeals,
@@ -1672,22 +1719,35 @@ async function callVistaFunnelCohort(
           typeof row.created_date === "string"
             ? row.created_date.slice(0, 10)
             : "";
-        const assignment = resolveManagerTeam(
-          historyByManager,
+        const brokerAssignment = resolveBrokerTeam(
+          historyByBroker,
           responsible,
           createdDate,
         );
-        if (assignment.status === "resolved") {
-          teamName = assignment.teamName;
-          teamKey = assignment.teamKey;
-          managerReferenceOpen += openCount;
-          if (assignment.reviewRequired) {
-            managerReferenceReviewOpen += openCount;
-          }
-        } else if (assignment.status === "ambiguous") {
-          ambiguousOpen += openCount;
+        if (brokerAssignment.status === "resolved") {
+          teamName = brokerAssignment.teamName;
+          teamKey = brokerAssignment.teamKey;
+          brokerReferenceOpen += openCount;
+        } else if (brokerAssignment.status === "ambiguous") {
+          ambiguousBrokerReferenceOpen += openCount;
         } else {
-          unresolvedOpen += openCount;
+          const managerAssignment = resolveManagerTeam(
+            historyByManager,
+            responsible,
+            createdDate,
+          );
+          if (managerAssignment.status === "resolved") {
+            teamName = managerAssignment.teamName;
+            teamKey = managerAssignment.teamKey;
+            managerReferenceOpen += openCount;
+            if (managerAssignment.reviewRequired) {
+              managerReferenceReviewOpen += openCount;
+            }
+          } else if (managerAssignment.status === "ambiguous") {
+            ambiguousOpen += openCount;
+          } else {
+            unresolvedOpen += openCount;
+          }
         }
       }
 
@@ -1733,6 +1793,8 @@ async function callVistaFunnelCohort(
         ? assignedOpen / proposalOpenTotal
         : 0,
       api_team_open: apiTeamOpen,
+      broker_reference_open: brokerReferenceOpen,
+      ambiguous_broker_reference_open: ambiguousBrokerReferenceOpen,
       manager_reference_open: managerReferenceOpen,
       manager_reference_review_open: managerReferenceReviewOpen,
       ambiguous_manager_reference_open: ambiguousOpen,
