@@ -51,6 +51,8 @@ flowchart TD
 
 O escopo é aplicado no Edge Function MCP. Ocultar controles na interface não é tratado como segurança. As políticas RLS também impedem que um usuário leia ou altere conversas de outro usuário.
 
+Para diretores e gerentes, o resumo do funil é reconstruído exclusivamente a partir das equipes autorizadas já identificadas: total de negócios, etapas, status, cruzamento etapa/status, propostas e gráficos. Indicadores globais de qualidade e campos adicionais do resumo da origem não são repassados. O cruzamento etapa/status é preservado durante a agregação existente, sem ampliar a identificação corretor→equipe. Se o contrato por equipe for incompatível, a consulta retorna erro em vez de reutilizar totais gerais.
+
 ## Modelo de dados
 
 | Tabela | Finalidade |
@@ -98,12 +100,14 @@ O design usa superfícies claras, branco e cinza suave, azul institucional `#3d4
 ## Publicação
 
 1. Executar `pytest` para o backend.
-2. Executar `node --test tests/worker_circuit_breaker.test.mjs`.
+2. Executar `node --test tests/worker_circuit_breaker.test.mjs tests/mcp_team_scope.test.mjs` com Node 22.18+ ou 24. Os testes de RBAC executam o handler MCP e o Worker com dados simulados, sem credenciais nem chamadas externas.
 3. Executar `node --check cloudflare/gralha-indicadores-chat-worker-v11.js` e `git diff --check`.
 4. Aplicar migrações do diretório `supabase/migrations` no projeto correto.
 5. Publicar as Edge Functions `gralha-indicadores-mcp` e `gralha-portal-admin`.
 6. Publicar o Worker por meio do repositório GitHub conectado ao Cloudflare.
 7. Validar login, nova conversa, retorno à Home, reabertura do histórico e convite de usuário.
+
+Na validação autenticada, comparar os totais, etapas, status e gráficos de um gerente (uma equipe), um diretor (múltiplas equipes) e um executivo (geral). Conferir também um usuário sem negócios no período e a reabertura do histórico. O isolamento de novas respostas não altera mensagens anteriormente persistidas; a correção não apaga nem reescreve conversas.
 
 ## Recuperação
 

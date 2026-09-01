@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
+import { authorizedFunnelSummary } from "./funnel_scope.ts";
 import {
   buildBrokerTeamIndex,
   buildManagerTeamIndex,
@@ -11,7 +12,7 @@ import {
 
 const FUNCTION_SLUG = "gralha-indicadores-mcp";
 const SERVER_NAME = "Gralha — Indicadores Pipeimob × Vista";
-const SERVER_VERSION = "1.15.0";
+const SERVER_VERSION = "1.15.1";
 const JSON_HEADERS = {
   "Content-Type": "application/json; charset=utf-8",
   "Cache-Control": "no-store",
@@ -1539,7 +1540,11 @@ async function callVistaFunnelCohort(
       {
         team: string;
         deals_count: number;
-        stages: Map<string, { stage: string; deals_count: number }>;
+        stages: Map<string, {
+          stage: string;
+          deals_count: number;
+          statuses: Map<string, { status: string; deals_count: number }>;
+        }>;
         statuses: Map<string, { status: string; deals_count: number }>;
       }
     >();
@@ -1627,10 +1632,17 @@ async function callVistaFunnelCohort(
       const stageRow = groupedRow.stages.get(stageKey) ?? {
         stage: stageName,
         deals_count: 0,
+        statuses: new Map(),
       };
       stageRow.deals_count += dealsCount;
-      groupedRow.stages.set(stageKey, stageRow);
       const statusKey = normalizeBrokerName(statusName);
+      const stageStatusRow = stageRow.statuses.get(statusKey) ?? {
+        status: statusName,
+        deals_count: 0,
+      };
+      stageStatusRow.deals_count += dealsCount;
+      stageRow.statuses.set(statusKey, stageStatusRow);
+      groupedRow.stages.set(stageKey, stageRow);
       const statusRow = groupedRow.statuses.get(statusKey) ?? {
         status: statusName,
         deals_count: 0,
@@ -1644,9 +1656,20 @@ async function callVistaFunnelCohort(
       .map((row) => ({
         team: row.team,
         deals_count: row.deals_count,
-        stage_breakdown: [...row.stages.values()].sort((a, b) =>
+        stage_breakdown: [...row.stages.values()].map(({ stage, deals_count }) => ({
+          stage, deals_count,
+        })).sort((a, b) =>
           b.deals_count - a.deals_count ||
           a.stage.localeCompare(b.stage, "pt-BR")
+        ),
+        stage_status_breakdown: [...row.stages.values()].map((stage) => ({
+          stage: stage.stage,
+          deals_count: stage.deals_count,
+          status_breakdown: [...stage.statuses.values()].sort((a, b) =>
+            b.deals_count - a.deals_count || a.status.localeCompare(b.status, "pt-BR")
+          ),
+        })).sort((a, b) =>
+          b.deals_count - a.deals_count || a.stage.localeCompare(b.stage, "pt-BR")
         ),
         status_breakdown: [...row.statuses.values()].sort((a, b) =>
           b.deals_count - a.deals_count ||
@@ -2169,51 +2192,16 @@ function scopeToolResult(value: unknown, auth: AuthorizedContext): unknown {
   const summary = root.summary && typeof root.summary === "object"
     ? root.summary as Record<string, unknown>
     : null;
-  const teamFunnel = summary?.team_funnel && typeof summary.team_funnel === "object"
-    ? summary.team_funnel as Record<string, unknown>
-    : null;
-  if (root.group_by === "equipe" && summary && teamFunnel) {
-    const teamRows = (Array.isArray(teamFunnel.team_breakdown)
-      ? teamFunnel.team_breakdown
-      : []).filter((row) =>
-        row && typeof row === "object" &&
-        teamAllowed((row as Record<string, unknown>).team, allowed)
-      );
-    const scopedDeals = sumRows(teamRows, "deals_count");
-    teamFunnel.team_breakdown = teamRows;
-    teamFunnel.selected_team = teamRows.length === 1 ? teamRows[0] : null;
-    teamFunnel.team_filter = null;
-    teamFunnel.team_coverage = {
-      created_deals_total: scopedDeals,
-      assigned_deals: scopedDeals,
-      unassigned_deals: 0,
-      assignment_rate: scopedDeals > 0 ? 1 : 0,
-      scope: "authorized_teams_only",
-    };
-
-    const proposal = summary.proposal && typeof summary.proposal === "object"
-      ? summary.proposal as Record<string, unknown>
-      : null;
-    if (proposal) {
-      const proposalRows = (Array.isArray(proposal.team_breakdown)
-        ? proposal.team_breakdown
-        : []).filter((row) =>
-          row && typeof row === "object" &&
-          teamAllowed((row as Record<string, unknown>).team, allowed)
-        );
-      const scopedOpen = sumRows(proposalRows, "open_deals_count");
-      const scopedCurrent = sumRows(proposalRows, "current_stage_deals_count");
-      proposal.team_breakdown = proposalRows;
-      proposal.created_deals_in_proposal_stage_with_open_status = scopedOpen;
-      proposal.created_deals_currently_in_proposal = scopedCurrent;
-      proposal.team_coverage = {
-        proposal_open_total: scopedOpen,
-        proposal_current_stage_total: scopedCurrent,
-        assigned_open: scopedOpen,
-        assigned_current_stage: scopedCurrent,
-        scope: "authorized_teams_only",
+  if (root.group_by === "equipe") {
+    const scopedSummary = summary ? authorizedFunnelSummary(summary, allowed) : null;
+    if (!scopedSummary) {
+      return {
+        error: "team_scope_unavailable",
+        detail: "Não foi possível isolar os indicadores das equipes autorizadas.",
       };
     }
+    root.summary = scopedSummary;
+    const teamRows = scopedSummary.team_funnel.team_breakdown;
     root.visualization = {
       type: "multi_funnel",
       title: "Funil comercial — equipes autorizadas",
@@ -2356,7 +2344,9 @@ Deno.serve(async (request: Request) => {
     return rpcResult(message.id, {
       content: textContent(scopedValue),
       structuredContent: scopedValue,
-      isError: result.isError,
+      isError: result.isError || Boolean(
+        scopedValue && typeof scopedValue === "object" && "error" in scopedValue
+      ),
     });
   }
 
