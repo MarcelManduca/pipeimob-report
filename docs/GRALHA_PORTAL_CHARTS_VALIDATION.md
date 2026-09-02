@@ -18,6 +18,15 @@ Base: `main`, commit `e53627b`. Correção independente do PR #33 (isolamento de
 - Respostas atrasadas do perfil não restauram controles de uma sessão encerrada. O histórico pode carregar mesmo quando o perfil falha.
 - “Acesso verificado” indica apenas que o perfil foi confirmado; não representa um diagnóstico de saúde de todas as integrações.
 
+## Apresentação mobile
+
+- Até 600 px de viewport, rankings de barras usam uma lista HTML responsiva com nomes completos e valores em 15 px, barra de 22 px abaixo de cada cabeçalho e quebra de linha para nomes/valores longos. O SVG de desktop fica oculto nesse breakpoint; a lista mobile fica oculta em telas maiores. Quantidade e VGV mantêm dados, ordem e escalas independentes.
+- Títulos usam 18 px e notas/legendas 13 px no celular. O tamanho do texto não depende da redução do `viewBox` de desktop. Funis continuam com o renderizador existente.
+- Até 900 px, o botão de histórico fica dentro do cabeçalho sticky, com espaço reservado no fluxo da página. A gaveta tem fechamento próprio, fundo clicável e Escape; quando fechada fica `inert`, e a navegação volta ao estado normal no desktop.
+- O campo de pergunta usa placeholder curto e fonte de 16 px no mobile, com botões de 44 px.
+- A lista mobile é montada pelo mesmo renderizador ao abrir gráficos salvos. Não é necessário reescrever o histórico para aplicar esse ajuste de apresentação.
+- As capturas recebidas confirmam os gráficos de quantidade e VGV na versão anterior da prévia. A legibilidade desta revisão mobile ainda precisa de conferência visual no dispositivo. Não desconsiderar aviso de certificado TLS ao autenticar; a causa do aviso observado não foi verificada por esta alteração.
+
 ## Testes locais sem serviços externos
 
 ```sh

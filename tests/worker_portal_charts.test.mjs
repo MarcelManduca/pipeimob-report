@@ -162,6 +162,7 @@ class Element {
   constructor(tag = "div") { this.tag = tag; this.children = []; this.attributes = {}; this.style = {}; this.textContent = ""; this.disabled = false; const classes = new Set(); this.classList = { add: value => classes.add(value), remove: value => classes.delete(value), contains: value => classes.has(value), toggle: (value, force) => force ? classes.add(value) : classes.delete(value) }; }
   append(...children) { this.children.push(...children); }
   setAttribute(name, value) { this.attributes[name] = value; }
+  focus() { this.focused = true; }
 }
 const flatten = el => [el, ...el.children.flatMap(flatten)];
 
@@ -267,4 +268,89 @@ test("long UTF-8 conversations keep chronological order within the request budge
   assert.ok(Buffer.byteLength(JSON.stringify(result)) < 45002);
   assert.equal(result.at(-1).content, "ambos");
   assert.deepEqual(plain(result), messages.slice(-result.length));
+});
+
+async function chartRenderer() {
+  const script = await clientScript();
+  const document = { createElement: tag => new Element(tag), createElementNS: (_, tag) => new Element(tag), createTextNode: text => Object.assign(new Element("text"), { textContent: text }) };
+  const scope = vm.createContext({ document, Intl });
+  vm.runInContext(script.slice(script.indexOf("function chartValue"), script.indexOf("function addMessage")), scope);
+  return scope;
+}
+
+test("mobile bars preserve full labels, units and all ten rows without SVG text scaling", async () => {
+  const renderer = await chartRenderer();
+  const label = "Bairro de nome muito longo — <img src=x onerror=alert(1)>";
+  const data = { type: "bar", title: "VGV", unit: "BRL", series: Array.from({ length: 12 }, (_, i) => ({ label: i ? "Bairro " + i : label, value: 14077729.69 - i })), footnote: "Julho/2026" };
+  const output = renderer.renderChart(data), nodes = flatten(output);
+  const mobile = nodes.find(node => node.className === "mobile-bars");
+  assert.equal(mobile.tag, "ol");
+  assert.equal(mobile.children.length, 10);
+  assert.equal(flatten(mobile).find(node => node.className === "mobile-bar-label").textContent, "1. " + label);
+  assert.match(flatten(mobile).find(node => node.className === "mobile-bar-value").textContent, /14\.077\.730/);
+  assert.equal(nodes.filter(node => node.tag === "img").length, 0);
+  assert.equal(nodes.filter(node => node.tag === "svg").length, 1);
+});
+
+test("mobile comparison retains independent scales and matching category order", async () => {
+  const renderer = await chartRenderer();
+  const output = renderer.renderChart(plain(toolsScope.chartFromTool(chartValue(), { metric: "both" })));
+  const lists = flatten(output).filter(node => node.className === "mobile-bars");
+  assert.equal(lists.length, 2);
+  const labels = list => flatten(list).filter(node => node.className === "mobile-bar-label").map(node => node.textContent);
+  const widths = list => flatten(list).filter(node => node.className?.startsWith("mobile-bar-fill")).map(node => node.style.width);
+  assert.deepEqual(labels(lists[0]), labels(lists[1]));
+  assert.deepEqual(widths(lists[0]), ["100%", "30%"]);
+  assert.deepEqual(widths(lists[1]), ["50%", "100%"]);
+});
+
+test("mobile zero has no visible bar and all-zero series has finite geometry", async () => {
+  const renderer = await chartRenderer();
+  const output = renderer.renderMobileBars({ unit: "sales", series: [{ label: "Sem vendas", value: 0 }] });
+  assert.equal(flatten(output).find(node => node.className?.startsWith("mobile-bar-fill")).style.width, "0%");
+  assert.ok(flatten(output).some(node => node.textContent === "0 vendas"));
+});
+
+test("mobile CSS uses real-sized text and hides only the desktop bar SVG", async () => {
+  assert.match(source, /\.mobile-bar-label\{[^}]*font-size:15px/);
+  assert.match(source, /\.mobile-bar-value\{[^}]*font-size:15px/);
+  assert.match(source, /\.mobile-bar-heading\{[^}]*flex-wrap:wrap/);
+  assert.match(source, /\.chart-bar>svg\{display:none\}\.chart-bar>\.mobile-bars\{display:grid\}/);
+  assert.match(source, /\.mobile-bars,\.mobile-close\{display:none\}/);
+  assert.match(source, /\.composer textarea\{[^}]*font-size:16px/);
+  assert.match(source, /\.header\{position:sticky;top:0/);
+});
+
+test("history toggle is inside the header, never a fixed overlay on messages", async () => {
+  const worker = await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
+  const page = await (await worker.default.fetch(new Request("https://worker.test/"), env)).text();
+  const header = page.match(/<header class="header">([\s\S]*?)<\/header>/)[1];
+  assert.match(header, /id="nav-toggle"/);
+  assert.equal((page.match(/id="nav-toggle"/g) || []).length, 1);
+  assert.doesNotMatch(header.match(/<button id="nav-toggle"[^>]+>/)[0], /position:fixed/);
+  assert.match(page, /id="close-nav"/);
+  assert.match(page, /placeholder="Digite sua pergunta…"/);
+});
+
+test("mobile drawer closes accessibly and resizing restores desktop navigation", async () => {
+  const script = await clientScript(), elements = new Map();
+  const $ = id => { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); };
+  const mobileNavigation = { matches: true };
+  const scope = vm.createContext({ $, mobileNavigation });
+  vm.runInContext(script.slice(script.indexOf("function setNavOpen"), script.indexOf('mobileNavigation.addEventListener')), scope);
+  scope.setNavOpen(false);
+  assert.equal($("chat-nav").inert, true);
+  scope.setNavOpen(true);
+  assert.equal($("nav-toggle").attributes["aria-expanded"], "true");
+  assert.equal($("close-nav").focused, true);
+  assert.equal($("nav-backdrop").classList.contains("hidden"), false);
+  scope.setNavOpen(false);
+  assert.equal($("chat-nav").inert, true);
+  assert.equal($("nav-backdrop").classList.contains("hidden"), true);
+  assert.equal($("nav-toggle").focused, true);
+  mobileNavigation.matches = false;
+  scope.setNavOpen(false);
+  assert.equal($("chat-nav").inert, false);
+  assert.equal($("chat-nav").attributes["aria-hidden"], "false");
+  assert.match(script, /event.key==="Escape"/);
 });
