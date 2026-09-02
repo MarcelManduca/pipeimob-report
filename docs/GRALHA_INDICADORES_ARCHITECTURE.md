@@ -95,6 +95,8 @@ O escopo é aplicado no Edge Function MCP. Ocultar controles na interface não �
 
 O design usa superfícies claras, branco e cinza suave, azul institucional `#3d4788`, vinho `#7b3035` e cinza de apoio. Os gráficos suportados são barras/ranking, funil e múltiplos funis por equipe. Todos incluem título, legenda, valores e nota metodológica quando necessária.
 
+O contrato interno `sales_comparison` apresenta quantidade e VGV em dois gráficos de barras, com os mesmos itens e escalas independentes. Ele é construído no Worker somente a partir de uma visualização MCP autorizada com ambas as métricas válidas; não interpreta JSON produzido no texto da resposta. Pedidos de gráfico e seus refinamentos preservam o contexto recente, sem transportar a intenção para uma nova pergunta. Detalhes e roteiro de testes: [validação do portal e gráficos](GRALHA_PORTAL_CHARTS_VALIDATION.md).
+
 ## Publicação
 
 1. Executar `pytest` para o backend.
