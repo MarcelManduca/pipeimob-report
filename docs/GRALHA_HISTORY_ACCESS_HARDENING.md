@@ -64,6 +64,14 @@ Resultado da composição local, com a adaptação explícita do mock: **81 test
 
 ## Próxima etapa — exige autorização separada
 
+### Teste isolado autorizado no GitHub Actions
+
+O workflow `.github/workflows/gralha-history-rls.yml` foi preparado para executar apenas em pushes relevantes da branch deste PR. Usa `postgres:17.11-bookworm` descartável, sem portas publicadas, sem conexão com o projeto Supabase e sem segredos de produção. O token do workflow possui somente leitura do código e não é persistido pelo checkout; não há etapa de deploy ou merge.
+
+A suíte `tests/postgres_history_access.integration.mjs` exige GitHub Actions e confirmação explícita do container, valida a imagem e o nome do banco antes de executar SQL, e se conecta exclusivamente pelo `psql` dentro desse container. Os pré-requisitos são sintéticos; as três migrações reais do portal são executadas somente nesse banco vazio, seguidas pelo SQL proposto. Controles negativos precisam reproduzir os privilégios excessivos e o acesso de perfil desativado antes da aplicação. Cada cenário subsequente usa transação com rollback e papéis de API sem bypass de RLS.
+
+Esses testes verificam PostgreSQL/RLS, não o provedor Supabase Auth, assinatura/expiração real de JWT, PostgREST, conexões de rede ou o estado do projeto existente. O helper `auth.uid()` do fixture simula somente a identidade da sessão no banco. Perfis deliberadamente inválidos são criados apenas dentro de transações descartáveis de teste. Resultado de execução deve ser conferido no GitHub Actions antes de considerar essa validação concluída.
+
 1. **GitHub:** revisar este PR e manter como rascunho até completar a validação SQL e resolver a divergência de migrações. Não mesclar nem publicar automaticamente.
 2. **Ambiente de testes isolado:** disponibilizar PostgreSQL/Supabase local e o CLI; gerar o arquivo com `supabase migration new harden_portal_history_access` após consultar `--help`, usando o conteúdo revisado da proposta. Não usar credenciais ou cópias de dados de produção.
 3. **Testes RLS:** executar como `anon` e `authenticated` (não apenas como dono/superusuário). Verificar leitura, inserção, atualização e exclusão do histórico próprio; tentativas contra outro usuário; mensagens vinculadas a conversa alheia; desativação com o mesmo JWT; perfis convidados/ausentes/inválidos; e a manutenção do acesso administrativo pelo serviço. Para perfis, confirmar `SELECT` autorizado e ausência de privilégios de escrita, `TRUNCATE`, `REFERENCES`, `TRIGGER`, `MAINTAIN` quando suportado, incluindo concessões por coluna. Não testar operações destrutivas no projeto existente.
