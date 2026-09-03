@@ -51,7 +51,8 @@ original são preservados no inventário, inclusive para a cópia ocultada.
 O bootstrap contém uma identidade fixa em regras de ativação e concessão de cargo
 administrativo. O valor foi substituído por `[REDACTED_EMAIL]` em todas as ocorrências.
 Essa cópia não deve ser executada, renomeada para migração ou marcada como original.
-Não se verificou nesta etapa se a função histórica mantém hoje a mesma definição.
+Na revisão complementar, confirmou-se que a função atual mantém a exceção de e-mail
+e que seu gatilho está habilitado; ver `docs/GRALHA_BOOTSTRAP_REVIEW.md`.
 Não publicar o valor original nem substituir silenciosamente essa regra por outra.
 
 Há também dependências pré-existentes, como `validation.consolidated_sales`,
@@ -86,6 +87,10 @@ Estrutura presente não comprova a execução histórica de DML nem autoriza rea
 
 Os testes isolados do PR #35 não validam esta cadeia histórica completa nem a
 recriação do projeto. Não apresentar a reconciliação de nomes como correção de acesso.
+
+A revisão complementar e o ensaio de reconstrução parcial estão em
+`docs/GRALHA_BOOTSTRAP_REVIEW.md`. A cópia ocultada não é executada diretamente;
+o controle negativo usa uma variante em memória com identidade fictícia.
 
 ## Portões antes de qualquer execução futura
 
