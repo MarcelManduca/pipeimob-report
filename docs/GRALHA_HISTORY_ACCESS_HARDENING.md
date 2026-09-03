@@ -46,7 +46,21 @@ git diff --check
 
 Os testes usam UUIDs e respostas fictícias, com rede externa bloqueada pelo mock. Cobrem os cinco cargos, perfis desativados/convidados, cargo inválido, perfil ausente ou de terceiro, falhas de rede/JSON, timeout, JWT inválido e metadados editáveis que não podem autorizar acesso. Incluem todas as rotas de histórico e a resposta persistida de `/api/chat`.
 
+Resultado desta branch: **47 testes aprovados** (32 novos e 15 existentes), além de sintaxe JavaScript e `git diff --check` sem erros.
+
 As verificações do SQL são **estáticas**, não uma execução de PostgreSQL/RLS. Não havia PostgreSQL local disponível. A sintaxe e os efeitos efetivos das concessões/políticas precisam de validação em banco descartável, com dados sintéticos, antes de aplicação no projeto existente.
+
+### Compatibilidade com os PRs pendentes
+
+A composição local desta proposta com os commits dos PRs #33 (`f7edae0`) e #34 (`b41c269`) não apresentou conflito textual. A suíte de gráficos do #34 ainda não simula a nova consulta de perfil: seu teste de persistência falha de forma fechada com `503`, como esperado para uma fonte de autorização indisponível. Ao integrar as propostas, acrescentar ao mock de `runChat` em `tests/worker_portal_charts.test.mjs`, logo depois do tratamento de `/auth/v1/user`:
+
+```js
+if (url.includes("/rest/v1/profiles?")) return json([{ id: "test-user", status: "active", access_role: "cmo" }]);
+```
+
+Essa adaptação foi usada somente na cópia local de teste; os PRs #33 e #34 não foram alterados. Ela não deve ser implementada no Worker, nem substituída por liberação de acesso quando faltar perfil. O identificador acima é exclusivamente fictício.
+
+Resultado da composição local, com a adaptação explícita do mock: **81 testes aprovados**, incluindo gráficos, histórico, proteção contra falhas e escopo por equipe.
 
 ## Próxima etapa — exige autorização separada
 
