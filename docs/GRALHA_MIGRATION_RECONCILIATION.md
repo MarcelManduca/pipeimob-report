@@ -22,6 +22,12 @@ esses hashes servem para comparação de integridade, não para segurança cript
 O inventário legível por máquina está em
 `docs/migrations/reconciliation-20260903.json`.
 
+O inventário complementar do schema comercial está em
+`docs/migrations/commercial-schema-inventory-20260903.json`; sua interpretação e
+o limite da futura baseline estão em `docs/GRALHA_BASELINE_SCOPE.md`. Eles confirmam
+que 13 tabelas próprias ainda não têm DDL de criação na cadeia executável. São
+evidências de catálogo e especificação de escopo, não migrações.
+
 ### Três arquivos com SQL idêntico e timestamps diferentes
 
 | Migração | Versão anterior no GitHub | Versão registrada no Supabase |
@@ -79,9 +85,14 @@ Estrutura presente não comprova a execução histórica de DML nem autoriza rea
 - As políticas atuais de conversas e mensagens verificam propriedade, mas não
   exigem perfil ativo. A proposta de correção segue separada no PR #35.
 - As sequências `conversation_messages_id_seq` e `user_management_audit_id_seq`
-  concedem `USAGE`, `SELECT` e `UPDATE` a `anon` e `authenticated`. O SQL do portal
+  e também `internal_sales_spreadsheet_rows_id_seq`,
+  `manager_team_reference_id_seq` e `sales_team_reference_id_seq` concedem `USAGE`,
+  `SELECT` e `UPDATE` a `anon` e `authenticated`. O SQL do portal
   concede privilégios de sequência sem revogar privilégios herdados/preexistentes.
   Revisar os grants efetivos e defaults em proposta separada; este PR não os altera.
+- `user_roles`, assim como `profiles`, apresenta privilégios efetivos amplos para
+  `anon` e `authenticated`, inclusive `TRUNCATE`. O inventário também observou
+  privilégios padrão amplos em `public`; não copiá-los como estado desejado.
 - Não se demonstrou vazamento ou exploração. Não foram testadas operações de
   escrita, `nextval`, `setval` ou `TRUNCATE` no projeto remoto.
 
@@ -117,7 +128,7 @@ preservados, separação dos arquivos de revisão e ocultação de identidade. N
 rede nem executa SQL. O teste de regressão existente do Worker pode ser executado
 separadamente. Esses testes não substituem a reprodução isolada do banco.
 
-Resultado local em 03/09/2026: **22 testes aprovados** (7 de reconciliação e 15
+Resultado local em 03/09/2026: **26 testes aprovados** (11 de reconciliação e 15
 de regressão do Worker), sem falhas ou testes ignorados. O SQL histórico não foi
 executado; nenhuma validação em produção é inferida desses resultados.
 

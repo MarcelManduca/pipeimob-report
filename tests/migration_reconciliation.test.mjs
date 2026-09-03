@@ -7,6 +7,9 @@ const root = new URL('../', import.meta.url);
 const read = (path) => readFile(new URL(path, root), 'utf8');
 const md5 = (text) => createHash('md5').update(text, 'utf8').digest('hex');
 const manifest = JSON.parse(await read('docs/migrations/reconciliation-20260903.json'));
+const commercial = JSON.parse(await read(
+  'docs/migrations/commercial-schema-inventory-20260903.json',
+));
 const aligned = manifest.remote_history.filter((row) => row.previous_local_version);
 const archived = manifest.remote_history.filter((row) => !row.previous_local_version);
 
@@ -83,4 +86,74 @@ test('review bundle contains no email literals or credential-shaped values', asy
     assert.doesNotMatch(sql, /eyJ[A-Za-z0-9_-]{20,}|sb_secret_|sbp_[A-Za-z0-9]{20,}/);
     assert.doesNotMatch(sql, /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i);
   }
+});
+
+test('commercial inventory is read-only evidence, never an executable baseline', () => {
+  assert.equal(commercial.source.project_ref, 'kmysinxpdkeszrtdyhid');
+  assert.equal(commercial.source.base_commit, manifest.base_commit);
+  assert.equal(commercial.source.catalog_read_mode, 'READ ONLY');
+  assert.equal(commercial.source.production_mutated, false);
+  assert.equal(commercial.source.business_rows_read, false);
+  assert.equal(commercial.source.personal_data_included, false);
+  assert.equal(commercial.decision.ready_for_db_push, false);
+  assert.equal(commercial.decision.ready_for_production, false);
+  assert.equal(commercial.decision.executable_baseline_complete, false);
+  assert.equal(commercial.decision.broker_team_expansion_authorized, false);
+});
+
+test('commercial inventory fixes the exact observed catalog boundary', () => {
+  assert.deepEqual(commercial.summary, {
+    server_version: '17.6',
+    schemas: ['private', 'public', 'validation'],
+    table_count: 20,
+    public_table_count: 11,
+    validation_table_count: 9,
+    sequence_count: 12,
+    column_count: 189,
+    constraint_count: 104,
+    index_count: 67,
+    invalid_index_count: 0,
+    table_without_primary_key_count: 0,
+    rls_enabled_table_count: 20,
+    policy_count: 20,
+    publication_membership_count: 0,
+  });
+  assert.equal(commercial.inventory.relations.length, 32);
+  assert.equal(commercial.inventory.columns.length, 189);
+  assert.equal(commercial.inventory.constraints.length, 104);
+  assert.equal(commercial.inventory.indexes.length, 67);
+});
+
+test('thirteen missing tables are classified without starting team expansion', () => {
+  assert.deepEqual(commercial.decision.missing_from_executable_chain.public, [
+    'internal_sales_spreadsheet_rows',
+    'profiles',
+    'sales_team_reference',
+    'user_roles',
+  ]);
+  assert.deepEqual(commercial.decision.missing_from_executable_chain.validation, [
+    'broker_system_identifiers',
+    'broker_team_history',
+    'brokers',
+    'consolidated_sales',
+    'pipeimob_sales',
+    'reconciliation_events',
+    'source_ingestion_runs',
+    'teams',
+    'vista_gains',
+  ]);
+});
+
+test('sanitized inventory contains hashes instead of sensitive executable bodies', async () => {
+  const snapshot = await read('docs/migrations/commercial-schema-inventory-20260903.json');
+  assert.doesNotMatch(snapshot, /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i);
+  assert.doesNotMatch(snapshot, /eyJ[A-Za-z0-9_-]{20,}|sb_secret_|sbp_[A-Za-z0-9]{20,}/);
+  assert.equal(commercial.inventory.functions.every((fn) =>
+    typeof fn.definition_md5 === 'string' && !Object.hasOwn(fn, 'definition')), true);
+  assert.equal(commercial.inventory.columns.every((column) =>
+    !Object.hasOwn(column, 'default_expression')), true);
+  assert.equal(commercial.inventory.policies.every((policy) =>
+    !Object.hasOwn(policy, 'using_expression') && !Object.hasOwn(policy, 'check_expression')), true);
+  assert.equal(commercial.inventory.extension_observations.every((extension) =>
+    !Object.hasOwn(extension, 'version')), true);
 });
