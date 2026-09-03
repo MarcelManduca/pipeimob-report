@@ -85,7 +85,27 @@ O serviço é removido automaticamente ao terminar o job.
 ## Resultados
 
 Preparação local: sintaxe JavaScript válida e 22 testes existentes aprovados.
-Resultado PostgreSQL: pendente da execução do workflow; não presumir aprovação.
+Resultado PostgreSQL: **25 testes aprovados** na primeira execução, sem falhas ou
+testes ignorados. Com os 22 testes offline/Worker, foram **47 testes aprovados**.
+O job `isolated-bootstrap` concluiu com sucesso e removeu o container ao final:
+[execução 33810128649](https://github.com/MarcelManduca/pipeimob-report/actions/runs/33810128649).
+
+Controles negativos confirmados no banco descartável:
+
+- a cadeia executável começa antes de `profiles` existir e falha com objeto ausente;
+- a variante histórica concede `super_admin` à identidade fictícia fixa sem confirmação;
+- uma atualização do Auth pode sobrescrever o cargo legado atribuído manualmente;
+- o gatilho preserva `disabled`, mas a reaplicação do backfill histórico o reativa.
+
+O candidato passou nos controles propostos: não há privilégio derivado de e-mail ou
+metadata do cliente; cargos e desativações são preservados; backfill é repetível;
+os cinco cargos do portal sobrevivem a atualizações do Auth; as três migrações do
+portal carregam; isolamento de conversas e idempotência foram confirmados. O controle
+de perfil desativado ainda acessando o próprio histórico também passou, como reprodução
+intencional da vulnerabilidade pendente no PR #35 — não como comportamento aprovado.
+
+O resultado aprova apenas o **modelo de teste da baseline parcial**. Ele não libera
+o candidato como migração nem supera os limites e dependências listados acima.
 
 ## Referência técnica
 
