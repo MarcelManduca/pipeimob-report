@@ -29,8 +29,8 @@ O Worker retorna `401` para sessão inválida, `403` para perfil ausente/desativ
 
 ## Limites importantes
 
-- O SQL em `docs/security/portal_history_access_proposal.sql` é uma **proposta fora da pasta de migrações automáticas**. O CLI não estava disponível e a tentativa de uso local foi bloqueada pelo ambiente. Não foi inventado um nome de migração nem aplicado SQL por outro caminho.
-- O Worker sozinho não protege chamadas diretas à Data API. As políticas propostas precisam ser testadas e aplicadas em etapa posterior autorizada.
+- O SQL em `docs/security/portal_history_access_proposal.sql` continua uma **proposta fora da pasta de migrações automáticas**. Foi executado e validado somente no PostgreSQL descartável do GitHub Actions, após autorização específica. Como o CLI local não estava disponível, não foi inventado um nome de migração. Nada foi aplicado ao Supabase existente.
+- O Worker sozinho não protege chamadas diretas à Data API. As políticas propostas passaram nos testes isolados, mas ainda dependem de compatibilização com o catálogo existente e aplicação em etapa posterior autorizada.
 - O histórico de migrações remoto não registrava as três migrações do portal de 2026-09-01, embora seus objetos e índices estivessem presentes. Há também diferenças de versões anteriores entre o repositório e o histórico remoto. **Não executar `db push` indiscriminadamente nem reaplicar as migrações antigas.**
 - Clientes legados de `/api/chat` sem IDs válidos de conversa/requisição não usam persistência; seu fluxo atual de geração e autorização MCP não foi modificado.
 - O bloqueio vale para novas verificações/requisições e, após aplicação do SQL, para comandos sujeitos a RLS. Não apaga conteúdo já entregue ao navegador nem promete cancelar operações em andamento. Não revoga sessões de Auth nem impede o login no provedor.
@@ -48,7 +48,7 @@ Os testes usam UUIDs e respostas fictícias, com rede externa bloqueada pelo moc
 
 Resultado desta branch: **47 testes aprovados** (32 novos e 15 existentes), além de sintaxe JavaScript e `git diff --check` sem erros.
 
-As verificações do SQL são **estáticas**, não uma execução de PostgreSQL/RLS. Não havia PostgreSQL local disponível. A sintaxe e os efeitos efetivos das concessões/políticas precisam de validação em banco descartável, com dados sintéticos, antes de aplicação no projeto existente.
+Inicialmente o SQL teve apenas verificações estáticas, pois não havia PostgreSQL local disponível. Essa limitação de execução foi superada pelo teste autorizado no GitHub Actions, documentado abaixo. A aprovação do banco descartável não equivale a uma validação ou alteração do projeto Supabase existente.
 
 ### Compatibilidade com os PRs pendentes
 
@@ -62,21 +62,29 @@ Essa adaptação foi usada somente na cópia local de teste; os PRs #33 e #34 n�
 
 Resultado da composição local, com a adaptação explícita do mock: **81 testes aprovados**, incluindo gráficos, histórico, proteção contra falhas e escopo por equipe.
 
-## Próxima etapa — exige autorização separada
-
-### Teste isolado autorizado no GitHub Actions
+## Teste isolado autorizado no GitHub Actions
 
 O workflow `.github/workflows/gralha-history-rls.yml` foi preparado para executar apenas em pushes relevantes da branch deste PR. Usa `postgres:17.11-bookworm` descartável, sem portas publicadas, sem conexão com o projeto Supabase e sem segredos de produção. O token do workflow possui somente leitura do código e não é persistido pelo checkout; não há etapa de deploy ou merge.
 
 A suíte `tests/postgres_history_access.integration.mjs` exige GitHub Actions e confirmação explícita do container, valida a imagem e o nome do banco antes de executar SQL, e se conecta exclusivamente pelo `psql` dentro desse container. Os pré-requisitos são sintéticos; as três migrações reais do portal são executadas somente nesse banco vazio, seguidas pelo SQL proposto. Controles negativos precisam reproduzir os privilégios excessivos e o acesso de perfil desativado antes da aplicação. Cada cenário subsequente usa transação com rollback e papéis de API sem bypass de RLS.
 
-Esses testes verificam PostgreSQL/RLS, não o provedor Supabase Auth, assinatura/expiração real de JWT, PostgREST, conexões de rede ou o estado do projeto existente. O helper `auth.uid()` do fixture simula somente a identidade da sessão no banco. Perfis deliberadamente inválidos são criados apenas dentro de transações descartáveis de teste. Resultado de execução deve ser conferido no GitHub Actions antes de considerar essa validação concluída.
+Esses testes verificam PostgreSQL/RLS, não o provedor Supabase Auth, assinatura/expiração real de JWT, PostgREST, conexões de rede ou o estado do projeto existente. O helper `auth.uid()` do fixture simula somente a identidade da sessão no banco. Perfis deliberadamente inválidos são criados apenas dentro de transações descartáveis de teste.
 
-1. **GitHub:** revisar este PR e manter como rascunho até completar a validação SQL e resolver a divergência de migrações. Não mesclar nem publicar automaticamente.
-2. **Ambiente de testes isolado:** disponibilizar PostgreSQL/Supabase local e o CLI; gerar o arquivo com `supabase migration new harden_portal_history_access` após consultar `--help`, usando o conteúdo revisado da proposta. Não usar credenciais ou cópias de dados de produção.
-3. **Testes RLS:** executar como `anon` e `authenticated` (não apenas como dono/superusuário). Verificar leitura, inserção, atualização e exclusão do histórico próprio; tentativas contra outro usuário; mensagens vinculadas a conversa alheia; desativação com o mesmo JWT; perfis convidados/ausentes/inválidos; e a manutenção do acesso administrativo pelo serviço. Para perfis, confirmar `SELECT` autorizado e ausência de privilégios de escrita, `TRUNCATE`, `REFERENCES`, `TRIGGER`, `MAINTAIN` quando suportado, incluindo concessões por coluna. Não testar operações destrutivas no projeto existente.
-4. **Supabase:** comparar catálogo e histórico, aprovar um plano específico de reconciliação antes de registrar/aplicar qualquer migração. Não marcar migrações como aplicadas apenas com base no nome.
-5. **Publicação futura:** somente depois de nova autorização, aplicar a migração validada e publicar o Worker; verificar o acesso com contas de teste autorizadas. Este PR não exige redeploy de Edge Functions.
+### Evidência de execução — 2026-09-03
+
+- [Execução 33806023939 no GitHub Actions](https://github.com/MarcelManduca/pipeimob-report/actions/runs/33806023939), tentativa 1: **success**.
+- Commit testado: `b19a3a038620b9d3ae66f25581b17865d91d4be9`.
+- **47 testes do Worker + 30 testes PostgreSQL/RLS aprovados; zero falhas e zero testes ignorados.**
+- Sintaxe JavaScript e verificação de whitespace aprovadas; etapa de encerramento dos containers concluída.
+- Controles negativos reproduziram as duas fragilidades antes da aplicação; depois dela, os testes confirmaram privilégios mínimos, negação para convidados/desativados, isolamento entre usuários, manutenção de idempotência/cascata e acesso de serviço.
+- O commit posterior de documentação não altera o SQL, o Worker, o workflow ou os testes aprovados.
+
+## Próxima etapa — exige autorização separada
+
+1. **GitHub:** revisar este PR e manter como rascunho até resolver a divergência de migrações. A etapa de PostgreSQL isolado está concluída; não mesclar nem publicar automaticamente.
+2. **Supabase, somente leitura inicialmente:** comparar catálogo e histórico e preparar um plano específico de reconciliação. A validação atual não autoriza registrar/aplicar migrações nem marcar versões como aplicadas apenas com base no nome.
+3. **Preparação da migração:** após aprovar o plano, usar um ambiente com o CLI e gerar o arquivo com `supabase migration new harden_portal_history_access`, consultando `--help` antes. Preservar o conteúdo de SQL validado; mudanças no SQL exigem nova execução de teste.
+4. **Publicação futura:** somente depois de nova autorização, aplicar a migração validada e publicar o Worker; verificar Auth, Data API e rotas do portal com contas de teste autorizadas. Este PR não exige redeploy de Edge Functions.
 
 Em caso de regressão, interromper a publicação e preparar uma correção específica. Não restaurar permissões amplas ou remover políticas de isolamento como solução rápida.
 
