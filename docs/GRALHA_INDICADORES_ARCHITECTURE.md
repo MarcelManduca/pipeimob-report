@@ -91,6 +91,14 @@ O escopo é aplicado no Edge Function MCP. Ocultar controles na interface não �
 - O MCP retorna agregados. Dados pessoais e payloads brutos das fontes não são gravados nas conversas.
 - O histórico não substitui os registros oficiais do Pipeimob ou Vista.
 
+### Endurecimento do acesso ao histórico (proposta em revisão)
+
+O Worker verifica o perfil atual (`status = active` e cargo reconhecido) antes das operações de histórico e de devolver respostas persistidas. Uma sessão Auth válida, por si só, não autoriza o histórico. A consulta usa o JWT do próprio usuário, sem cache, e falha de forma fechada se a validação não puder ser concluída.
+
+O SQL proposto em `docs/security/portal_history_access_proposal.sql` reduz os privilégios de `profiles` e adiciona políticas RLS restritivas de perfil ativo ao histórico, preservando as políticas de propriedade existentes. **Esse SQL ainda não é uma migração publicada nem foi aplicado ao Supabase.** A proteção de acesso direto ao banco depende da validação e aplicação futura dessa proposta. Pré-requisitos, limitações e evidências estão em [GRALHA_HISTORY_ACCESS_HARDENING.md](GRALHA_HISTORY_ACCESS_HARDENING.md).
+
+O teste isolado autorizado no GitHub Actions passou em 2026-09-03: 47 testes do Worker e 30 testes de PostgreSQL/RLS, com dados fictícios e sem acesso ao projeto Supabase existente. A divergência do histórico de migrações continua pendente; o resultado não autoriza merge, reconciliação ou publicação automática.
+
 ## Gráficos e identidade visual
 
 O design usa superfícies claras, branco e cinza suave, azul institucional `#3d4788`, vinho `#7b3035` e cinza de apoio. Os gráficos suportados são barras/ranking, funil e múltiplos funis por equipe. Todos incluem título, legenda, valores e nota metodológica quando necessária.

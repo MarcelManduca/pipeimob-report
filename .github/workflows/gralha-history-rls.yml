@@ -1,0 +1,59 @@
+name: Gralha history RLS — isolated PostgreSQL
+
+on:
+  push:
+    branches: [fix/portal-history-access-20260903]
+    paths:
+      - .github/workflows/gralha-history-rls.yml
+      - tests/postgres_history_access.integration.mjs
+      - tests/fixtures/portal_rls_bootstrap.sql
+      - tests/worker_history_access.test.mjs
+      - tests/worker_circuit_breaker.test.mjs
+      - docs/security/portal_history_access_proposal.sql
+      - supabase/migrations/20260901*.sql
+      - cloudflare/gralha-indicadores-chat-worker-v11.js
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gralha-history-rls-pr35
+  cancel-in-progress: false
+
+jobs:
+  isolated-rls:
+    if: github.repository == 'MarcelManduca/pipeimob-report'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17.11-bookworm
+        env:
+          POSTGRES_DB: gralha_rls_ci
+          # Only this disposable service; no published host ports or passwords.
+          POSTGRES_HOST_AUTH_METHOD: trust
+        options: >-
+          --health-cmd "pg_isready -U postgres -d gralha_rls_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 6
+    steps:
+      - name: Checkout this branch without persisting credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Set up Node 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Worker regression tests — synthetic fetch only
+        run: node --test tests/worker_history_access.test.mjs tests/worker_circuit_breaker.test.mjs
+      - name: PostgreSQL grants and RLS — synthetic rows only
+        env:
+          GRALHA_ALLOW_DISPOSABLE_RLS_TESTS: 'true'
+          GRALHA_RLS_TEST_CONTAINER: ${{ job.services.postgres.id }}
+        run: node --test tests/postgres_history_access.integration.mjs
+      - name: JavaScript syntax and whitespace
+        run: |
+          node --check cloudflare/gralha-indicadores-chat-worker-v11.js
+          git diff --check

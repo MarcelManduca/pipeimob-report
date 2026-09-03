@@ -1,0 +1,95 @@
+# Gralha — permissões de perfis e acesso ao histórico
+
+## Estado e escopo
+
+Proposta baseada na `main` em `e53627b265e6193b5eca69589c859ca37119bbdb`, preparada em branch separada. Não inclui merge, publicação do Worker, publicação de Edge Functions, alteração de dados ou aplicação de SQL no projeto existente.
+
+Projeto de referência: `kmysinxpdkeszrtdyhid` (Pipeimob MCP Homologação). O nome “Homologação” não autoriza tratá-lo como banco descartável. Os PRs #33 (agregados por equipe) e #34 (gráficos, perfil e mobile) são independentes e permanecem pendentes. Nenhuma ampliação corretor→equipe está incluída.
+
+## Motivação da auditoria somente de leitura
+
+- As quatro tabelas auditadas (`profiles`, `user_team_access`, `conversations`, `conversation_messages`) tinham RLS habilitado.
+- `profiles` possuía privilégios de tabela excessivos para `anon` e `authenticated`, incluindo operações fora do controle de RLS. Isso não demonstra que dados pessoais tenham sido expostos: as políticas de linhas também precisam ser consideradas.
+- As políticas de histórico verificavam o proprietário, mas não o status atual do perfil. Desativar um perfil não implica invalidar imediatamente o JWT de Auth.
+- As funções publicadas correspondiam à base: `gralha-portal-admin` versão de plataforma 2 e `gralha-indicadores-mcp` versão de plataforma 23 (interna 1.15.0). Esta proposta não as modifica.
+
+## Proteções propostas
+
+| Camada | Comportamento |
+|---|---|
+| Worker — histórico | Valida Auth e consulta somente `id,status,access_role` do próprio perfil, usando o JWT do usuário; orçamento de 5 segundos, sem retentativa automática nem cache de perfil |
+| Worker — resposta persistida | Verifica o perfil antes de consultar o cache idempotente, evitando devolver respostas antigas a um perfil desativado |
+| SQL — `profiles` | Revoga privilégios de tabela e de colunas de `PUBLIC`, `anon` e `authenticated`; concede apenas `SELECT` a `authenticated`, sujeito às políticas atuais |
+| SQL — histórico | Acrescenta políticas `AS RESTRICTIVE FOR ALL`, com propriedade e perfil ativo/cargo válido em `USING` e `WITH CHECK`; mantém as políticas existentes de proprietário e vínculo mensagem/conversa |
+| Administração | Preserva os privilégios existentes de `service_role` e o helper executivo; mudanças de perfil continuam pelo serviço administrativo autorizado |
+
+CEO, CSO, CMO, diretor de loja e gerente de equipe ativos continuam acessando somente o próprio histórico. O cargo executivo não concede acesso a conversas de terceiros. Indicadores por cargo/equipe continuam sendo autorizados no MCP.
+
+O Worker retorna `401` para sessão inválida, `403` para perfil ausente/desativado/convidado ou cargo inválido, e `503` quando não consegue concluir a verificação. Não devolve corpos de erro do Supabase, identificadores ou credenciais. A exclusão bem-sucedida do histórico agora traduz o `204` sem corpo do PostgREST para `200` com `{ "deleted": true }`, evitando a construção inválida de uma resposta JSON com status `204`.
+
+## Limites importantes
+
+- O SQL em `docs/security/portal_history_access_proposal.sql` continua uma **proposta fora da pasta de migrações automáticas**. Foi executado e validado somente no PostgreSQL descartável do GitHub Actions, após autorização específica. Como o CLI local não estava disponível, não foi inventado um nome de migração. Nada foi aplicado ao Supabase existente.
+- O Worker sozinho não protege chamadas diretas à Data API. As políticas propostas passaram nos testes isolados, mas ainda dependem de compatibilização com o catálogo existente e aplicação em etapa posterior autorizada.
+- O histórico de migrações remoto não registrava as três migrações do portal de 2026-09-01, embora seus objetos e índices estivessem presentes. Há também diferenças de versões anteriores entre o repositório e o histórico remoto. **Não executar `db push` indiscriminadamente nem reaplicar as migrações antigas.**
+- Clientes legados de `/api/chat` sem IDs válidos de conversa/requisição não usam persistência; seu fluxo atual de geração e autorização MCP não foi modificado.
+- O bloqueio vale para novas verificações/requisições e, após aplicação do SQL, para comandos sujeitos a RLS. Não apaga conteúdo já entregue ao navegador nem promete cancelar operações em andamento. Não revoga sessões de Auth nem impede o login no provedor.
+- Convidados precisam ser ativados pela administração para usar o portal, como já exigido no MCP. Não se deve promover ou ativar perfis automaticamente para contornar um bloqueio.
+
+## Verificações locais
+
+```sh
+node --test tests/worker_history_access.test.mjs tests/worker_circuit_breaker.test.mjs
+node --check cloudflare/gralha-indicadores-chat-worker-v11.js
+git diff --check
+```
+
+Os testes usam UUIDs e respostas fictícias, com rede externa bloqueada pelo mock. Cobrem os cinco cargos, perfis desativados/convidados, cargo inválido, perfil ausente ou de terceiro, falhas de rede/JSON, timeout, JWT inválido e metadados editáveis que não podem autorizar acesso. Incluem todas as rotas de histórico e a resposta persistida de `/api/chat`.
+
+Resultado desta branch: **47 testes aprovados** (32 novos e 15 existentes), além de sintaxe JavaScript e `git diff --check` sem erros.
+
+Inicialmente o SQL teve apenas verificações estáticas, pois não havia PostgreSQL local disponível. Essa limitação de execução foi superada pelo teste autorizado no GitHub Actions, documentado abaixo. A aprovação do banco descartável não equivale a uma validação ou alteração do projeto Supabase existente.
+
+### Compatibilidade com os PRs pendentes
+
+A composição local desta proposta com os commits dos PRs #33 (`f7edae0`) e #34 (`b41c269`) não apresentou conflito textual. A suíte de gráficos do #34 ainda não simula a nova consulta de perfil: seu teste de persistência falha de forma fechada com `503`, como esperado para uma fonte de autorização indisponível. Ao integrar as propostas, acrescentar ao mock de `runChat` em `tests/worker_portal_charts.test.mjs`, logo depois do tratamento de `/auth/v1/user`:
+
+```js
+if (url.includes("/rest/v1/profiles?")) return json([{ id: "test-user", status: "active", access_role: "cmo" }]);
+```
+
+Essa adaptação foi usada somente na cópia local de teste; os PRs #33 e #34 não foram alterados. Ela não deve ser implementada no Worker, nem substituída por liberação de acesso quando faltar perfil. O identificador acima é exclusivamente fictício.
+
+Resultado da composição local, com a adaptação explícita do mock: **81 testes aprovados**, incluindo gráficos, histórico, proteção contra falhas e escopo por equipe.
+
+## Teste isolado autorizado no GitHub Actions
+
+O workflow `.github/workflows/gralha-history-rls.yml` foi preparado para executar apenas em pushes relevantes da branch deste PR. Usa `postgres:17.11-bookworm` descartável, sem portas publicadas, sem conexão com o projeto Supabase e sem segredos de produção. O token do workflow possui somente leitura do código e não é persistido pelo checkout; não há etapa de deploy ou merge.
+
+A suíte `tests/postgres_history_access.integration.mjs` exige GitHub Actions e confirmação explícita do container, valida a imagem e o nome do banco antes de executar SQL, e se conecta exclusivamente pelo `psql` dentro desse container. Os pré-requisitos são sintéticos; as três migrações reais do portal são executadas somente nesse banco vazio, seguidas pelo SQL proposto. Controles negativos precisam reproduzir os privilégios excessivos e o acesso de perfil desativado antes da aplicação. Cada cenário subsequente usa transação com rollback e papéis de API sem bypass de RLS.
+
+Esses testes verificam PostgreSQL/RLS, não o provedor Supabase Auth, assinatura/expiração real de JWT, PostgREST, conexões de rede ou o estado do projeto existente. O helper `auth.uid()` do fixture simula somente a identidade da sessão no banco. Perfis deliberadamente inválidos são criados apenas dentro de transações descartáveis de teste.
+
+### Evidência de execução — 2026-09-03
+
+- [Execução 33806023939 no GitHub Actions](https://github.com/MarcelManduca/pipeimob-report/actions/runs/33806023939), tentativa 1: **success**.
+- Commit testado: `b19a3a038620b9d3ae66f25581b17865d91d4be9`.
+- **47 testes do Worker + 30 testes PostgreSQL/RLS aprovados; zero falhas e zero testes ignorados.**
+- Sintaxe JavaScript e verificação de whitespace aprovadas; etapa de encerramento dos containers concluída.
+- Controles negativos reproduziram as duas fragilidades antes da aplicação; depois dela, os testes confirmaram privilégios mínimos, negação para convidados/desativados, isolamento entre usuários, manutenção de idempotência/cascata e acesso de serviço.
+- O commit posterior de documentação não altera o SQL, o Worker, o workflow ou os testes aprovados.
+
+## Próxima etapa — exige autorização separada
+
+1. **GitHub:** revisar este PR e manter como rascunho até resolver a divergência de migrações. A etapa de PostgreSQL isolado está concluída; não mesclar nem publicar automaticamente.
+2. **Supabase, somente leitura inicialmente:** comparar catálogo e histórico e preparar um plano específico de reconciliação. A validação atual não autoriza registrar/aplicar migrações nem marcar versões como aplicadas apenas com base no nome.
+3. **Preparação da migração:** após aprovar o plano, usar um ambiente com o CLI e gerar o arquivo com `supabase migration new harden_portal_history_access`, consultando `--help` antes. Preservar o conteúdo de SQL validado; mudanças no SQL exigem nova execução de teste.
+4. **Publicação futura:** somente depois de nova autorização, aplicar a migração validada e publicar o Worker; verificar Auth, Data API e rotas do portal com contas de teste autorizadas. Este PR não exige redeploy de Edge Functions.
+
+Em caso de regressão, interromper a publicação e preparar uma correção específica. Não restaurar permissões amplas ou remover políticas de isolamento como solução rápida.
+
+## Referências
+
+- [Supabase — Row Level Security](https://supabase.com/docs/guides/database/postgres/row-level-security)
+- [PostgreSQL — CREATE POLICY e combinação de políticas restritivas](https://www.postgresql.org/docs/current/sql-createpolicy.html)
+- [PostgreSQL — REVOKE](https://www.postgresql.org/docs/current/sql-revoke.html)
