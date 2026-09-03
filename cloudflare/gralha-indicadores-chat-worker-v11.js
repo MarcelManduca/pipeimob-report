@@ -244,10 +244,11 @@ function bearer(request) {
   return header.startsWith("Bearer ") ? header.slice(7).trim() : "";
 }
 
-async function authenticatedUser(request, env) {
+async function authenticatedUser(request, env, signal) {
   const accessToken = bearer(request);
   if (!accessToken || accessToken.length > 8192) return null;
   const result = await fetch(supabaseUrl(env, "/auth/v1/user"), {
+    signal,
     headers: {
       apikey: env.SUPABASE_PUBLISHABLE_KEY,
       Authorization: `Bearer ${accessToken}`,
@@ -270,9 +271,48 @@ async function rest(env, token, path, init = {}) {
   });
 }
 
+async function authorizeHistory(request, env) {
+  // A valid Auth session can outlive a portal profile's deactivation. Consult
+  // the current profile on every request, including cached chat responses.
+  // Use the user's JWT (never service_role) so the database still applies RLS.
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  try {
+    const auth = await authenticatedUser(request, env, controller.signal);
+    if (!auth) return { error: json({ error: "Sua sessão expirou. Entre novamente." }, 401) };
+    const query = new URLSearchParams({
+      select: "id,status,access_role",
+      id: `eq.${auth.id}`,
+      limit: "1",
+    });
+    const result = await rest(env, auth.accessToken, `profiles?${query}`, {
+      signal: controller.signal,
+      cache: "no-store",
+    });
+    if (!result.ok) {
+      if (result.status === 401) return { error: json({ error: "Sua sessão expirou. Entre novamente." }, 401) };
+      throw new Error("profile_lookup_failed");
+    }
+    const rows = await result.json();
+    if (!Array.isArray(rows)) throw new Error("invalid_profile_response");
+    const profile = rows[0];
+    const roles = ["ceo", "cso", "cmo", "store_director", "team_manager"];
+    if (rows.length !== 1 || profile?.id !== auth.id || profile.status !== "active" || !roles.includes(profile.access_role)) {
+      return { error: json({ error: "Seu acesso ao portal não está ativo. Procure um administrador." }, 403) };
+    }
+    return { auth };
+  } catch {
+    // Fail closed without forwarding upstream bodies, identities or tokens.
+    return { error: json({ error: "Não foi possível validar seu acesso. Tente novamente mais tarde." }, 503) };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function conversationsApi(request, env, url) {
-  const auth = await authenticatedUser(request, env);
-  if (!auth) return json({ error: "Sua sessão expirou. Entre novamente." }, 401);
+  const authorization = await authorizeHistory(request, env);
+  if (authorization.error) return authorization.error;
+  const auth = authorization.auth;
   const baseMatch = url.pathname.match(/^\/api\/conversations(?:\/([0-9a-f-]{36})(?:\/messages)?)?$/i);
   if (!baseMatch) return json({ error: "Rota não encontrada." }, 404);
   const conversationId = baseMatch[1] || "";
@@ -311,7 +351,8 @@ async function conversationsApi(request, env, url) {
   }
   if (request.method === "DELETE" && conversationId && !isMessages) {
     const result = await rest(env, auth.accessToken, `conversations?id=eq.${conversationId}&user_id=eq.${auth.id}`, { method: "DELETE" });
-    return json(result.ok ? { deleted: true } : { error: "Não foi possível excluir a conversa." }, result.status);
+    // PostgREST returns 204 on deletion; a JSON response needs a body-capable status.
+    return json(result.ok ? { deleted: true } : { error: "Não foi possível excluir a conversa." }, result.ok ? 200 : result.status);
   }
   return json({ error: "Método não permitido." }, 405);
 }
@@ -1487,8 +1528,9 @@ async function persistChatResult(request, env) {
   if (!uuid.test(conversationId) || !uuid.test(requestId)) {
     return generateChat(request, env);
   }
-  const auth = await authenticatedUser(request, env);
-  if (!auth) return json({ error: "Sua sessão expirou. Entre novamente." }, 401);
+  const authorization = await authorizeHistory(request, env);
+  if (authorization.error) return authorization.error;
+  const auth = authorization.auth;
 
   const cached = await rest(env, auth.accessToken, `conversation_messages?select=content,visualization&conversation_id=eq.${conversationId}&role=eq.assistant&request_id=eq.${requestId}&limit=1`);
   if (cached.ok) {
