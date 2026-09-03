@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "audited_on": "2026-09-03",
+  "project_ref": "kmysinxpdkeszrtdyhid",
+  "base_commit": "e53627b265e6193b5eca69589c859ca37119bbdb",
+  "remote_history_mutated": false,
+  "ready_for_db_push": false,
+  "remote_history": [
+    {
+      "version": "20260821133318",
+      "name": "add_consolidated_sales_fiscal_broker_index",
+      "source_md5": "05c1d3c74e37498237783a6d08333c6e",
+      "source_characters": 148,
+      "source_statement_count": 1,
+      "path": "docs/migrations/history-review/20260821133318_add_consolidated_sales_fiscal_broker_index.sql.txt",
+      "previous_local_version": null,
+      "status": "historical_review_only",
+      "redacted": false
+    },
+    {
+      "version": "20260821133813",
+      "name": "create_validation_sales_reconciliation_rpc",
+      "source_md5": "4f049940ac377846edc78ab731cecd1f",
+      "source_characters": 4831,
+      "source_statement_count": 1,
+      "path": "docs/migrations/history-review/20260821133813_create_validation_sales_reconciliation_rpc.sql.txt",
+      "previous_local_version": null,
+      "status": "historical_review_only",
+      "redacted": false
+    },
+    {
+      "version": "20260821164016",
+      "name": "validation_rbac_bootstrap",
+      "source_md5": "cd47dae1af82a48e4baed5354314b4f6",
+      "source_characters": 7059,
+      "source_statement_count": 1,
+      "path": "docs/migrations/history-review/20260821164016_validation_rbac_bootstrap.sql.txt",
+      "previous_local_version": null,
+      "status": "redacted_review_only",
+      "redacted": true
+    },
+    {
+      "version": "20260821164200",
+      "name": "validation_rbac_security_hardening",
+      "source_md5": "ac0b18307064b8f61a225ad2d74c2f3d",
+      "source_characters": 2012,
+      "source_statement_count": 1,
+      "path": "docs/migrations/history-review/20260821164200_validation_rbac_security_hardening.sql.txt",
+      "previous_local_version": null,
+      "status": "historical_review_only",
+      "redacted": false
+    },
+    {
+      "version": "20260830162242",
+      "name": "add_manager_team_reference",
+      "source_md5": "bcbad7c6fad9e8dd11c8192125facce8",
+      "source_characters": 6389,
+      "source_statement_count": 1,
+      "path": "supabase/migrations/20260830162242_add_manager_team_reference.sql",
+      "previous_local_version": "20260830120000",
+      "status": "aligned_filename_identical_sql",
+      "redacted": false
+    },
+    {
+      "version": "20260831003640",
+      "name": "add_integration_failure_diagnostics",
+      "source_md5": "3bda930c0f3eccabff281335879286c1",
+      "source_characters": 2320,
+      "source_statement_count": 1,
+      "path": "supabase/migrations/20260831003640_add_integration_failure_diagnostics.sql",
+      "previous_local_version": "20260831001000",
+      "status": "aligned_filename_identical_sql",
+      "redacted": false
+    },
+    {
+      "version": "20260831013118",
+      "name": "allow_authorized_diagnostic_reads",
+      "source_md5": "bf7edd95047b4f55a4e8822434354c67",
+      "source_characters": 850,
+      "source_statement_count": 1,
+      "path": "supabase/migrations/20260831013118_allow_authorized_diagnostic_reads.sql",
+      "previous_local_version": "20260831010000",
+      "status": "aligned_filename_identical_sql",
+      "redacted": false
+    }
+  ],
+  "unrecorded_portal_migrations": [
+    {
+      "version": "20260901150000",
+      "name": "add_portal_conversations_and_rbac",
+      "md5": "7598bdbbc27bf90db9db4de06f9a9a82",
+      "status": "schema_observed_dml_unverified"
+    },
+    {
+      "version": "20260901182000",
+      "name": "add_conversation_message_idempotency",
+      "md5": "13f4cf1477a344334c294a91d358654c",
+      "status": "schema_observed_not_recorded"
+    },
+    {
+      "version": "20260901191000",
+      "name": "tune_portal_policies_and_indexes",
+      "md5": "ec02f39bad429623542675bec8eae472",
+      "status": "schema_observed_not_recorded"
+    }
+  ]
+}
