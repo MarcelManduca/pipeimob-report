@@ -12,6 +12,22 @@ const commercial = JSON.parse(await read(
 ));
 const aligned = manifest.remote_history.filter((row) => row.previous_local_version);
 const archived = manifest.remote_history.filter((row) => !row.previous_local_version);
+const baselineFilename =
+  '20260904150012_establish_sanitized_schema_baseline.sql';
+const baselinePath = `docs/migrations/baseline-candidate/${baselineFilename}`;
+const baselineComponents = [
+  'tests/fixtures/identity_baseline_candidate.sql',
+  'tests/fixtures/commercial_baseline_candidate.sql',
+  'docs/migrations/history-review/20260821133318_add_consolidated_sales_fiscal_broker_index.sql.txt',
+  'docs/migrations/history-review/20260821133813_create_validation_sales_reconciliation_rpc.sql.txt',
+  'supabase/migrations/20260830162242_add_manager_team_reference.sql',
+  'supabase/migrations/20260831003640_add_integration_failure_diagnostics.sql',
+  'supabase/migrations/20260831013118_allow_authorized_diagnostic_reads.sql',
+  'supabase/migrations/20260901150000_add_portal_conversations_and_rbac.sql',
+  'supabase/migrations/20260901182000_add_conversation_message_idempotency.sql',
+  'supabase/migrations/20260901191000_tune_portal_policies_and_indexes.sql',
+  'tests/fixtures/baseline_least_privilege_candidate.sql',
+];
 
 test('snapshot is explicitly not a production execution authorization', () => {
   assert.equal(manifest.project_ref, 'kmysinxpdkeszrtdyhid');
@@ -177,6 +193,32 @@ test('full baseline candidates stay outside automatic migration discovery', asyn
   assert.equal((sources[0].match(/create table /g) ?? []).length, 2);
   assert.equal((sources[1].match(/create table /g) ?? []).length, 11);
   assert.doesNotMatch(sources.join('\n'), /INICIAR-VALIDACAO-EQUIPES-GRALHA/);
+});
+
+test('CLI-versioned baseline is one reproducible review-only migration', async () => {
+  const candidate = await read(baselinePath);
+  const active = await readdir(new URL('supabase/migrations/', root));
+  assert.equal(active.includes(baselineFilename), false);
+  assert.match(candidate, /REVIEW CANDIDATE ONLY\. Not an active Supabase migration/);
+  assert.match(candidate, /Supabase CLI 2\.20\.3 in GitHub Actions run 33886952900/);
+  assert.match(candidate, /current_database\(\) <> 'gralha_baseline_ci'/);
+  assert.doesNotMatch(candidate, /INICIAR-VALIDACAO-EQUIPES-GRALHA/);
+  assert.doesNotMatch(
+    candidate,
+    /[a-z0-9._%+-]+@(?!example\.test)[a-z0-9.-]+\.[a-z]{2,}/i,
+  );
+  assert.doesNotMatch(
+    candidate,
+    /eyJ[A-Za-z0-9_-]{20,}|sb_secret_|sbp_[A-Za-z0-9]{20,}/,
+  );
+  for (const path of baselineComponents) {
+    const marker = `-- BEGIN COMPONENT: ${path}`;
+    assert.equal(
+      candidate.split(marker).length - 1,
+      1,
+      path,
+    );
+  }
 });
 
 test('candidate privileges explicitly remove observed broad access', async () => {

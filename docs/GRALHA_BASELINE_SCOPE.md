@@ -95,17 +95,20 @@ voltar ao repositório como arquivos de migração revisados, para evitar novo d
 ## Estado do portão
 
 - Limite e inventário da baseline: **definidos**.
-- DDL candidato sanitizado: **preparado somente em `tests/fixtures`**, fora de
-  `supabase/migrations`.
+- DDL candidato sanitizado: **consolidado em uma migração versionada de revisão**
+  em `docs/migrations/baseline-candidate`, fora de `supabase/migrations`.
+- Nome versionado: gerado pelo Supabase CLI `2.20.3` no GitHub Actions
+  [33886952900](https://github.com/MarcelManduca/pipeimob-report/actions/runs/33886952900).
 - Replay integral em banco descartável: **aprovado na primeira execução**.
 - `db push`, `migration repair`, merge e deploy: **não autorizados**.
 - Ampliação corretor→equipe: **pausada**.
 
-Os candidatos são divididos em identidade/RBAC, estrutura comercial e least
-privilege. Cada arquivo interrompe a execução se o banco não se chamar exatamente
-`gralha_baseline_ci`. O teste integral monta as dependências mínimas do Supabase
-com identidades fictícias, aplica os candidatos e os arquivos já reconciliados e
-confere o catálogo esperado. Nenhum desses arquivos é uma migração.
+Os componentes continuam divididos em identidade/RBAC, estrutura comercial e
+least privilege. A migração de revisão os reúne com os arquivos já reconciliados
+em ordem determinística e interrompe a execução se o banco não se chamar
+exatamente `gralha_baseline_ci`. O teste integral monta as dependências mínimas
+do Supabase com identidades fictícias, aplica somente o arquivo unificado e
+confere o catálogo esperado. Ele não é uma migração ativa.
 
 Resultado do CI em 04/09/2026:
 

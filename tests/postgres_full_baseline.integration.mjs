@@ -46,27 +46,18 @@ function tx(text) {
   return ok(`begin; set local statement_timeout='5s'; ${text}; rollback;`);
 }
 
-const fixtures = [
-  'tests/fixtures/identity_baseline_candidate.sql',
-  'tests/fixtures/commercial_baseline_candidate.sql',
-];
-const migrations = [
-  'docs/migrations/history-review/20260821133318_add_consolidated_sales_fiscal_broker_index.sql.txt',
-  'docs/migrations/history-review/20260821133813_create_validation_sales_reconciliation_rpc.sql.txt',
-  'supabase/migrations/20260830162242_add_manager_team_reference.sql',
-  'supabase/migrations/20260831003640_add_integration_failure_diagnostics.sql',
-  'supabase/migrations/20260831013118_allow_authorized_diagnostic_reads.sql',
-  'supabase/migrations/20260901150000_add_portal_conversations_and_rbac.sql',
-  'supabase/migrations/20260901182000_add_conversation_message_idempotency.sql',
-  'supabase/migrations/20260901191000_tune_portal_policies_and_indexes.sql',
-  'tests/fixtures/baseline_least_privilege_candidate.sql',
-];
-
-for (const path of [...fixtures, ...migrations]) {
-  const content = file(path);
-  assert.doesNotMatch(content, /[a-z0-9._%+-]+@(?!example\.test)[a-z0-9.-]+\.[a-z]{2,}/i);
-  assert.doesNotMatch(content, /eyJ[A-Za-z0-9_-]{20,}|sb_secret_|sbp_[A-Za-z0-9]{20,}/);
-}
+const baselinePath =
+  'docs/migrations/baseline-candidate/' +
+  '20260904150012_establish_sanitized_schema_baseline.sql';
+const baseline = file(baselinePath);
+assert.doesNotMatch(
+  baseline,
+  /[a-z0-9._%+-]+@(?!example\.test)[a-z0-9.-]+\.[a-z]{2,}/i,
+);
+assert.doesNotMatch(
+  baseline,
+  /eyJ[A-Za-z0-9_-]{20,}|sb_secret_|sbp_[A-Za-z0-9]{20,}/,
+);
 
 assert.equal(ok('select current_database()'), 'gralha_baseline_ci');
 ok(`
@@ -86,7 +77,7 @@ ok(`
   as $$select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid$$;
 `);
 
-for (const path of [...fixtures, ...migrations]) ok(file(path));
+ok(baseline);
 
 test('full candidate reconstructs the complete owned catalog boundary', () => {
   assert.equal(ok(`

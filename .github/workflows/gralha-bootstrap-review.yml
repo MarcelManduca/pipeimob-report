@@ -10,6 +10,7 @@ on:
       - tests/fixtures/bootstrap_candidate.sql
       - tests/fixtures/*_baseline_candidate.sql
       - tests/migration_reconciliation.test.mjs
+      - scripts/build_gralha_baseline_candidate.mjs
       - docs/migrations/**
       - supabase/migrations/**
 
@@ -83,6 +84,10 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '22'
+      - name: Verify deterministic versioned baseline
+        run: |
+          node scripts/build_gralha_baseline_candidate.mjs
+          git diff --exit-code -- docs/migrations/baseline-candidate
       - name: Reconstruct full owned schema without Supabase connection
         env:
           GRALHA_ALLOW_DISPOSABLE_BASELINE_TESTS: 'true'
