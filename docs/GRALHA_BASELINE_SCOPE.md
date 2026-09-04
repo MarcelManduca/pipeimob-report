@@ -112,10 +112,10 @@ confere o catálogo esperado. Ele não é uma migração ativa.
 
 Resultado do CI em 04/09/2026:
 
-- 28 testes offline/Worker;
+- 29 testes offline/Worker;
 - 25 testes do bootstrap parcial;
 - 6 testes da baseline integral;
-- **59 testes aprovados, zero falhas**.
+- **60 testes aprovados, zero falhas**.
 
 O replay confirmou 20 tabelas com chave primária e RLS, 12 sequências, 189 colunas,
 104 constraints e 67 índices válidos/prontos. Também confirmou: nenhum acesso de
@@ -123,7 +123,7 @@ O replay confirmou 20 tabelas com chave primária e RLS, 12 sequências, 189 col
 testadas, ausência de acesso direto dos papéis de API a `validation`, RPC comercial
 restrita a `service_role` e trigger sem privilégio derivado de e-mail ou metadata.
 
-[Execução isolada 33867351310](https://github.com/MarcelManduca/pipeimob-report/actions/runs/33867351310).
+[Execução da baseline versionada 33887550936](https://github.com/MarcelManduca/pipeimob-report/actions/runs/33887550936).
 
 ## Referências
 
