@@ -6,7 +6,9 @@ on:
     paths:
       - .github/workflows/gralha-bootstrap-review.yml
       - tests/postgres_bootstrap_review.integration.mjs
+      - tests/postgres_full_baseline.integration.mjs
       - tests/fixtures/bootstrap_candidate.sql
+      - tests/fixtures/*_baseline_candidate.sql
       - tests/migration_reconciliation.test.mjs
       - docs/migrations/**
       - supabase/migrations/**
@@ -54,4 +56,35 @@ jobs:
       - name: Syntax and whitespace
         run: |
           node --check tests/postgres_bootstrap_review.integration.mjs
+          node --check tests/postgres_full_baseline.integration.mjs
           git diff --check
+
+  full-baseline:
+    if: github.repository == 'MarcelManduca/pipeimob-report'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17.11-bookworm
+        env:
+          POSTGRES_DB: gralha_baseline_ci
+          POSTGRES_HOST_AUTH_METHOD: trust
+        options: >-
+          --health-cmd "pg_isready -U postgres -d gralha_baseline_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 6
+    steps:
+      - name: Checkout this branch without persisting credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Set up Node 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - name: Reconstruct full owned schema without Supabase connection
+        env:
+          GRALHA_ALLOW_DISPOSABLE_BASELINE_TESTS: 'true'
+          GRALHA_BASELINE_TEST_CONTAINER: ${{ job.services.postgres.id }}
+        run: node --test tests/postgres_full_baseline.integration.mjs

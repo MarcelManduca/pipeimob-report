@@ -157,3 +157,35 @@ test('sanitized inventory contains hashes instead of sensitive executable bodies
   assert.equal(commercial.inventory.extension_observations.every((extension) =>
     !Object.hasOwn(extension, 'version')), true);
 });
+
+test('full baseline candidates stay outside automatic migration discovery', async () => {
+  const files = [
+    'tests/fixtures/identity_baseline_candidate.sql',
+    'tests/fixtures/commercial_baseline_candidate.sql',
+    'tests/fixtures/baseline_least_privilege_candidate.sql',
+  ];
+  const sources = await Promise.all(files.map(read));
+  for (const [index, source] of sources.entries()) {
+    assert.match(source, /TEST CANDIDATE ONLY/);
+    assert.match(source, /current_database\(\) <> 'gralha_baseline_ci'/);
+    assert.doesNotMatch(source, /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i);
+    assert.doesNotMatch(source, /eyJ[A-Za-z0-9_-]{20,}|sb_secret_|sbp_[A-Za-z0-9]{20,}/);
+    await assert.rejects(access(new URL(
+      `supabase/migrations/${files[index].split('/').at(-1)}`, root,
+    )), { code: 'ENOENT' });
+  }
+  assert.equal((sources[0].match(/create table /g) ?? []).length, 2);
+  assert.equal((sources[1].match(/create table /g) ?? []).length, 11);
+  assert.doesNotMatch(sources.join('\n'), /INICIAR-VALIDACAO-EQUIPES-GRALHA/);
+});
+
+test('candidate privileges explicitly remove observed broad access', async () => {
+  const identity = await read('tests/fixtures/identity_baseline_candidate.sql');
+  const hardening = await read('tests/fixtures/baseline_least_privilege_candidate.sql');
+  assert.match(identity, /revoke all on tables from anon, authenticated/);
+  assert.match(identity, /revoke execute on functions from public, anon, authenticated/);
+  assert.match(hardening, /revoke all on all tables in schema public/);
+  assert.match(hardening, /revoke all on all sequences in schema public/);
+  assert.match(hardening, /revoke all on schema validation/);
+  assert.doesNotMatch(identity, /raw_user_meta_data|resolved_role/);
+});

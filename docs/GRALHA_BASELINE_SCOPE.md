@@ -95,10 +95,18 @@ voltar ao repositório como arquivos de migração revisados, para evitar novo d
 ## Estado do portão
 
 - Limite e inventário da baseline: **definidos**.
-- DDL completo e sanitizado: **não produzido**.
-- Replay integral em banco descartável: **pendente**.
+- DDL candidato sanitizado: **preparado somente em `tests/fixtures`**, fora de
+  `supabase/migrations`.
+- Replay integral em banco descartável: **preparado para o CI**, ainda pendente de
+  resultado.
 - `db push`, `migration repair`, merge e deploy: **não autorizados**.
 - Ampliação corretor→equipe: **pausada**.
+
+Os candidatos são divididos em identidade/RBAC, estrutura comercial e least
+privilege. Cada arquivo interrompe a execução se o banco não se chamar exatamente
+`gralha_baseline_ci`. O teste integral monta as dependências mínimas do Supabase
+com identidades fictícias, aplica os candidatos e os arquivos já reconciliados e
+confere o catálogo esperado. Nenhum desses arquivos é uma migração.
 
 ## Referências
 
