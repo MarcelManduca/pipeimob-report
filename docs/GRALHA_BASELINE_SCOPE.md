@@ -97,8 +97,7 @@ voltar ao repositório como arquivos de migração revisados, para evitar novo d
 - Limite e inventário da baseline: **definidos**.
 - DDL candidato sanitizado: **preparado somente em `tests/fixtures`**, fora de
   `supabase/migrations`.
-- Replay integral em banco descartável: **preparado para o CI**, ainda pendente de
-  resultado.
+- Replay integral em banco descartável: **aprovado na primeira execução**.
 - `db push`, `migration repair`, merge e deploy: **não autorizados**.
 - Ampliação corretor→equipe: **pausada**.
 
@@ -107,6 +106,21 @@ privilege. Cada arquivo interrompe a execução se o banco não se chamar exatam
 `gralha_baseline_ci`. O teste integral monta as dependências mínimas do Supabase
 com identidades fictícias, aplica os candidatos e os arquivos já reconciliados e
 confere o catálogo esperado. Nenhum desses arquivos é uma migração.
+
+Resultado do CI em 04/09/2026:
+
+- 28 testes offline/Worker;
+- 25 testes do bootstrap parcial;
+- 6 testes da baseline integral;
+- **59 testes aprovados, zero falhas**.
+
+O replay confirmou 20 tabelas com chave primária e RLS, 12 sequências, 189 colunas,
+104 constraints e 67 índices válidos/prontos. Também confirmou: nenhum acesso de
+`anon` às tabelas próprias, nenhum `TRUNCATE` de `authenticated` nas tabelas
+testadas, ausência de acesso direto dos papéis de API a `validation`, RPC comercial
+restrita a `service_role` e trigger sem privilégio derivado de e-mail ou metadata.
+
+[Execução isolada 33867351310](https://github.com/MarcelManduca/pipeimob-report/actions/runs/33867351310).
 
 ## Referências
 
