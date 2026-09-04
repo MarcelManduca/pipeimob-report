@@ -1,8 +1,9 @@
 name: Gralha baseline candidate — Supabase CLI filename
 
 on:
-  push:
-    branches: [chore/migration-history-reconciliation-20260903]
+  pull_request:
+    branches: [main]
+    types: [synchronize]
     paths:
       - .github/workflows/gralha-baseline-migration-name.yml
 
