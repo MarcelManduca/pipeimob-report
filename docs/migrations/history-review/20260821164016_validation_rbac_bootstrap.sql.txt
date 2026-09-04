@@ -1,0 +1,224 @@
+-- Minimal RBAC bootstrap for the isolated Pipeimob x Vista validation project.
+-- This migration intentionally does not copy production users or business data.
+
+DO $$ BEGIN
+  CREATE TYPE public.app_role AS ENUM ('super_admin', 'viewer');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$ BEGIN
+  CREATE TYPE public.profile_status AS ENUM ('invited', 'active', 'disabled');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+CREATE TABLE IF NOT EXISTS public.profiles (
+  id uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  email text NOT NULL UNIQUE,
+  status public.profile_status NOT NULL DEFAULT 'invited',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  status_updated_at timestamptz NOT NULL DEFAULT now(),
+  activated_at timestamptz,
+  disabled_at timestamptz
+);
+
+CREATE TABLE IF NOT EXISTS public.user_roles (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL,
+  role public.app_role NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT user_roles_user_id_fkey_profiles
+    FOREIGN KEY (user_id) REFERENCES public.profiles(id) ON DELETE CASCADE,
+  CONSTRAINT user_roles_user_id_key UNIQUE (user_id)
+);
+
+CREATE OR REPLACE FUNCTION public.sync_validation_user_access()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  normalized_email text := lower(COALESCE(NEW.email, ''));
+  resolved_status public.profile_status;
+  resolved_role public.app_role;
+BEGIN
+  resolved_status := CASE
+    WHEN normalized_email = '[REDACTED_EMAIL]' THEN 'active'::public.profile_status
+    WHEN NEW.email_confirmed_at IS NOT NULL THEN 'active'::public.profile_status
+    ELSE 'invited'::public.profile_status
+  END;
+  resolved_role := CASE
+    WHEN normalized_email = '[REDACTED_EMAIL]' THEN 'super_admin'::public.app_role
+    ELSE 'viewer'::public.app_role
+  END;
+
+  INSERT INTO public.profiles (
+    id, email, status, status_updated_at, activated_at
+  ) VALUES (
+    NEW.id,
+    normalized_email,
+    resolved_status,
+    now(),
+    CASE WHEN resolved_status = 'active' THEN now() ELSE NULL END
+  )
+  ON CONFLICT (id) DO UPDATE SET
+    email = EXCLUDED.email,
+    status = CASE
+      WHEN public.profiles.status = 'disabled' THEN 'disabled'::public.profile_status
+      ELSE EXCLUDED.status
+    END,
+    status_updated_at = now(),
+    activated_at = COALESCE(public.profiles.activated_at, EXCLUDED.activated_at);
+
+  INSERT INTO public.user_roles (user_id, role)
+  VALUES (NEW.id, resolved_role)
+  ON CONFLICT (user_id) DO UPDATE SET role = EXCLUDED.role;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS on_validation_auth_user_access ON auth.users;
+CREATE TRIGGER on_validation_auth_user_access
+AFTER INSERT OR UPDATE OF email, email_confirmed_at ON auth.users
+FOR EACH ROW EXECUTE FUNCTION public.sync_validation_user_access();
+
+INSERT INTO public.profiles (
+  id, email, status, status_updated_at, activated_at
+)
+SELECT
+  id,
+  lower(email),
+  CASE
+    WHEN lower(email) = '[REDACTED_EMAIL]' OR email_confirmed_at IS NOT NULL
+      THEN 'active'::public.profile_status
+    ELSE 'invited'::public.profile_status
+  END,
+  now(),
+  CASE
+    WHEN lower(email) = '[REDACTED_EMAIL]' OR email_confirmed_at IS NOT NULL
+      THEN now()
+    ELSE NULL
+  END
+FROM auth.users
+WHERE email IS NOT NULL
+ON CONFLICT (id) DO UPDATE SET
+  email = EXCLUDED.email,
+  status = EXCLUDED.status,
+  status_updated_at = now(),
+  activated_at = COALESCE(public.profiles.activated_at, EXCLUDED.activated_at);
+
+INSERT INTO public.user_roles (user_id, role)
+SELECT
+  id,
+  CASE
+    WHEN lower(email) = '[REDACTED_EMAIL]' THEN 'super_admin'::public.app_role
+    ELSE 'viewer'::public.app_role
+  END
+FROM auth.users
+WHERE email IS NOT NULL
+ON CONFLICT (user_id) DO UPDATE SET role = EXCLUDED.role;
+
+CREATE OR REPLACE FUNCTION public.has_role(_user_id uuid, _role public.app_role)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.user_roles ur
+    JOIN public.profiles p ON p.id = ur.user_id
+    WHERE ur.user_id = _user_id
+      AND ur.role = _role
+      AND p.status = 'active'
+  )
+$$;
+
+CREATE OR REPLACE FUNCTION public.is_super_admin()
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+  SELECT public.has_role(auth.uid(), 'super_admin'::public.app_role)
+$$;
+
+CREATE OR REPLACE FUNCTION public.get_my_role()
+RETURNS public.app_role
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+  SELECT ur.role
+  FROM public.user_roles ur
+  JOIN public.profiles p ON p.id = ur.user_id
+  WHERE ur.user_id = auth.uid()
+    AND p.status = 'active'
+  LIMIT 1
+$$;
+
+CREATE OR REPLACE FUNCTION public.is_active_user(_user_id uuid)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM public.profiles
+    WHERE id = _user_id AND status = 'active'
+  )
+$$;
+
+CREATE OR REPLACE FUNCTION public.is_active_super_admin(_user_id uuid)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+  SELECT public.has_role(_user_id, 'super_admin'::public.app_role)
+$$;
+
+REVOKE ALL ON FUNCTION public.has_role(uuid, public.app_role) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.is_super_admin() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.get_my_role() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.is_active_user(uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.is_active_super_admin(uuid) FROM PUBLIC;
+
+GRANT EXECUTE ON FUNCTION public.has_role(uuid, public.app_role) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.is_super_admin() TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.get_my_role() TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.is_active_user(uuid) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.is_active_super_admin(uuid) TO authenticated, service_role;
+
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.user_roles ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Users can view own profile" ON public.profiles;
+CREATE POLICY "Users can view own profile"
+ON public.profiles FOR SELECT TO authenticated
+USING (id = auth.uid());
+
+DROP POLICY IF EXISTS "Superadmins can view profiles" ON public.profiles;
+CREATE POLICY "Superadmins can view profiles"
+ON public.profiles FOR SELECT TO authenticated
+USING (public.is_super_admin());
+
+DROP POLICY IF EXISTS "Users can view own role" ON public.user_roles;
+CREATE POLICY "Users can view own role"
+ON public.user_roles FOR SELECT TO authenticated
+USING (user_id = auth.uid());
+
+DROP POLICY IF EXISTS "Superadmins can manage roles" ON public.user_roles;
+CREATE POLICY "Superadmins can manage roles"
+ON public.user_roles FOR ALL TO authenticated
+USING (public.is_super_admin())
+WITH CHECK (public.is_super_admin());
+
+GRANT SELECT ON public.profiles, public.user_roles TO authenticated;
+GRANT ALL ON public.profiles, public.user_roles TO service_role;

@@ -97,6 +97,12 @@ O design usa superfícies claras, branco e cinza suave, azul institucional `#3d4
 
 ## Publicação
 
+**Bloqueio de migrações (auditoria de 03/09/2026):** o catálogo e o histórico remoto
+não estão integralmente reconciliados. A descrição de segurança acima é o modelo
+alvo, não comprovação de todos os privilégios atuais. Antes do passo 4, seguir
+`docs/GRALHA_MIGRATION_RECONCILIATION.md`; não executar migrações em produção por
+suposição. A preparação em rascunho não autoriza merge, SQL ou deploy.
+
 1. Executar `pytest` para o backend.
 2. Executar `node --test tests/worker_circuit_breaker.test.mjs`.
 3. Executar `node --check cloudflare/gralha-indicadores-chat-worker-v11.js` e `git diff --check`.

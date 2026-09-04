@@ -1,0 +1,5987 @@
+{
+  "format_version": 1,
+  "observed_on": "2026-09-03",
+  "source": {
+    "project_ref": "kmysinxpdkeszrtdyhid",
+    "base_commit": "e53627b265e6193b5eca69589c859ca37119bbdb",
+    "catalog_read_mode": "READ ONLY",
+    "production_mutated": false,
+    "business_rows_read": false,
+    "personal_data_included": false
+  },
+  "decision": {
+    "ready_for_db_push": false,
+    "ready_for_production": false,
+    "executable_baseline_complete": false,
+    "broker_team_expansion_authorized": false,
+    "missing_from_executable_chain": {
+      "public": [
+        "internal_sales_spreadsheet_rows",
+        "profiles",
+        "sales_team_reference",
+        "user_roles"
+      ],
+      "validation": [
+        "broker_system_identifiers",
+        "broker_team_history",
+        "brokers",
+        "consolidated_sales",
+        "pipeimob_sales",
+        "reconciliation_events",
+        "source_ingestion_runs",
+        "teams",
+        "vista_gains"
+      ]
+    },
+    "managed_prerequisites_not_owned": [
+      "auth.users",
+      "auth.uid()",
+      "anon role",
+      "authenticated role",
+      "service_role role",
+      "Supabase-managed auth/storage/realtime/vault schemas"
+    ]
+  },
+  "summary": {
+    "server_version": "17.6",
+    "schemas": [
+      "private",
+      "public",
+      "validation"
+    ],
+    "table_count": 20,
+    "public_table_count": 11,
+    "validation_table_count": 9,
+    "sequence_count": 12,
+    "column_count": 189,
+    "constraint_count": 104,
+    "index_count": 67,
+    "invalid_index_count": 0,
+    "table_without_primary_key_count": 0,
+    "rls_enabled_table_count": 20,
+    "policy_count": 20,
+    "publication_membership_count": 0
+  },
+  "inventory": {
+    "relations": [
+      {
+        "force_rls": false,
+        "kind": "r",
+        "name": "conversation_messages",
+        "owner": "postgres",
+        "persistence": "p",
+        "primary_key": true,
+        "rls": true,
+        "schema": "public"
+      },
+      {
+        "force_rls": false,
+        "kind": "S",
+        "name": "conversation_messages_id_seq",
+        "owner": "postgres",
+        "persistence": "p",
+        "primary_key": false,
+        "rls": false,
+        "schema": "public"
+      },
+      {
+        "force_rls": false,
+        "kind": "r",
+        "name": "conversations",
+        "owner": "postgres",
+        "persistence": "p",
+        "primary_key": true,
+        "rls": true,
+        "schema": "public"
+      },
+      {
+        "force_rls": false,
+        "kind": "r",
+        "name": "integration_failure_diagnostics",
+        "owner": "postgres",
+        "persistence": "p",
+        "primary_key": true,
+        "rls": true,
+        "schema": "public"
+      },
+      {
+        "force_rls": false,
+        "kind": "r",
+        "name": "internal_sales_spreadsheet_rows",
+        "owner": "postgres",
+        "persistence": "p",
+        "primary_key": true,
+        "rls": true,
+        "schema": "public"
+      },
+      {
+        "force_rls": false,
+        "kind": "S",
+        "name": "internal_sales_spreadsheet_rows_id_seq",
+        "owner": "postgres",
+        "persistence": "p",
+        "primary_key": false,
+        "rls": false,
+        "schema": "public"
+      },
+      {
+        "force_rls": false,
+        "kind": "r",
+        "name": "manager_team_reference",
+        "owner": "postgres",
+        "persistence": "p",
+        "primary_key": true,
+        "rls": true,
+        "schema": "public"
+      },
+      {
+        "force_rls": false,
+        "kind": "S",
+        "name": "manager_team_reference_id_seq",
+        "owner": "postgres",
+        "persistence": "p",
+        "primary_key": false,
+        "rls": false,
+        "schema": "public"
+      },
+      {
+        "force_rls": false,
+        "kind": "r",
+        "name": "profiles",
+        "owner": "postgres",
+        "persistence": "p",
+        "primary_key": true,
+        "rls": true,
+        "schema": "public"
+      },
+      {
+        "force_rls": false,
+        "kind": "r",
+        "name": "sales_team_reference",
+        "owner": "postgres",
+        "persistence": "p",
+        "primary_key": true,
+        "rls": true,
+        "schema": "public"
+      },
+      {
+        "force_rls": false,
+        "kind": "S",
+        "name": "sales_team_reference_id_seq",
+        "owner": "postgres",
+        "persistence": "p",
+        "primary_key": false,
+        "rls": false,
+        "schema": "public"
+      },
+      {
+        "force_rls": false,
+        "kind": "r",
+        "name": "teams",
+        "owner": "postgres",
+        "persistence": "p",
+        "primary_key": true,
+        "rls": true,
+        "schema": "public"
+      },
+      {
+        "force_rls": false,
+        "kind": "r",
+        "name": "user_management_audit",
+        "owner": "postgres",
+        "persistence": "p",
+        "primary_key": true,
+        "rls": true,
+        "schema": "public"
+      },
+      {
+        "force_rls": false,
+        "kind": "S",
+        "name": "user_management_audit_id_seq",
+        "owner": "postgres",
+        "persistence": "p",
+        "primary_key": false,
+        "rls": false,
+        "schema": "public"
+      },
+      {
+        "force_rls": false,
+        "kind": "r",
+        "name": "user_roles",
+        "owner": "postgres",
+        "persistence": "p",
+        "primary_key": true,
+        "rls": true,
+        "schema": "public"
+      },
+      {
+        "force_rls": false,
+        "kind": "r",
+        "name": "user_team_access",
+        "owner": "postgres",
+        "persistence": "p",
+        "primary_key": true,
+        "rls": true,
+        "schema": "public"
+      },
+      {
+        "force_rls": false,
+        "kind": "r",
+        "name": "broker_system_identifiers",
+        "owner": "postgres",
+        "persistence": "p",
+        "primary_key": true,
+        "rls": true,
+        "schema": "validation"
+      },
+      {
+        "force_rls": false,
+        "kind": "S",
+        "name": "broker_system_identifiers_id_seq",
+        "owner": "postgres",
+        "persistence": "p",
+        "primary_key": false,
+        "rls": false,
+        "schema": "validation"
+      },
+      {
+        "force_rls": false,
+        "kind": "r",
+        "name": "broker_team_history",
+        "owner": "postgres",
+        "persistence": "p",
+        "primary_key": true,
+        "rls": true,
+        "schema": "validation"
+      },
+      {
+        "force_rls": false,
+        "kind": "S",
+        "name": "broker_team_history_id_seq",
+        "owner": "postgres",
+        "persistence": "p",
+        "primary_key": false,
+        "rls": false,
+        "schema": "validation"
+      },
+      {
+        "force_rls": false,
+        "kind": "r",
+        "name": "brokers",
+        "owner": "postgres",
+        "persistence": "p",
+        "primary_key": true,
+        "rls": true,
+        "schema": "validation"
+      },
+      {
+        "force_rls": false,
+        "kind": "S",
+        "name": "brokers_id_seq",
+        "owner": "postgres",
+        "persistence": "p",
+        "primary_key": false,
+        "rls": false,
+        "schema": "validation"
+      },
+      {
+        "force_rls": false,
+        "kind": "r",
+        "name": "consolidated_sales",
+        "owner": "postgres",
+        "persistence": "p",
+        "primary_key": true,
+        "rls": true,
+        "schema": "validation"
+      },
+      {
+        "force_rls": false,
+        "kind": "S",
+        "name": "consolidated_sales_id_seq",
+        "owner": "postgres",
+        "persistence": "p",
+        "primary_key": false,
+        "rls": false,
+        "schema": "validation"
+      },
+      {
+        "force_rls": false,
+        "kind": "r",
+        "name": "pipeimob_sales",
+        "owner": "postgres",
+        "persistence": "p",
+        "primary_key": true,
+        "rls": true,
+        "schema": "validation"
+      },
+      {
+        "force_rls": false,
+        "kind": "r",
+        "name": "reconciliation_events",
+        "owner": "postgres",
+        "persistence": "p",
+        "primary_key": true,
+        "rls": true,
+        "schema": "validation"
+      },
+      {
+        "force_rls": false,
+        "kind": "S",
+        "name": "reconciliation_events_id_seq",
+        "owner": "postgres",
+        "persistence": "p",
+        "primary_key": false,
+        "rls": false,
+        "schema": "validation"
+      },
+      {
+        "force_rls": false,
+        "kind": "r",
+        "name": "source_ingestion_runs",
+        "owner": "postgres",
+        "persistence": "p",
+        "primary_key": true,
+        "rls": true,
+        "schema": "validation"
+      },
+      {
+        "force_rls": false,
+        "kind": "S",
+        "name": "source_ingestion_runs_id_seq",
+        "owner": "postgres",
+        "persistence": "p",
+        "primary_key": false,
+        "rls": false,
+        "schema": "validation"
+      },
+      {
+        "force_rls": false,
+        "kind": "r",
+        "name": "teams",
+        "owner": "postgres",
+        "persistence": "p",
+        "primary_key": true,
+        "rls": true,
+        "schema": "validation"
+      },
+      {
+        "force_rls": false,
+        "kind": "S",
+        "name": "teams_id_seq",
+        "owner": "postgres",
+        "persistence": "p",
+        "primary_key": false,
+        "rls": false,
+        "schema": "validation"
+      },
+      {
+        "force_rls": false,
+        "kind": "r",
+        "name": "vista_gains",
+        "owner": "postgres",
+        "persistence": "p",
+        "primary_key": true,
+        "rls": true,
+        "schema": "validation"
+      }
+    ],
+    "columns": [
+      {
+        "column": "id",
+        "default_md5": null,
+        "generated": "",
+        "identity": "a",
+        "not_null": true,
+        "position": 1,
+        "schema": "public",
+        "table": "conversation_messages",
+        "type": "bigint"
+      },
+      {
+        "column": "conversation_id",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 2,
+        "schema": "public",
+        "table": "conversation_messages",
+        "type": "uuid"
+      },
+      {
+        "column": "user_id",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 3,
+        "schema": "public",
+        "table": "conversation_messages",
+        "type": "uuid"
+      },
+      {
+        "column": "role",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 4,
+        "schema": "public",
+        "table": "conversation_messages",
+        "type": "text"
+      },
+      {
+        "column": "content",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 5,
+        "schema": "public",
+        "table": "conversation_messages",
+        "type": "text"
+      },
+      {
+        "column": "visualization",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 6,
+        "schema": "public",
+        "table": "conversation_messages",
+        "type": "jsonb"
+      },
+      {
+        "column": "created_at",
+        "default_md5": "75230039beb12ce952f24927f2bfa2f2",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 7,
+        "schema": "public",
+        "table": "conversation_messages",
+        "type": "timestamp with time zone"
+      },
+      {
+        "column": "request_id",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 8,
+        "schema": "public",
+        "table": "conversation_messages",
+        "type": "uuid"
+      },
+      {
+        "column": "id",
+        "default_md5": "f3b72bb359a50b640590970a2ab8e514",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 1,
+        "schema": "public",
+        "table": "conversations",
+        "type": "uuid"
+      },
+      {
+        "column": "user_id",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 2,
+        "schema": "public",
+        "table": "conversations",
+        "type": "uuid"
+      },
+      {
+        "column": "title",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 3,
+        "schema": "public",
+        "table": "conversations",
+        "type": "text"
+      },
+      {
+        "column": "created_at",
+        "default_md5": "75230039beb12ce952f24927f2bfa2f2",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 4,
+        "schema": "public",
+        "table": "conversations",
+        "type": "timestamp with time zone"
+      },
+      {
+        "column": "updated_at",
+        "default_md5": "75230039beb12ce952f24927f2bfa2f2",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 5,
+        "schema": "public",
+        "table": "conversations",
+        "type": "timestamp with time zone"
+      },
+      {
+        "column": "id",
+        "default_md5": "f3b72bb359a50b640590970a2ab8e514",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 1,
+        "schema": "public",
+        "table": "integration_failure_diagnostics",
+        "type": "uuid"
+      },
+      {
+        "column": "user_id",
+        "default_md5": "ddeb331049bfce569b78a580d1e1abe4",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 2,
+        "schema": "public",
+        "table": "integration_failure_diagnostics",
+        "type": "uuid"
+      },
+      {
+        "column": "occurred_at",
+        "default_md5": "75230039beb12ce952f24927f2bfa2f2",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 3,
+        "schema": "public",
+        "table": "integration_failure_diagnostics",
+        "type": "timestamp with time zone"
+      },
+      {
+        "column": "function_slug",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 4,
+        "schema": "public",
+        "table": "integration_failure_diagnostics",
+        "type": "text"
+      },
+      {
+        "column": "function_version",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 5,
+        "schema": "public",
+        "table": "integration_failure_diagnostics",
+        "type": "text"
+      },
+      {
+        "column": "operation",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 6,
+        "schema": "public",
+        "table": "integration_failure_diagnostics",
+        "type": "text"
+      },
+      {
+        "column": "period_start",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 7,
+        "schema": "public",
+        "table": "integration_failure_diagnostics",
+        "type": "date"
+      },
+      {
+        "column": "period_end",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 8,
+        "schema": "public",
+        "table": "integration_failure_diagnostics",
+        "type": "date"
+      },
+      {
+        "column": "http_status",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 9,
+        "schema": "public",
+        "table": "integration_failure_diagnostics",
+        "type": "smallint"
+      },
+      {
+        "column": "error_code",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 10,
+        "schema": "public",
+        "table": "integration_failure_diagnostics",
+        "type": "text"
+      },
+      {
+        "column": "id",
+        "default_md5": null,
+        "generated": "",
+        "identity": "d",
+        "not_null": true,
+        "position": 1,
+        "schema": "public",
+        "table": "internal_sales_spreadsheet_rows",
+        "type": "bigint"
+      },
+      {
+        "column": "source_file_name",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 2,
+        "schema": "public",
+        "table": "internal_sales_spreadsheet_rows",
+        "type": "text"
+      },
+      {
+        "column": "source_sheet_name",
+        "default_md5": "34b1df19e613a5d4aa0fc25cb16be469",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 3,
+        "schema": "public",
+        "table": "internal_sales_spreadsheet_rows",
+        "type": "text"
+      },
+      {
+        "column": "source_row_number",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 4,
+        "schema": "public",
+        "table": "internal_sales_spreadsheet_rows",
+        "type": "integer"
+      },
+      {
+        "column": "sale_year",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 5,
+        "schema": "public",
+        "table": "internal_sales_spreadsheet_rows",
+        "type": "integer"
+      },
+      {
+        "column": "sale_date",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 6,
+        "schema": "public",
+        "table": "internal_sales_spreadsheet_rows",
+        "type": "date"
+      },
+      {
+        "column": "property_code",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 7,
+        "schema": "public",
+        "table": "internal_sales_spreadsheet_rows",
+        "type": "text"
+      },
+      {
+        "column": "broker_name",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 8,
+        "schema": "public",
+        "table": "internal_sales_spreadsheet_rows",
+        "type": "text"
+      },
+      {
+        "column": "broker_key",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 9,
+        "schema": "public",
+        "table": "internal_sales_spreadsheet_rows",
+        "type": "text"
+      },
+      {
+        "column": "team_name",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 10,
+        "schema": "public",
+        "table": "internal_sales_spreadsheet_rows",
+        "type": "text"
+      },
+      {
+        "column": "team_key",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 11,
+        "schema": "public",
+        "table": "internal_sales_spreadsheet_rows",
+        "type": "text"
+      },
+      {
+        "column": "neighborhood",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 12,
+        "schema": "public",
+        "table": "internal_sales_spreadsheet_rows",
+        "type": "text"
+      },
+      {
+        "column": "vgv",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 13,
+        "schema": "public",
+        "table": "internal_sales_spreadsheet_rows",
+        "type": "numeric"
+      },
+      {
+        "column": "row_data",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 14,
+        "schema": "public",
+        "table": "internal_sales_spreadsheet_rows",
+        "type": "jsonb"
+      },
+      {
+        "column": "row_formulas",
+        "default_md5": "f3db357cf4f4a03883484fa3281a056c",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 15,
+        "schema": "public",
+        "table": "internal_sales_spreadsheet_rows",
+        "type": "jsonb"
+      },
+      {
+        "column": "source_updated_through",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 16,
+        "schema": "public",
+        "table": "internal_sales_spreadsheet_rows",
+        "type": "date"
+      },
+      {
+        "column": "imported_at",
+        "default_md5": "75230039beb12ce952f24927f2bfa2f2",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 17,
+        "schema": "public",
+        "table": "internal_sales_spreadsheet_rows",
+        "type": "timestamp with time zone"
+      },
+      {
+        "column": "id",
+        "default_md5": null,
+        "generated": "",
+        "identity": "a",
+        "not_null": true,
+        "position": 1,
+        "schema": "public",
+        "table": "manager_team_reference",
+        "type": "bigint"
+      },
+      {
+        "column": "manager_key",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 2,
+        "schema": "public",
+        "table": "manager_team_reference",
+        "type": "text"
+      },
+      {
+        "column": "manager_name",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 3,
+        "schema": "public",
+        "table": "manager_team_reference",
+        "type": "text"
+      },
+      {
+        "column": "team_key",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 4,
+        "schema": "public",
+        "table": "manager_team_reference",
+        "type": "text"
+      },
+      {
+        "column": "team_name",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 5,
+        "schema": "public",
+        "table": "manager_team_reference",
+        "type": "text"
+      },
+      {
+        "column": "valid_from",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 6,
+        "schema": "public",
+        "table": "manager_team_reference",
+        "type": "date"
+      },
+      {
+        "column": "valid_to",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 7,
+        "schema": "public",
+        "table": "manager_team_reference",
+        "type": "date"
+      },
+      {
+        "column": "source_file_name",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 8,
+        "schema": "public",
+        "table": "manager_team_reference",
+        "type": "text"
+      },
+      {
+        "column": "source_sheet_name",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 9,
+        "schema": "public",
+        "table": "manager_team_reference",
+        "type": "text"
+      },
+      {
+        "column": "source_updated_through",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 10,
+        "schema": "public",
+        "table": "manager_team_reference",
+        "type": "date"
+      },
+      {
+        "column": "evidence_rows",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 11,
+        "schema": "public",
+        "table": "manager_team_reference",
+        "type": "integer"
+      },
+      {
+        "column": "review_required",
+        "default_md5": "68934a3e9455fa72420237eb05902327",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 12,
+        "schema": "public",
+        "table": "manager_team_reference",
+        "type": "boolean"
+      },
+      {
+        "column": "resolution_method",
+        "default_md5": "80840152b8e264be5fddfa7d23325714",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 13,
+        "schema": "public",
+        "table": "manager_team_reference",
+        "type": "text"
+      },
+      {
+        "column": "created_at",
+        "default_md5": "75230039beb12ce952f24927f2bfa2f2",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 14,
+        "schema": "public",
+        "table": "manager_team_reference",
+        "type": "timestamp with time zone"
+      },
+      {
+        "column": "id",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 1,
+        "schema": "public",
+        "table": "profiles",
+        "type": "uuid"
+      },
+      {
+        "column": "email",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 2,
+        "schema": "public",
+        "table": "profiles",
+        "type": "text"
+      },
+      {
+        "column": "status",
+        "default_md5": "8bcb22d3d37c3d1f7a59cc2134caf135",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 3,
+        "schema": "public",
+        "table": "profiles",
+        "type": "profile_status"
+      },
+      {
+        "column": "created_at",
+        "default_md5": "75230039beb12ce952f24927f2bfa2f2",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 4,
+        "schema": "public",
+        "table": "profiles",
+        "type": "timestamp with time zone"
+      },
+      {
+        "column": "status_updated_at",
+        "default_md5": "75230039beb12ce952f24927f2bfa2f2",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 5,
+        "schema": "public",
+        "table": "profiles",
+        "type": "timestamp with time zone"
+      },
+      {
+        "column": "activated_at",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 6,
+        "schema": "public",
+        "table": "profiles",
+        "type": "timestamp with time zone"
+      },
+      {
+        "column": "disabled_at",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 7,
+        "schema": "public",
+        "table": "profiles",
+        "type": "timestamp with time zone"
+      },
+      {
+        "column": "display_name",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 8,
+        "schema": "public",
+        "table": "profiles",
+        "type": "text"
+      },
+      {
+        "column": "access_role",
+        "default_md5": "393bd9484d77ff42627698fdc69c1a77",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 9,
+        "schema": "public",
+        "table": "profiles",
+        "type": "text"
+      },
+      {
+        "column": "updated_at",
+        "default_md5": "75230039beb12ce952f24927f2bfa2f2",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 10,
+        "schema": "public",
+        "table": "profiles",
+        "type": "timestamp with time zone"
+      },
+      {
+        "column": "id",
+        "default_md5": null,
+        "generated": "",
+        "identity": "d",
+        "not_null": true,
+        "position": 1,
+        "schema": "public",
+        "table": "sales_team_reference",
+        "type": "bigint"
+      },
+      {
+        "column": "source_file_name",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 2,
+        "schema": "public",
+        "table": "sales_team_reference",
+        "type": "text"
+      },
+      {
+        "column": "source_row_number",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 3,
+        "schema": "public",
+        "table": "sales_team_reference",
+        "type": "integer"
+      },
+      {
+        "column": "sale_date",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 4,
+        "schema": "public",
+        "table": "sales_team_reference",
+        "type": "date"
+      },
+      {
+        "column": "property_code",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 5,
+        "schema": "public",
+        "table": "sales_team_reference",
+        "type": "text"
+      },
+      {
+        "column": "broker_key",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 6,
+        "schema": "public",
+        "table": "sales_team_reference",
+        "type": "text"
+      },
+      {
+        "column": "broker_name",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 7,
+        "schema": "public",
+        "table": "sales_team_reference",
+        "type": "text"
+      },
+      {
+        "column": "team_key",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 8,
+        "schema": "public",
+        "table": "sales_team_reference",
+        "type": "text"
+      },
+      {
+        "column": "team_name",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 9,
+        "schema": "public",
+        "table": "sales_team_reference",
+        "type": "text"
+      },
+      {
+        "column": "source_updated_through",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 10,
+        "schema": "public",
+        "table": "sales_team_reference",
+        "type": "date"
+      },
+      {
+        "column": "created_at",
+        "default_md5": "75230039beb12ce952f24927f2bfa2f2",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 11,
+        "schema": "public",
+        "table": "sales_team_reference",
+        "type": "timestamp with time zone"
+      },
+      {
+        "column": "team_key",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 1,
+        "schema": "public",
+        "table": "teams",
+        "type": "text"
+      },
+      {
+        "column": "team_name",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 2,
+        "schema": "public",
+        "table": "teams",
+        "type": "text"
+      },
+      {
+        "column": "is_active",
+        "default_md5": "b326b5062b2f0e69046810717534cb09",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 3,
+        "schema": "public",
+        "table": "teams",
+        "type": "boolean"
+      },
+      {
+        "column": "created_at",
+        "default_md5": "75230039beb12ce952f24927f2bfa2f2",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 4,
+        "schema": "public",
+        "table": "teams",
+        "type": "timestamp with time zone"
+      },
+      {
+        "column": "updated_at",
+        "default_md5": "75230039beb12ce952f24927f2bfa2f2",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 5,
+        "schema": "public",
+        "table": "teams",
+        "type": "timestamp with time zone"
+      },
+      {
+        "column": "id",
+        "default_md5": null,
+        "generated": "",
+        "identity": "a",
+        "not_null": true,
+        "position": 1,
+        "schema": "public",
+        "table": "user_management_audit",
+        "type": "bigint"
+      },
+      {
+        "column": "actor_user_id",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 2,
+        "schema": "public",
+        "table": "user_management_audit",
+        "type": "uuid"
+      },
+      {
+        "column": "target_user_id",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 3,
+        "schema": "public",
+        "table": "user_management_audit",
+        "type": "uuid"
+      },
+      {
+        "column": "action",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 4,
+        "schema": "public",
+        "table": "user_management_audit",
+        "type": "text"
+      },
+      {
+        "column": "details",
+        "default_md5": "f3db357cf4f4a03883484fa3281a056c",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 5,
+        "schema": "public",
+        "table": "user_management_audit",
+        "type": "jsonb"
+      },
+      {
+        "column": "created_at",
+        "default_md5": "75230039beb12ce952f24927f2bfa2f2",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 6,
+        "schema": "public",
+        "table": "user_management_audit",
+        "type": "timestamp with time zone"
+      },
+      {
+        "column": "id",
+        "default_md5": "f3b72bb359a50b640590970a2ab8e514",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 1,
+        "schema": "public",
+        "table": "user_roles",
+        "type": "uuid"
+      },
+      {
+        "column": "user_id",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 2,
+        "schema": "public",
+        "table": "user_roles",
+        "type": "uuid"
+      },
+      {
+        "column": "role",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 3,
+        "schema": "public",
+        "table": "user_roles",
+        "type": "app_role"
+      },
+      {
+        "column": "created_at",
+        "default_md5": "75230039beb12ce952f24927f2bfa2f2",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 4,
+        "schema": "public",
+        "table": "user_roles",
+        "type": "timestamp with time zone"
+      },
+      {
+        "column": "user_id",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 1,
+        "schema": "public",
+        "table": "user_team_access",
+        "type": "uuid"
+      },
+      {
+        "column": "team_key",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 2,
+        "schema": "public",
+        "table": "user_team_access",
+        "type": "text"
+      },
+      {
+        "column": "created_at",
+        "default_md5": "75230039beb12ce952f24927f2bfa2f2",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 3,
+        "schema": "public",
+        "table": "user_team_access",
+        "type": "timestamp with time zone"
+      },
+      {
+        "column": "created_by",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 4,
+        "schema": "public",
+        "table": "user_team_access",
+        "type": "uuid"
+      },
+      {
+        "column": "id",
+        "default_md5": null,
+        "generated": "",
+        "identity": "a",
+        "not_null": true,
+        "position": 1,
+        "schema": "validation",
+        "table": "broker_system_identifiers",
+        "type": "bigint"
+      },
+      {
+        "column": "broker_id",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 2,
+        "schema": "validation",
+        "table": "broker_system_identifiers",
+        "type": "bigint"
+      },
+      {
+        "column": "source_system",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 3,
+        "schema": "validation",
+        "table": "broker_system_identifiers",
+        "type": "text"
+      },
+      {
+        "column": "external_id",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 4,
+        "schema": "validation",
+        "table": "broker_system_identifiers",
+        "type": "text"
+      },
+      {
+        "column": "valid_from",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 5,
+        "schema": "validation",
+        "table": "broker_system_identifiers",
+        "type": "date"
+      },
+      {
+        "column": "valid_to",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 6,
+        "schema": "validation",
+        "table": "broker_system_identifiers",
+        "type": "date"
+      },
+      {
+        "column": "created_at",
+        "default_md5": "75230039beb12ce952f24927f2bfa2f2",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 7,
+        "schema": "validation",
+        "table": "broker_system_identifiers",
+        "type": "timestamp with time zone"
+      },
+      {
+        "column": "id",
+        "default_md5": null,
+        "generated": "",
+        "identity": "a",
+        "not_null": true,
+        "position": 1,
+        "schema": "validation",
+        "table": "broker_team_history",
+        "type": "bigint"
+      },
+      {
+        "column": "broker_id",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 2,
+        "schema": "validation",
+        "table": "broker_team_history",
+        "type": "bigint"
+      },
+      {
+        "column": "team_id",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 3,
+        "schema": "validation",
+        "table": "broker_team_history",
+        "type": "bigint"
+      },
+      {
+        "column": "valid_from",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 4,
+        "schema": "validation",
+        "table": "broker_team_history",
+        "type": "date"
+      },
+      {
+        "column": "valid_to",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 5,
+        "schema": "validation",
+        "table": "broker_team_history",
+        "type": "date"
+      },
+      {
+        "column": "change_source",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 6,
+        "schema": "validation",
+        "table": "broker_team_history",
+        "type": "text"
+      },
+      {
+        "column": "recorded_at",
+        "default_md5": "75230039beb12ce952f24927f2bfa2f2",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 7,
+        "schema": "validation",
+        "table": "broker_team_history",
+        "type": "timestamp with time zone"
+      },
+      {
+        "column": "recorded_by",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 8,
+        "schema": "validation",
+        "table": "broker_team_history",
+        "type": "text"
+      },
+      {
+        "column": "id",
+        "default_md5": null,
+        "generated": "",
+        "identity": "a",
+        "not_null": true,
+        "position": 1,
+        "schema": "validation",
+        "table": "brokers",
+        "type": "bigint"
+      },
+      {
+        "column": "display_name",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 2,
+        "schema": "validation",
+        "table": "brokers",
+        "type": "text"
+      },
+      {
+        "column": "normalized_name",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 3,
+        "schema": "validation",
+        "table": "brokers",
+        "type": "text"
+      },
+      {
+        "column": "active",
+        "default_md5": "b326b5062b2f0e69046810717534cb09",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 4,
+        "schema": "validation",
+        "table": "brokers",
+        "type": "boolean"
+      },
+      {
+        "column": "created_at",
+        "default_md5": "75230039beb12ce952f24927f2bfa2f2",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 5,
+        "schema": "validation",
+        "table": "brokers",
+        "type": "timestamp with time zone"
+      },
+      {
+        "column": "updated_at",
+        "default_md5": "75230039beb12ce952f24927f2bfa2f2",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 6,
+        "schema": "validation",
+        "table": "brokers",
+        "type": "timestamp with time zone"
+      },
+      {
+        "column": "id",
+        "default_md5": null,
+        "generated": "",
+        "identity": "a",
+        "not_null": true,
+        "position": 1,
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "type": "bigint"
+      },
+      {
+        "column": "pipeimob_transaction_id",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 2,
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "type": "text"
+      },
+      {
+        "column": "vista_deal_id",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 3,
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "type": "text"
+      },
+      {
+        "column": "property_code",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 4,
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "type": "text"
+      },
+      {
+        "column": "official_sale_date",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 5,
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "type": "date"
+      },
+      {
+        "column": "vista_gain_date",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 6,
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "type": "date"
+      },
+      {
+        "column": "delay_hours",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 7,
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "type": "numeric(12,2)"
+      },
+      {
+        "column": "official_value",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 8,
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "type": "numeric(16,2)"
+      },
+      {
+        "column": "vista_value",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 9,
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "type": "numeric(16,2)"
+      },
+      {
+        "column": "value_difference",
+        "default_md5": "de007ff5dfd7ae589f3107c4c29ed7b0",
+        "generated": "s",
+        "identity": "",
+        "not_null": false,
+        "position": 10,
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "type": "numeric(16,2)"
+      },
+      {
+        "column": "commercial_broker_id",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 11,
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "type": "bigint"
+      },
+      {
+        "column": "commercial_broker_name_snapshot",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 12,
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "type": "text"
+      },
+      {
+        "column": "fiscal_broker_id",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 13,
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "type": "bigint"
+      },
+      {
+        "column": "fiscal_broker_name_snapshot",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 14,
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "type": "text"
+      },
+      {
+        "column": "team_at_sale_id",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 15,
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "type": "bigint"
+      },
+      {
+        "column": "team_name_snapshot",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 16,
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "type": "text"
+      },
+      {
+        "column": "reconciliation_status",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 17,
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "type": "text"
+      },
+      {
+        "column": "issues",
+        "default_md5": "f81a5133416544064d5b9b182f73a6e1",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 18,
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "type": "text[]"
+      },
+      {
+        "column": "match_method",
+        "default_md5": "bda77a35b758f22dc5721a60ee54df45",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 19,
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "type": "text"
+      },
+      {
+        "column": "match_confidence",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 20,
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "type": "numeric(5,4)"
+      },
+      {
+        "column": "reconciled_at",
+        "default_md5": "75230039beb12ce952f24927f2bfa2f2",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 21,
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "type": "timestamp with time zone"
+      },
+      {
+        "column": "source_version",
+        "default_md5": "5b25b55767d2b1f19b895a4403fae3bd",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 22,
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "type": "text"
+      },
+      {
+        "column": "transaction_id",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 1,
+        "schema": "validation",
+        "table": "pipeimob_sales",
+        "type": "text"
+      },
+      {
+        "column": "contract_code",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 2,
+        "schema": "validation",
+        "table": "pipeimob_sales",
+        "type": "text"
+      },
+      {
+        "column": "property_code",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 3,
+        "schema": "validation",
+        "table": "pipeimob_sales",
+        "type": "text"
+      },
+      {
+        "column": "signature_date",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 4,
+        "schema": "validation",
+        "table": "pipeimob_sales",
+        "type": "date"
+      },
+      {
+        "column": "contract_value",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 5,
+        "schema": "validation",
+        "table": "pipeimob_sales",
+        "type": "numeric(16,2)"
+      },
+      {
+        "column": "fiscal_broker_id",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 6,
+        "schema": "validation",
+        "table": "pipeimob_sales",
+        "type": "bigint"
+      },
+      {
+        "column": "fiscal_broker_name_snapshot",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 7,
+        "schema": "validation",
+        "table": "pipeimob_sales",
+        "type": "text"
+      },
+      {
+        "column": "sale_status",
+        "default_md5": "cfaf8d9e8ae4be644c6e743d4de4ac24",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 8,
+        "schema": "validation",
+        "table": "pipeimob_sales",
+        "type": "text"
+      },
+      {
+        "column": "source_run_id",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 9,
+        "schema": "validation",
+        "table": "pipeimob_sales",
+        "type": "bigint"
+      },
+      {
+        "column": "source_record_hash",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 10,
+        "schema": "validation",
+        "table": "pipeimob_sales",
+        "type": "text"
+      },
+      {
+        "column": "ingested_at",
+        "default_md5": "75230039beb12ce952f24927f2bfa2f2",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 11,
+        "schema": "validation",
+        "table": "pipeimob_sales",
+        "type": "timestamp with time zone"
+      },
+      {
+        "column": "id",
+        "default_md5": null,
+        "generated": "",
+        "identity": "a",
+        "not_null": true,
+        "position": 1,
+        "schema": "validation",
+        "table": "reconciliation_events",
+        "type": "bigint"
+      },
+      {
+        "column": "consolidated_sale_id",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 2,
+        "schema": "validation",
+        "table": "reconciliation_events",
+        "type": "bigint"
+      },
+      {
+        "column": "event_type",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 3,
+        "schema": "validation",
+        "table": "reconciliation_events",
+        "type": "text"
+      },
+      {
+        "column": "previous_status",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 4,
+        "schema": "validation",
+        "table": "reconciliation_events",
+        "type": "text"
+      },
+      {
+        "column": "new_status",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 5,
+        "schema": "validation",
+        "table": "reconciliation_events",
+        "type": "text"
+      },
+      {
+        "column": "reason",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 6,
+        "schema": "validation",
+        "table": "reconciliation_events",
+        "type": "text"
+      },
+      {
+        "column": "changed_at",
+        "default_md5": "75230039beb12ce952f24927f2bfa2f2",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 7,
+        "schema": "validation",
+        "table": "reconciliation_events",
+        "type": "timestamp with time zone"
+      },
+      {
+        "column": "changed_by",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 8,
+        "schema": "validation",
+        "table": "reconciliation_events",
+        "type": "text"
+      },
+      {
+        "column": "details",
+        "default_md5": "f3db357cf4f4a03883484fa3281a056c",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 9,
+        "schema": "validation",
+        "table": "reconciliation_events",
+        "type": "jsonb"
+      },
+      {
+        "column": "id",
+        "default_md5": null,
+        "generated": "",
+        "identity": "a",
+        "not_null": true,
+        "position": 1,
+        "schema": "validation",
+        "table": "source_ingestion_runs",
+        "type": "bigint"
+      },
+      {
+        "column": "source_system",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 2,
+        "schema": "validation",
+        "table": "source_ingestion_runs",
+        "type": "text"
+      },
+      {
+        "column": "source_filename",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 3,
+        "schema": "validation",
+        "table": "source_ingestion_runs",
+        "type": "text"
+      },
+      {
+        "column": "source_sha256",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 4,
+        "schema": "validation",
+        "table": "source_ingestion_runs",
+        "type": "text"
+      },
+      {
+        "column": "period_start",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 5,
+        "schema": "validation",
+        "table": "source_ingestion_runs",
+        "type": "date"
+      },
+      {
+        "column": "period_end",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 6,
+        "schema": "validation",
+        "table": "source_ingestion_runs",
+        "type": "date"
+      },
+      {
+        "column": "row_count",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 7,
+        "schema": "validation",
+        "table": "source_ingestion_runs",
+        "type": "integer"
+      },
+      {
+        "column": "import_status",
+        "default_md5": "67f0c6677ce8e0d520316a09bf18ee82",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 8,
+        "schema": "validation",
+        "table": "source_ingestion_runs",
+        "type": "text"
+      },
+      {
+        "column": "imported_at",
+        "default_md5": "75230039beb12ce952f24927f2bfa2f2",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 9,
+        "schema": "validation",
+        "table": "source_ingestion_runs",
+        "type": "timestamp with time zone"
+      },
+      {
+        "column": "imported_by",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 10,
+        "schema": "validation",
+        "table": "source_ingestion_runs",
+        "type": "text"
+      },
+      {
+        "column": "metadata",
+        "default_md5": "f3db357cf4f4a03883484fa3281a056c",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 11,
+        "schema": "validation",
+        "table": "source_ingestion_runs",
+        "type": "jsonb"
+      },
+      {
+        "column": "id",
+        "default_md5": null,
+        "generated": "",
+        "identity": "a",
+        "not_null": true,
+        "position": 1,
+        "schema": "validation",
+        "table": "teams",
+        "type": "bigint"
+      },
+      {
+        "column": "stable_code",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 2,
+        "schema": "validation",
+        "table": "teams",
+        "type": "text"
+      },
+      {
+        "column": "display_name",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 3,
+        "schema": "validation",
+        "table": "teams",
+        "type": "text"
+      },
+      {
+        "column": "active",
+        "default_md5": "b326b5062b2f0e69046810717534cb09",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 4,
+        "schema": "validation",
+        "table": "teams",
+        "type": "boolean"
+      },
+      {
+        "column": "valid_from",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 5,
+        "schema": "validation",
+        "table": "teams",
+        "type": "date"
+      },
+      {
+        "column": "valid_to",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 6,
+        "schema": "validation",
+        "table": "teams",
+        "type": "date"
+      },
+      {
+        "column": "created_at",
+        "default_md5": "75230039beb12ce952f24927f2bfa2f2",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 7,
+        "schema": "validation",
+        "table": "teams",
+        "type": "timestamp with time zone"
+      },
+      {
+        "column": "updated_at",
+        "default_md5": "75230039beb12ce952f24927f2bfa2f2",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 8,
+        "schema": "validation",
+        "table": "teams",
+        "type": "timestamp with time zone"
+      },
+      {
+        "column": "deal_id",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 1,
+        "schema": "validation",
+        "table": "vista_gains",
+        "type": "text"
+      },
+      {
+        "column": "property_code",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 2,
+        "schema": "validation",
+        "table": "vista_gains",
+        "type": "text"
+      },
+      {
+        "column": "gain_date",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 3,
+        "schema": "validation",
+        "table": "vista_gains",
+        "type": "date"
+      },
+      {
+        "column": "deal_value",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 4,
+        "schema": "validation",
+        "table": "vista_gains",
+        "type": "numeric(16,2)"
+      },
+      {
+        "column": "commercial_broker_id",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 5,
+        "schema": "validation",
+        "table": "vista_gains",
+        "type": "bigint"
+      },
+      {
+        "column": "commercial_broker_external_id",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 6,
+        "schema": "validation",
+        "table": "vista_gains",
+        "type": "text"
+      },
+      {
+        "column": "commercial_broker_name_snapshot",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 7,
+        "schema": "validation",
+        "table": "vista_gains",
+        "type": "text"
+      },
+      {
+        "column": "stage_name",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 8,
+        "schema": "validation",
+        "table": "vista_gains",
+        "type": "text"
+      },
+      {
+        "column": "crm_status",
+        "default_md5": "b8ac63bc3ac218e55d7b70708919beb3",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 9,
+        "schema": "validation",
+        "table": "vista_gains",
+        "type": "text"
+      },
+      {
+        "column": "last_update_at",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": false,
+        "position": 10,
+        "schema": "validation",
+        "table": "vista_gains",
+        "type": "timestamp with time zone"
+      },
+      {
+        "column": "source_run_id",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 11,
+        "schema": "validation",
+        "table": "vista_gains",
+        "type": "bigint"
+      },
+      {
+        "column": "source_record_hash",
+        "default_md5": null,
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 12,
+        "schema": "validation",
+        "table": "vista_gains",
+        "type": "text"
+      },
+      {
+        "column": "ingested_at",
+        "default_md5": "75230039beb12ce952f24927f2bfa2f2",
+        "generated": "",
+        "identity": "",
+        "not_null": true,
+        "position": 13,
+        "schema": "validation",
+        "table": "vista_gains",
+        "type": "timestamp with time zone"
+      }
+    ],
+    "constraints": [
+      {
+        "definition": "CHECK (char_length(content) <= 12000)",
+        "name": "conversation_messages_content_length",
+        "schema": "public",
+        "table": "conversation_messages",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (btrim(content) <> ''::text)",
+        "name": "conversation_messages_content_not_blank",
+        "schema": "public",
+        "table": "conversation_messages",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE",
+        "name": "conversation_messages_conversation_id_fkey",
+        "schema": "public",
+        "table": "conversation_messages",
+        "type": "f",
+        "validated": true
+      },
+      {
+        "definition": "PRIMARY KEY (id)",
+        "name": "conversation_messages_pkey",
+        "schema": "public",
+        "table": "conversation_messages",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (role = ANY (ARRAY['user'::text, 'assistant'::text]))",
+        "name": "conversation_messages_role_valid",
+        "schema": "public",
+        "table": "conversation_messages",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "FOREIGN KEY (user_id) REFERENCES profiles(id) ON DELETE CASCADE",
+        "name": "conversation_messages_user_id_fkey",
+        "schema": "public",
+        "table": "conversation_messages",
+        "type": "f",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (visualization IS NULL OR jsonb_typeof(visualization) = 'object'::text)",
+        "name": "conversation_messages_visualization_object",
+        "schema": "public",
+        "table": "conversation_messages",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "PRIMARY KEY (id)",
+        "name": "conversations_pkey",
+        "schema": "public",
+        "table": "conversations",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (char_length(title) <= 160)",
+        "name": "conversations_title_length",
+        "schema": "public",
+        "table": "conversations",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (btrim(title) <> ''::text)",
+        "name": "conversations_title_not_blank",
+        "schema": "public",
+        "table": "conversations",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "FOREIGN KEY (user_id) REFERENCES profiles(id) ON DELETE CASCADE",
+        "name": "conversations_user_id_fkey",
+        "schema": "public",
+        "table": "conversations",
+        "type": "f",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (error_code ~ '^[a-z0-9][a-z0-9_:-]{0,79}$'::text)",
+        "name": "integration_failure_diagnostics_error_code_format",
+        "schema": "public",
+        "table": "integration_failure_diagnostics",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (btrim(function_slug) <> ''::text)",
+        "name": "integration_failure_diagnostics_function_slug_not_blank",
+        "schema": "public",
+        "table": "integration_failure_diagnostics",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (btrim(function_version) <> ''::text)",
+        "name": "integration_failure_diagnostics_function_version_not_blank",
+        "schema": "public",
+        "table": "integration_failure_diagnostics",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (btrim(operation) <> ''::text)",
+        "name": "integration_failure_diagnostics_operation_not_blank",
+        "schema": "public",
+        "table": "integration_failure_diagnostics",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (period_start IS NULL OR period_end IS NULL OR period_end >= period_start)",
+        "name": "integration_failure_diagnostics_period_order",
+        "schema": "public",
+        "table": "integration_failure_diagnostics",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "PRIMARY KEY (id)",
+        "name": "integration_failure_diagnostics_pkey",
+        "schema": "public",
+        "table": "integration_failure_diagnostics",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (http_status >= 0 AND http_status <= 599)",
+        "name": "integration_failure_diagnostics_status_range",
+        "schema": "public",
+        "table": "integration_failure_diagnostics",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "PRIMARY KEY (id)",
+        "name": "internal_sales_spreadsheet_rows_pkey",
+        "schema": "public",
+        "table": "internal_sales_spreadsheet_rows",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "definition": "UNIQUE (source_file_name, source_sheet_name, source_row_number)",
+        "name": "internal_sales_spreadsheet_rows_source_key",
+        "schema": "public",
+        "table": "internal_sales_spreadsheet_rows",
+        "type": "u",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (btrim(manager_key) <> ''::text)",
+        "name": "manager_team_reference_manager_key_not_blank",
+        "schema": "public",
+        "table": "manager_team_reference",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (btrim(manager_name) <> ''::text)",
+        "name": "manager_team_reference_manager_name_not_blank",
+        "schema": "public",
+        "table": "manager_team_reference",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "UNIQUE (manager_key, team_key, valid_from)",
+        "name": "manager_team_reference_natural_key",
+        "schema": "public",
+        "table": "manager_team_reference",
+        "type": "u",
+        "validated": true
+      },
+      {
+        "definition": "PRIMARY KEY (id)",
+        "name": "manager_team_reference_pkey",
+        "schema": "public",
+        "table": "manager_team_reference",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (evidence_rows > 0)",
+        "name": "manager_team_reference_positive_evidence",
+        "schema": "public",
+        "table": "manager_team_reference",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (btrim(team_key) <> ''::text)",
+        "name": "manager_team_reference_team_key_not_blank",
+        "schema": "public",
+        "table": "manager_team_reference",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (btrim(team_name) <> ''::text)",
+        "name": "manager_team_reference_team_name_not_blank",
+        "schema": "public",
+        "table": "manager_team_reference",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (valid_to IS NULL OR valid_to >= valid_from)",
+        "name": "manager_team_reference_valid_period",
+        "schema": "public",
+        "table": "manager_team_reference",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (access_role = ANY (ARRAY['ceo'::text, 'cso'::text, 'cmo'::text, 'store_director'::text, 'team_manager'::text]))",
+        "name": "profiles_access_role_valid",
+        "schema": "public",
+        "table": "profiles",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "UNIQUE (email)",
+        "name": "profiles_email_key",
+        "schema": "public",
+        "table": "profiles",
+        "type": "u",
+        "validated": true
+      },
+      {
+        "definition": "FOREIGN KEY (id) REFERENCES auth.users(id) ON DELETE CASCADE",
+        "name": "profiles_id_fkey",
+        "schema": "public",
+        "table": "profiles",
+        "type": "f",
+        "validated": true
+      },
+      {
+        "definition": "PRIMARY KEY (id)",
+        "name": "profiles_pkey",
+        "schema": "public",
+        "table": "profiles",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "definition": "PRIMARY KEY (id)",
+        "name": "sales_team_reference_pkey",
+        "schema": "public",
+        "table": "sales_team_reference",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "definition": "UNIQUE (source_file_name, source_row_number)",
+        "name": "sales_team_reference_source_key",
+        "schema": "public",
+        "table": "sales_team_reference",
+        "type": "u",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (btrim(team_key) <> ''::text)",
+        "name": "teams_key_not_blank",
+        "schema": "public",
+        "table": "teams",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (btrim(team_name) <> ''::text)",
+        "name": "teams_name_not_blank",
+        "schema": "public",
+        "table": "teams",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "PRIMARY KEY (team_key)",
+        "name": "teams_pkey",
+        "schema": "public",
+        "table": "teams",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (btrim(action) <> ''::text)",
+        "name": "user_management_audit_action_not_blank",
+        "schema": "public",
+        "table": "user_management_audit",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "FOREIGN KEY (actor_user_id) REFERENCES profiles(id) ON DELETE SET NULL",
+        "name": "user_management_audit_actor_user_id_fkey",
+        "schema": "public",
+        "table": "user_management_audit",
+        "type": "f",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (jsonb_typeof(details) = 'object'::text)",
+        "name": "user_management_audit_details_object",
+        "schema": "public",
+        "table": "user_management_audit",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "PRIMARY KEY (id)",
+        "name": "user_management_audit_pkey",
+        "schema": "public",
+        "table": "user_management_audit",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "definition": "FOREIGN KEY (target_user_id) REFERENCES profiles(id) ON DELETE SET NULL",
+        "name": "user_management_audit_target_user_id_fkey",
+        "schema": "public",
+        "table": "user_management_audit",
+        "type": "f",
+        "validated": true
+      },
+      {
+        "definition": "PRIMARY KEY (id)",
+        "name": "user_roles_pkey",
+        "schema": "public",
+        "table": "user_roles",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "definition": "FOREIGN KEY (user_id) REFERENCES profiles(id) ON DELETE CASCADE",
+        "name": "user_roles_user_id_fkey_profiles",
+        "schema": "public",
+        "table": "user_roles",
+        "type": "f",
+        "validated": true
+      },
+      {
+        "definition": "UNIQUE (user_id)",
+        "name": "user_roles_user_id_key",
+        "schema": "public",
+        "table": "user_roles",
+        "type": "u",
+        "validated": true
+      },
+      {
+        "definition": "FOREIGN KEY (created_by) REFERENCES profiles(id) ON DELETE SET NULL",
+        "name": "user_team_access_created_by_fkey",
+        "schema": "public",
+        "table": "user_team_access",
+        "type": "f",
+        "validated": true
+      },
+      {
+        "definition": "PRIMARY KEY (user_id, team_key)",
+        "name": "user_team_access_pkey",
+        "schema": "public",
+        "table": "user_team_access",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "definition": "FOREIGN KEY (team_key) REFERENCES teams(team_key) ON UPDATE CASCADE",
+        "name": "user_team_access_team_key_fkey",
+        "schema": "public",
+        "table": "user_team_access",
+        "type": "f",
+        "validated": true
+      },
+      {
+        "definition": "FOREIGN KEY (user_id) REFERENCES profiles(id) ON DELETE CASCADE",
+        "name": "user_team_access_user_id_fkey",
+        "schema": "public",
+        "table": "user_team_access",
+        "type": "f",
+        "validated": true
+      },
+      {
+        "definition": "FOREIGN KEY (broker_id) REFERENCES validation.brokers(id) ON DELETE RESTRICT",
+        "name": "broker_system_identifiers_broker_id_fkey",
+        "schema": "validation",
+        "table": "broker_system_identifiers",
+        "type": "f",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (valid_to IS NULL OR valid_from IS NULL OR valid_to >= valid_from)",
+        "name": "broker_system_identifiers_check",
+        "schema": "validation",
+        "table": "broker_system_identifiers",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (length(btrim(external_id)) > 0)",
+        "name": "broker_system_identifiers_external_id_check",
+        "schema": "validation",
+        "table": "broker_system_identifiers",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "PRIMARY KEY (id)",
+        "name": "broker_system_identifiers_pkey",
+        "schema": "validation",
+        "table": "broker_system_identifiers",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (source_system = ANY (ARRAY['pipeimob'::text, 'vista'::text, 'internal'::text]))",
+        "name": "broker_system_identifiers_source_system_check",
+        "schema": "validation",
+        "table": "broker_system_identifiers",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "UNIQUE (source_system, external_id)",
+        "name": "broker_system_identifiers_source_system_external_id_key",
+        "schema": "validation",
+        "table": "broker_system_identifiers",
+        "type": "u",
+        "validated": true
+      },
+      {
+        "definition": "FOREIGN KEY (broker_id) REFERENCES validation.brokers(id) ON DELETE RESTRICT",
+        "name": "broker_team_history_broker_id_fkey",
+        "schema": "validation",
+        "table": "broker_team_history",
+        "type": "f",
+        "validated": true
+      },
+      {
+        "definition": "UNIQUE (broker_id, team_id, valid_from)",
+        "name": "broker_team_history_broker_id_team_id_valid_from_key",
+        "schema": "validation",
+        "table": "broker_team_history",
+        "type": "u",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (change_source = ANY (ARRAY['vista'::text, 'pipeimob'::text, 'administration'::text, 'import'::text]))",
+        "name": "broker_team_history_change_source_check",
+        "schema": "validation",
+        "table": "broker_team_history",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (valid_to IS NULL OR valid_to >= valid_from)",
+        "name": "broker_team_history_check",
+        "schema": "validation",
+        "table": "broker_team_history",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "PRIMARY KEY (id)",
+        "name": "broker_team_history_pkey",
+        "schema": "validation",
+        "table": "broker_team_history",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "definition": "FOREIGN KEY (team_id) REFERENCES validation.teams(id) ON DELETE RESTRICT",
+        "name": "broker_team_history_team_id_fkey",
+        "schema": "validation",
+        "table": "broker_team_history",
+        "type": "f",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (length(btrim(display_name)) > 0)",
+        "name": "brokers_display_name_check",
+        "schema": "validation",
+        "table": "brokers",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (length(btrim(normalized_name)) > 0)",
+        "name": "brokers_normalized_name_check",
+        "schema": "validation",
+        "table": "brokers",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "UNIQUE (normalized_name)",
+        "name": "brokers_normalized_name_key",
+        "schema": "validation",
+        "table": "brokers",
+        "type": "u",
+        "validated": true
+      },
+      {
+        "definition": "PRIMARY KEY (id)",
+        "name": "brokers_pkey",
+        "schema": "validation",
+        "table": "brokers",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "definition": "FOREIGN KEY (commercial_broker_id) REFERENCES validation.brokers(id) ON DELETE RESTRICT",
+        "name": "consolidated_sales_commercial_broker_id_fkey",
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "type": "f",
+        "validated": true
+      },
+      {
+        "definition": "FOREIGN KEY (fiscal_broker_id) REFERENCES validation.brokers(id) ON DELETE RESTRICT",
+        "name": "consolidated_sales_fiscal_broker_id_fkey",
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "type": "f",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (match_confidence IS NULL OR match_confidence >= 0::numeric AND match_confidence <= 1::numeric)",
+        "name": "consolidated_sales_match_confidence_check",
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (match_method = ANY (ARRAY['vista_deal_id'::text, 'client_property'::text, 'property_value_date'::text, 'property_client_assisted'::text, 'manual'::text, 'unmatched'::text]))",
+        "name": "consolidated_sales_match_method_check",
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (official_value IS NULL OR official_value >= 0::numeric)",
+        "name": "consolidated_sales_official_value_check",
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "FOREIGN KEY (pipeimob_transaction_id) REFERENCES validation.pipeimob_sales(transaction_id) ON DELETE RESTRICT",
+        "name": "consolidated_sales_pipeimob_transaction_id_fkey",
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "type": "f",
+        "validated": true
+      },
+      {
+        "definition": "UNIQUE (pipeimob_transaction_id)",
+        "name": "consolidated_sales_pipeimob_transaction_id_key",
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "type": "u",
+        "validated": true
+      },
+      {
+        "definition": "PRIMARY KEY (id)",
+        "name": "consolidated_sales_pkey",
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (reconciliation_status = ANY (ARRAY['CONCILIADO'::text, 'PIPEIMOB_SEM_GANHO_VISTA'::text, 'VISTA_SEM_CONTRATO_PIPEIMOB'::text, 'DIVERGENCIA_VALOR'::text, 'DIVERGENCIA_DATA'::text, 'DIVERGENCIA_CORRETOR'::text, 'SEM_VINCULO_AUTOMATICO'::text, 'CANCELADO_OU_REVERTIDO'::text, 'DADO_FONTE_INCOMPLETO'::text]))",
+        "name": "consolidated_sales_reconciliation_status_check",
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "FOREIGN KEY (team_at_sale_id) REFERENCES validation.teams(id) ON DELETE RESTRICT",
+        "name": "consolidated_sales_team_at_sale_id_fkey",
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "type": "f",
+        "validated": true
+      },
+      {
+        "definition": "FOREIGN KEY (vista_deal_id) REFERENCES validation.vista_gains(deal_id) ON DELETE RESTRICT",
+        "name": "consolidated_sales_vista_deal_id_fkey",
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "type": "f",
+        "validated": true
+      },
+      {
+        "definition": "UNIQUE (vista_deal_id)",
+        "name": "consolidated_sales_vista_deal_id_key",
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "type": "u",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (vista_value IS NULL OR vista_value >= 0::numeric)",
+        "name": "consolidated_sales_vista_value_check",
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (contract_value >= 0::numeric)",
+        "name": "pipeimob_sales_contract_value_check",
+        "schema": "validation",
+        "table": "pipeimob_sales",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "FOREIGN KEY (fiscal_broker_id) REFERENCES validation.brokers(id) ON DELETE RESTRICT",
+        "name": "pipeimob_sales_fiscal_broker_id_fkey",
+        "schema": "validation",
+        "table": "pipeimob_sales",
+        "type": "f",
+        "validated": true
+      },
+      {
+        "definition": "PRIMARY KEY (transaction_id)",
+        "name": "pipeimob_sales_pkey",
+        "schema": "validation",
+        "table": "pipeimob_sales",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (length(btrim(property_code)) > 0)",
+        "name": "pipeimob_sales_property_code_check",
+        "schema": "validation",
+        "table": "pipeimob_sales",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (sale_status = ANY (ARRAY['active'::text, 'cancelled'::text, 'reversed'::text]))",
+        "name": "pipeimob_sales_sale_status_check",
+        "schema": "validation",
+        "table": "pipeimob_sales",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "FOREIGN KEY (source_run_id) REFERENCES validation.source_ingestion_runs(id) ON DELETE RESTRICT",
+        "name": "pipeimob_sales_source_run_id_fkey",
+        "schema": "validation",
+        "table": "pipeimob_sales",
+        "type": "f",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (length(btrim(transaction_id)) > 0)",
+        "name": "pipeimob_sales_transaction_id_check",
+        "schema": "validation",
+        "table": "pipeimob_sales",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "FOREIGN KEY (consolidated_sale_id) REFERENCES validation.consolidated_sales(id) ON DELETE RESTRICT",
+        "name": "reconciliation_events_consolidated_sale_id_fkey",
+        "schema": "validation",
+        "table": "reconciliation_events",
+        "type": "f",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (event_type = ANY (ARRAY['created'::text, 'reconciled'::text, 'status_changed'::text, 'manually_reviewed'::text, 'cancelled'::text, 'reversed'::text]))",
+        "name": "reconciliation_events_event_type_check",
+        "schema": "validation",
+        "table": "reconciliation_events",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "PRIMARY KEY (id)",
+        "name": "reconciliation_events_pkey",
+        "schema": "validation",
+        "table": "reconciliation_events",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (import_status = ANY (ARRAY['started'::text, 'completed'::text, 'failed'::text, 'rolled_back'::text]))",
+        "name": "source_ingestion_runs_import_status_check",
+        "schema": "validation",
+        "table": "source_ingestion_runs",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "PRIMARY KEY (id)",
+        "name": "source_ingestion_runs_pkey",
+        "schema": "validation",
+        "table": "source_ingestion_runs",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (row_count >= 0)",
+        "name": "source_ingestion_runs_row_count_check",
+        "schema": "validation",
+        "table": "source_ingestion_runs",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (source_system = ANY (ARRAY['pipeimob'::text, 'vista'::text, 'manual'::text]))",
+        "name": "source_ingestion_runs_source_system_check",
+        "schema": "validation",
+        "table": "source_ingestion_runs",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "UNIQUE (source_system, source_sha256)",
+        "name": "source_ingestion_runs_source_system_source_sha256_key",
+        "schema": "validation",
+        "table": "source_ingestion_runs",
+        "type": "u",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (valid_to IS NULL OR valid_from IS NULL OR valid_to >= valid_from)",
+        "name": "teams_check",
+        "schema": "validation",
+        "table": "teams",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (length(btrim(display_name)) > 0)",
+        "name": "teams_display_name_check",
+        "schema": "validation",
+        "table": "teams",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "PRIMARY KEY (id)",
+        "name": "teams_pkey",
+        "schema": "validation",
+        "table": "teams",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (length(btrim(stable_code)) > 0)",
+        "name": "teams_stable_code_check",
+        "schema": "validation",
+        "table": "teams",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "UNIQUE (stable_code)",
+        "name": "teams_stable_code_key",
+        "schema": "validation",
+        "table": "teams",
+        "type": "u",
+        "validated": true
+      },
+      {
+        "definition": "FOREIGN KEY (commercial_broker_id) REFERENCES validation.brokers(id) ON DELETE RESTRICT",
+        "name": "vista_gains_commercial_broker_id_fkey",
+        "schema": "validation",
+        "table": "vista_gains",
+        "type": "f",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (crm_status = 'GANHO'::text)",
+        "name": "vista_gains_crm_status_check",
+        "schema": "validation",
+        "table": "vista_gains",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (length(btrim(deal_id)) > 0)",
+        "name": "vista_gains_deal_id_check",
+        "schema": "validation",
+        "table": "vista_gains",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "CHECK (deal_value IS NULL OR deal_value >= 0::numeric)",
+        "name": "vista_gains_deal_value_check",
+        "schema": "validation",
+        "table": "vista_gains",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "definition": "PRIMARY KEY (deal_id)",
+        "name": "vista_gains_pkey",
+        "schema": "validation",
+        "table": "vista_gains",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "definition": "FOREIGN KEY (source_run_id) REFERENCES validation.source_ingestion_runs(id) ON DELETE RESTRICT",
+        "name": "vista_gains_source_run_id_fkey",
+        "schema": "validation",
+        "table": "vista_gains",
+        "type": "f",
+        "validated": true
+      }
+    ],
+    "indexes": [
+      {
+        "definition": "CREATE INDEX conversation_messages_conversation_cursor_idx ON public.conversation_messages USING btree (conversation_id, id)",
+        "name": "conversation_messages_conversation_cursor_idx",
+        "primary": false,
+        "ready": true,
+        "schema": "public",
+        "table": "conversation_messages",
+        "unique": false,
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX conversation_messages_pkey ON public.conversation_messages USING btree (id)",
+        "name": "conversation_messages_pkey",
+        "primary": true,
+        "ready": true,
+        "schema": "public",
+        "table": "conversation_messages",
+        "unique": true,
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX conversation_messages_request_role_uidx ON public.conversation_messages USING btree (conversation_id, role, request_id) WHERE (request_id IS NOT NULL)",
+        "name": "conversation_messages_request_role_uidx",
+        "primary": false,
+        "ready": true,
+        "schema": "public",
+        "table": "conversation_messages",
+        "unique": true,
+        "valid": true
+      },
+      {
+        "definition": "CREATE INDEX conversation_messages_user_id_idx ON public.conversation_messages USING btree (user_id)",
+        "name": "conversation_messages_user_id_idx",
+        "primary": false,
+        "ready": true,
+        "schema": "public",
+        "table": "conversation_messages",
+        "unique": false,
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX conversations_pkey ON public.conversations USING btree (id)",
+        "name": "conversations_pkey",
+        "primary": true,
+        "ready": true,
+        "schema": "public",
+        "table": "conversations",
+        "unique": true,
+        "valid": true
+      },
+      {
+        "definition": "CREATE INDEX conversations_user_updated_idx ON public.conversations USING btree (user_id, updated_at DESC, id)",
+        "name": "conversations_user_updated_idx",
+        "primary": false,
+        "ready": true,
+        "schema": "public",
+        "table": "conversations",
+        "unique": false,
+        "valid": true
+      },
+      {
+        "definition": "CREATE INDEX integration_failure_diagnostics_operation_recent_idx ON public.integration_failure_diagnostics USING btree (operation, occurred_at DESC)",
+        "name": "integration_failure_diagnostics_operation_recent_idx",
+        "primary": false,
+        "ready": true,
+        "schema": "public",
+        "table": "integration_failure_diagnostics",
+        "unique": false,
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX integration_failure_diagnostics_pkey ON public.integration_failure_diagnostics USING btree (id)",
+        "name": "integration_failure_diagnostics_pkey",
+        "primary": true,
+        "ready": true,
+        "schema": "public",
+        "table": "integration_failure_diagnostics",
+        "unique": true,
+        "valid": true
+      },
+      {
+        "definition": "CREATE INDEX integration_failure_diagnostics_recent_idx ON public.integration_failure_diagnostics USING btree (occurred_at DESC)",
+        "name": "integration_failure_diagnostics_recent_idx",
+        "primary": false,
+        "ready": true,
+        "schema": "public",
+        "table": "integration_failure_diagnostics",
+        "unique": false,
+        "valid": true
+      },
+      {
+        "definition": "CREATE INDEX internal_sales_spreadsheet_rows_broker_date_idx ON public.internal_sales_spreadsheet_rows USING btree (broker_key, sale_date)",
+        "name": "internal_sales_spreadsheet_rows_broker_date_idx",
+        "primary": false,
+        "ready": true,
+        "schema": "public",
+        "table": "internal_sales_spreadsheet_rows",
+        "unique": false,
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX internal_sales_spreadsheet_rows_pkey ON public.internal_sales_spreadsheet_rows USING btree (id)",
+        "name": "internal_sales_spreadsheet_rows_pkey",
+        "primary": true,
+        "ready": true,
+        "schema": "public",
+        "table": "internal_sales_spreadsheet_rows",
+        "unique": true,
+        "valid": true
+      },
+      {
+        "definition": "CREATE INDEX internal_sales_spreadsheet_rows_property_date_idx ON public.internal_sales_spreadsheet_rows USING btree (property_code, sale_date)",
+        "name": "internal_sales_spreadsheet_rows_property_date_idx",
+        "primary": false,
+        "ready": true,
+        "schema": "public",
+        "table": "internal_sales_spreadsheet_rows",
+        "unique": false,
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX internal_sales_spreadsheet_rows_source_key ON public.internal_sales_spreadsheet_rows USING btree (source_file_name, source_sheet_name, source_row_number)",
+        "name": "internal_sales_spreadsheet_rows_source_key",
+        "primary": false,
+        "ready": true,
+        "schema": "public",
+        "table": "internal_sales_spreadsheet_rows",
+        "unique": true,
+        "valid": true
+      },
+      {
+        "definition": "CREATE INDEX internal_sales_spreadsheet_rows_team_date_idx ON public.internal_sales_spreadsheet_rows USING btree (team_key, sale_date)",
+        "name": "internal_sales_spreadsheet_rows_team_date_idx",
+        "primary": false,
+        "ready": true,
+        "schema": "public",
+        "table": "internal_sales_spreadsheet_rows",
+        "unique": false,
+        "valid": true
+      },
+      {
+        "definition": "CREATE INDEX manager_team_reference_lookup_idx ON public.manager_team_reference USING btree (manager_key, valid_from DESC, valid_to)",
+        "name": "manager_team_reference_lookup_idx",
+        "primary": false,
+        "ready": true,
+        "schema": "public",
+        "table": "manager_team_reference",
+        "unique": false,
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX manager_team_reference_natural_key ON public.manager_team_reference USING btree (manager_key, team_key, valid_from)",
+        "name": "manager_team_reference_natural_key",
+        "primary": false,
+        "ready": true,
+        "schema": "public",
+        "table": "manager_team_reference",
+        "unique": true,
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX manager_team_reference_pkey ON public.manager_team_reference USING btree (id)",
+        "name": "manager_team_reference_pkey",
+        "primary": true,
+        "ready": true,
+        "schema": "public",
+        "table": "manager_team_reference",
+        "unique": true,
+        "valid": true
+      },
+      {
+        "definition": "CREATE INDEX manager_team_reference_source_coverage_idx ON public.manager_team_reference USING btree (source_updated_through DESC)",
+        "name": "manager_team_reference_source_coverage_idx",
+        "primary": false,
+        "ready": true,
+        "schema": "public",
+        "table": "manager_team_reference",
+        "unique": false,
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX profiles_email_key ON public.profiles USING btree (email)",
+        "name": "profiles_email_key",
+        "primary": false,
+        "ready": true,
+        "schema": "public",
+        "table": "profiles",
+        "unique": true,
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX profiles_pkey ON public.profiles USING btree (id)",
+        "name": "profiles_pkey",
+        "primary": true,
+        "ready": true,
+        "schema": "public",
+        "table": "profiles",
+        "unique": true,
+        "valid": true
+      },
+      {
+        "definition": "CREATE INDEX sales_team_reference_lookup_idx ON public.sales_team_reference USING btree (broker_key, sale_date, property_code)",
+        "name": "sales_team_reference_lookup_idx",
+        "primary": false,
+        "ready": true,
+        "schema": "public",
+        "table": "sales_team_reference",
+        "unique": false,
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX sales_team_reference_pkey ON public.sales_team_reference USING btree (id)",
+        "name": "sales_team_reference_pkey",
+        "primary": true,
+        "ready": true,
+        "schema": "public",
+        "table": "sales_team_reference",
+        "unique": true,
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX sales_team_reference_source_key ON public.sales_team_reference USING btree (source_file_name, source_row_number)",
+        "name": "sales_team_reference_source_key",
+        "primary": false,
+        "ready": true,
+        "schema": "public",
+        "table": "sales_team_reference",
+        "unique": true,
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX teams_pkey ON public.teams USING btree (team_key)",
+        "name": "teams_pkey",
+        "primary": true,
+        "ready": true,
+        "schema": "public",
+        "table": "teams",
+        "unique": true,
+        "valid": true
+      },
+      {
+        "definition": "CREATE INDEX user_management_audit_actor_idx ON public.user_management_audit USING btree (actor_user_id, created_at DESC)",
+        "name": "user_management_audit_actor_idx",
+        "primary": false,
+        "ready": true,
+        "schema": "public",
+        "table": "user_management_audit",
+        "unique": false,
+        "valid": true
+      },
+      {
+        "definition": "CREATE INDEX user_management_audit_created_idx ON public.user_management_audit USING btree (created_at DESC, id)",
+        "name": "user_management_audit_created_idx",
+        "primary": false,
+        "ready": true,
+        "schema": "public",
+        "table": "user_management_audit",
+        "unique": false,
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX user_management_audit_pkey ON public.user_management_audit USING btree (id)",
+        "name": "user_management_audit_pkey",
+        "primary": true,
+        "ready": true,
+        "schema": "public",
+        "table": "user_management_audit",
+        "unique": true,
+        "valid": true
+      },
+      {
+        "definition": "CREATE INDEX user_management_audit_target_idx ON public.user_management_audit USING btree (target_user_id, created_at DESC)",
+        "name": "user_management_audit_target_idx",
+        "primary": false,
+        "ready": true,
+        "schema": "public",
+        "table": "user_management_audit",
+        "unique": false,
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX user_roles_pkey ON public.user_roles USING btree (id)",
+        "name": "user_roles_pkey",
+        "primary": true,
+        "ready": true,
+        "schema": "public",
+        "table": "user_roles",
+        "unique": true,
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX user_roles_user_id_key ON public.user_roles USING btree (user_id)",
+        "name": "user_roles_user_id_key",
+        "primary": false,
+        "ready": true,
+        "schema": "public",
+        "table": "user_roles",
+        "unique": true,
+        "valid": true
+      },
+      {
+        "definition": "CREATE INDEX user_team_access_created_by_idx ON public.user_team_access USING btree (created_by) WHERE (created_by IS NOT NULL)",
+        "name": "user_team_access_created_by_idx",
+        "primary": false,
+        "ready": true,
+        "schema": "public",
+        "table": "user_team_access",
+        "unique": false,
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX user_team_access_pkey ON public.user_team_access USING btree (user_id, team_key)",
+        "name": "user_team_access_pkey",
+        "primary": true,
+        "ready": true,
+        "schema": "public",
+        "table": "user_team_access",
+        "unique": true,
+        "valid": true
+      },
+      {
+        "definition": "CREATE INDEX user_team_access_team_key_idx ON public.user_team_access USING btree (team_key, user_id)",
+        "name": "user_team_access_team_key_idx",
+        "primary": false,
+        "ready": true,
+        "schema": "public",
+        "table": "user_team_access",
+        "unique": false,
+        "valid": true
+      },
+      {
+        "definition": "CREATE INDEX broker_system_identifiers_broker_idx ON validation.broker_system_identifiers USING btree (broker_id)",
+        "name": "broker_system_identifiers_broker_idx",
+        "primary": false,
+        "ready": true,
+        "schema": "validation",
+        "table": "broker_system_identifiers",
+        "unique": false,
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX broker_system_identifiers_pkey ON validation.broker_system_identifiers USING btree (id)",
+        "name": "broker_system_identifiers_pkey",
+        "primary": true,
+        "ready": true,
+        "schema": "validation",
+        "table": "broker_system_identifiers",
+        "unique": true,
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX broker_system_identifiers_source_system_external_id_key ON validation.broker_system_identifiers USING btree (source_system, external_id)",
+        "name": "broker_system_identifiers_source_system_external_id_key",
+        "primary": false,
+        "ready": true,
+        "schema": "validation",
+        "table": "broker_system_identifiers",
+        "unique": true,
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX broker_team_history_broker_id_team_id_valid_from_key ON validation.broker_team_history USING btree (broker_id, team_id, valid_from)",
+        "name": "broker_team_history_broker_id_team_id_valid_from_key",
+        "primary": false,
+        "ready": true,
+        "schema": "validation",
+        "table": "broker_team_history",
+        "unique": true,
+        "valid": true
+      },
+      {
+        "definition": "CREATE INDEX broker_team_history_broker_period_idx ON validation.broker_team_history USING btree (broker_id, valid_from, valid_to)",
+        "name": "broker_team_history_broker_period_idx",
+        "primary": false,
+        "ready": true,
+        "schema": "validation",
+        "table": "broker_team_history",
+        "unique": false,
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX broker_team_history_pkey ON validation.broker_team_history USING btree (id)",
+        "name": "broker_team_history_pkey",
+        "primary": true,
+        "ready": true,
+        "schema": "validation",
+        "table": "broker_team_history",
+        "unique": true,
+        "valid": true
+      },
+      {
+        "definition": "CREATE INDEX broker_team_history_team_idx ON validation.broker_team_history USING btree (team_id)",
+        "name": "broker_team_history_team_idx",
+        "primary": false,
+        "ready": true,
+        "schema": "validation",
+        "table": "broker_team_history",
+        "unique": false,
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX brokers_normalized_name_key ON validation.brokers USING btree (normalized_name)",
+        "name": "brokers_normalized_name_key",
+        "primary": false,
+        "ready": true,
+        "schema": "validation",
+        "table": "brokers",
+        "unique": true,
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX brokers_pkey ON validation.brokers USING btree (id)",
+        "name": "brokers_pkey",
+        "primary": true,
+        "ready": true,
+        "schema": "validation",
+        "table": "brokers",
+        "unique": true,
+        "valid": true
+      },
+      {
+        "definition": "CREATE INDEX consolidated_sales_commercial_broker_period_idx ON validation.consolidated_sales USING btree (commercial_broker_id, official_sale_date)",
+        "name": "consolidated_sales_commercial_broker_period_idx",
+        "primary": false,
+        "ready": true,
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "unique": false,
+        "valid": true
+      },
+      {
+        "definition": "CREATE INDEX consolidated_sales_fiscal_broker_period_idx ON validation.consolidated_sales USING btree (fiscal_broker_id, official_sale_date DESC)",
+        "name": "consolidated_sales_fiscal_broker_period_idx",
+        "primary": false,
+        "ready": true,
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "unique": false,
+        "valid": true
+      },
+      {
+        "definition": "CREATE INDEX consolidated_sales_pending_idx ON validation.consolidated_sales USING btree (reconciliation_status, official_sale_date) WHERE (reconciliation_status <> 'CONCILIADO'::text)",
+        "name": "consolidated_sales_pending_idx",
+        "primary": false,
+        "ready": true,
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "unique": false,
+        "valid": true
+      },
+      {
+        "definition": "CREATE INDEX consolidated_sales_period_status_idx ON validation.consolidated_sales USING btree (official_sale_date, reconciliation_status)",
+        "name": "consolidated_sales_period_status_idx",
+        "primary": false,
+        "ready": true,
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "unique": false,
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX consolidated_sales_pipeimob_transaction_id_key ON validation.consolidated_sales USING btree (pipeimob_transaction_id)",
+        "name": "consolidated_sales_pipeimob_transaction_id_key",
+        "primary": false,
+        "ready": true,
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "unique": true,
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX consolidated_sales_pkey ON validation.consolidated_sales USING btree (id)",
+        "name": "consolidated_sales_pkey",
+        "primary": true,
+        "ready": true,
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "unique": true,
+        "valid": true
+      },
+      {
+        "definition": "CREATE INDEX consolidated_sales_team_period_idx ON validation.consolidated_sales USING btree (team_at_sale_id, official_sale_date)",
+        "name": "consolidated_sales_team_period_idx",
+        "primary": false,
+        "ready": true,
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "unique": false,
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX consolidated_sales_vista_deal_id_key ON validation.consolidated_sales USING btree (vista_deal_id)",
+        "name": "consolidated_sales_vista_deal_id_key",
+        "primary": false,
+        "ready": true,
+        "schema": "validation",
+        "table": "consolidated_sales",
+        "unique": true,
+        "valid": true
+      },
+      {
+        "definition": "CREATE INDEX pipeimob_sales_fiscal_broker_idx ON validation.pipeimob_sales USING btree (fiscal_broker_id)",
+        "name": "pipeimob_sales_fiscal_broker_idx",
+        "primary": false,
+        "ready": true,
+        "schema": "validation",
+        "table": "pipeimob_sales",
+        "unique": false,
+        "valid": true
+      },
+      {
+        "definition": "CREATE INDEX pipeimob_sales_match_idx ON validation.pipeimob_sales USING btree (property_code, contract_value, signature_date)",
+        "name": "pipeimob_sales_match_idx",
+        "primary": false,
+        "ready": true,
+        "schema": "validation",
+        "table": "pipeimob_sales",
+        "unique": false,
+        "valid": true
+      },
+      {
+        "definition": "CREATE INDEX pipeimob_sales_period_idx ON validation.pipeimob_sales USING btree (signature_date, transaction_id)",
+        "name": "pipeimob_sales_period_idx",
+        "primary": false,
+        "ready": true,
+        "schema": "validation",
+        "table": "pipeimob_sales",
+        "unique": false,
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX pipeimob_sales_pkey ON validation.pipeimob_sales USING btree (transaction_id)",
+        "name": "pipeimob_sales_pkey",
+        "primary": true,
+        "ready": true,
+        "schema": "validation",
+        "table": "pipeimob_sales",
+        "unique": true,
+        "valid": true
+      },
+      {
+        "definition": "CREATE INDEX pipeimob_sales_source_run_idx ON validation.pipeimob_sales USING btree (source_run_id)",
+        "name": "pipeimob_sales_source_run_idx",
+        "primary": false,
+        "ready": true,
+        "schema": "validation",
+        "table": "pipeimob_sales",
+        "unique": false,
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX reconciliation_events_pkey ON validation.reconciliation_events USING btree (id)",
+        "name": "reconciliation_events_pkey",
+        "primary": true,
+        "ready": true,
+        "schema": "validation",
+        "table": "reconciliation_events",
+        "unique": true,
+        "valid": true
+      },
+      {
+        "definition": "CREATE INDEX reconciliation_events_sale_idx ON validation.reconciliation_events USING btree (consolidated_sale_id, changed_at)",
+        "name": "reconciliation_events_sale_idx",
+        "primary": false,
+        "ready": true,
+        "schema": "validation",
+        "table": "reconciliation_events",
+        "unique": false,
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX source_ingestion_runs_pkey ON validation.source_ingestion_runs USING btree (id)",
+        "name": "source_ingestion_runs_pkey",
+        "primary": true,
+        "ready": true,
+        "schema": "validation",
+        "table": "source_ingestion_runs",
+        "unique": true,
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX source_ingestion_runs_source_system_source_sha256_key ON validation.source_ingestion_runs USING btree (source_system, source_sha256)",
+        "name": "source_ingestion_runs_source_system_source_sha256_key",
+        "primary": false,
+        "ready": true,
+        "schema": "validation",
+        "table": "source_ingestion_runs",
+        "unique": true,
+        "valid": true
+      },
+      {
+        "definition": "CREATE INDEX source_runs_period_idx ON validation.source_ingestion_runs USING btree (source_system, period_start, period_end)",
+        "name": "source_runs_period_idx",
+        "primary": false,
+        "ready": true,
+        "schema": "validation",
+        "table": "source_ingestion_runs",
+        "unique": false,
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX teams_pkey ON validation.teams USING btree (id)",
+        "name": "teams_pkey",
+        "primary": true,
+        "ready": true,
+        "schema": "validation",
+        "table": "teams",
+        "unique": true,
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX teams_stable_code_key ON validation.teams USING btree (stable_code)",
+        "name": "teams_stable_code_key",
+        "primary": false,
+        "ready": true,
+        "schema": "validation",
+        "table": "teams",
+        "unique": true,
+        "valid": true
+      },
+      {
+        "definition": "CREATE INDEX vista_gains_commercial_broker_idx ON validation.vista_gains USING btree (commercial_broker_id)",
+        "name": "vista_gains_commercial_broker_idx",
+        "primary": false,
+        "ready": true,
+        "schema": "validation",
+        "table": "vista_gains",
+        "unique": false,
+        "valid": true
+      },
+      {
+        "definition": "CREATE INDEX vista_gains_match_idx ON validation.vista_gains USING btree (property_code, deal_value, gain_date)",
+        "name": "vista_gains_match_idx",
+        "primary": false,
+        "ready": true,
+        "schema": "validation",
+        "table": "vista_gains",
+        "unique": false,
+        "valid": true
+      },
+      {
+        "definition": "CREATE INDEX vista_gains_period_idx ON validation.vista_gains USING btree (gain_date, deal_id)",
+        "name": "vista_gains_period_idx",
+        "primary": false,
+        "ready": true,
+        "schema": "validation",
+        "table": "vista_gains",
+        "unique": false,
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX vista_gains_pkey ON validation.vista_gains USING btree (deal_id)",
+        "name": "vista_gains_pkey",
+        "primary": true,
+        "ready": true,
+        "schema": "validation",
+        "table": "vista_gains",
+        "unique": true,
+        "valid": true
+      },
+      {
+        "definition": "CREATE INDEX vista_gains_source_run_idx ON validation.vista_gains USING btree (source_run_id)",
+        "name": "vista_gains_source_run_idx",
+        "primary": false,
+        "ready": true,
+        "schema": "validation",
+        "table": "vista_gains",
+        "unique": false,
+        "valid": true
+      }
+    ],
+    "enum_types": [
+      {
+        "enum_values": [
+          "super_admin",
+          "viewer"
+        ],
+        "kind": "e",
+        "name": "app_role",
+        "schema": "public"
+      },
+      {
+        "enum_values": [
+          "invited",
+          "active",
+          "disabled"
+        ],
+        "kind": "e",
+        "name": "profile_status",
+        "schema": "public"
+      }
+    ],
+    "functions": [
+      {
+        "definition_md5": "97be97239ce124f1f08b12364dc6900a",
+        "identity_arguments": "",
+        "language": "sql",
+        "name": "current_user_is_executive",
+        "result": "boolean",
+        "schema": "private",
+        "security_definer": true,
+        "settings": [
+          "search_path=\"\""
+        ],
+        "volatility": "s"
+      },
+      {
+        "definition_md5": "0059a385259e52fbcc8d8fb936c9c232",
+        "identity_arguments": "",
+        "language": "sql",
+        "name": "get_my_role",
+        "result": "app_role",
+        "schema": "public",
+        "security_definer": true,
+        "settings": [
+          "search_path=public, pg_temp"
+        ],
+        "volatility": "s"
+      },
+      {
+        "definition_md5": "bc043d2bfbacbec0c8052d5cc15c1bbb",
+        "identity_arguments": "p_start date, p_end date",
+        "language": "plpgsql",
+        "name": "get_validation_sales_reconciliation",
+        "result": "jsonb",
+        "schema": "public",
+        "security_definer": true,
+        "settings": [
+          "search_path=\"\""
+        ],
+        "volatility": "s"
+      },
+      {
+        "definition_md5": "ed9459e102324abfd3b55294a7268364",
+        "identity_arguments": "_user_id uuid, _role app_role",
+        "language": "sql",
+        "name": "has_role",
+        "result": "boolean",
+        "schema": "public",
+        "security_definer": true,
+        "settings": [
+          "search_path=public, pg_temp"
+        ],
+        "volatility": "s"
+      },
+      {
+        "definition_md5": "accdb9e6b127cf316f6a556ce3d42e44",
+        "identity_arguments": "_user_id uuid",
+        "language": "sql",
+        "name": "is_active_super_admin",
+        "result": "boolean",
+        "schema": "public",
+        "security_definer": true,
+        "settings": [
+          "search_path=public, pg_temp"
+        ],
+        "volatility": "s"
+      },
+      {
+        "definition_md5": "c33ee13eb967fbe2d15f58035d89ea5a",
+        "identity_arguments": "_user_id uuid",
+        "language": "sql",
+        "name": "is_active_user",
+        "result": "boolean",
+        "schema": "public",
+        "security_definer": true,
+        "settings": [
+          "search_path=public, pg_temp"
+        ],
+        "volatility": "s"
+      },
+      {
+        "definition_md5": "279adc25190952f43fe833e740aafa68",
+        "identity_arguments": "",
+        "language": "sql",
+        "name": "is_super_admin",
+        "result": "boolean",
+        "schema": "public",
+        "security_definer": true,
+        "settings": [
+          "search_path=public, pg_temp"
+        ],
+        "volatility": "s"
+      },
+      {
+        "definition_md5": "5f3dc4703f0241c1ebbb97a3442ab479",
+        "identity_arguments": "",
+        "language": "plpgsql",
+        "name": "sync_validation_user_access",
+        "result": "trigger",
+        "schema": "public",
+        "security_definer": true,
+        "settings": [
+          "search_path=public, pg_temp"
+        ],
+        "volatility": "v"
+      }
+    ],
+    "auth_triggers": [
+      {
+        "definition": "CREATE TRIGGER on_validation_auth_user_access AFTER INSERT OR UPDATE OF email, email_confirmed_at ON auth.users FOR EACH ROW EXECUTE FUNCTION sync_validation_user_access()",
+        "enabled": "O",
+        "function": "sync_validation_user_access",
+        "function_schema": "public",
+        "name": "on_validation_auth_user_access",
+        "table": "users",
+        "table_schema": "auth"
+      }
+    ],
+    "policies": [
+      {
+        "check_md5": null,
+        "command": "DELETE",
+        "name": "conversation_messages_delete_own",
+        "permissive": "PERMISSIVE",
+        "roles": [
+          "authenticated"
+        ],
+        "schema": "public",
+        "table": "conversation_messages",
+        "using_md5": "8b3013ecee74657cd7b5364d22855e1a"
+      },
+      {
+        "check_md5": "8b3013ecee74657cd7b5364d22855e1a",
+        "command": "INSERT",
+        "name": "conversation_messages_insert_own",
+        "permissive": "PERMISSIVE",
+        "roles": [
+          "authenticated"
+        ],
+        "schema": "public",
+        "table": "conversation_messages",
+        "using_md5": null
+      },
+      {
+        "check_md5": null,
+        "command": "SELECT",
+        "name": "conversation_messages_select_own",
+        "permissive": "PERMISSIVE",
+        "roles": [
+          "authenticated"
+        ],
+        "schema": "public",
+        "table": "conversation_messages",
+        "using_md5": "8b3013ecee74657cd7b5364d22855e1a"
+      },
+      {
+        "check_md5": null,
+        "command": "DELETE",
+        "name": "conversations_delete_own",
+        "permissive": "PERMISSIVE",
+        "roles": [
+          "authenticated"
+        ],
+        "schema": "public",
+        "table": "conversations",
+        "using_md5": "6a6b7c2a3a520c44377894171204e8d2"
+      },
+      {
+        "check_md5": "6a6b7c2a3a520c44377894171204e8d2",
+        "command": "INSERT",
+        "name": "conversations_insert_own",
+        "permissive": "PERMISSIVE",
+        "roles": [
+          "authenticated"
+        ],
+        "schema": "public",
+        "table": "conversations",
+        "using_md5": null
+      },
+      {
+        "check_md5": null,
+        "command": "SELECT",
+        "name": "conversations_select_own",
+        "permissive": "PERMISSIVE",
+        "roles": [
+          "authenticated"
+        ],
+        "schema": "public",
+        "table": "conversations",
+        "using_md5": "6a6b7c2a3a520c44377894171204e8d2"
+      },
+      {
+        "check_md5": "6a6b7c2a3a520c44377894171204e8d2",
+        "command": "UPDATE",
+        "name": "conversations_update_own",
+        "permissive": "PERMISSIVE",
+        "roles": [
+          "authenticated"
+        ],
+        "schema": "public",
+        "table": "conversations",
+        "using_md5": "6a6b7c2a3a520c44377894171204e8d2"
+      },
+      {
+        "check_md5": "f52c09423480546589242067e6d323f7",
+        "command": "INSERT",
+        "name": "integration_failure_diagnostics_insert_authorized",
+        "permissive": "PERMISSIVE",
+        "roles": [
+          "authenticated"
+        ],
+        "schema": "public",
+        "table": "integration_failure_diagnostics",
+        "using_md5": null
+      },
+      {
+        "check_md5": null,
+        "command": "SELECT",
+        "name": "integration_failure_diagnostics_select_authorized",
+        "permissive": "PERMISSIVE",
+        "roles": [
+          "authenticated"
+        ],
+        "schema": "public",
+        "table": "integration_failure_diagnostics",
+        "using_md5": "d4c05fdc9fccd04b46da2996bc0dffc8"
+      },
+      {
+        "check_md5": null,
+        "command": "SELECT",
+        "name": "super admins can read full sales spreadsheet",
+        "permissive": "PERMISSIVE",
+        "roles": [
+          "authenticated"
+        ],
+        "schema": "public",
+        "table": "internal_sales_spreadsheet_rows",
+        "using_md5": "ce9f8f81e8f0add8e59fcd94520a95c8"
+      },
+      {
+        "check_md5": null,
+        "command": "SELECT",
+        "name": "manager_team_reference_select_authorized",
+        "permissive": "PERMISSIVE",
+        "roles": [
+          "authenticated"
+        ],
+        "schema": "public",
+        "table": "manager_team_reference",
+        "using_md5": "d4c05fdc9fccd04b46da2996bc0dffc8"
+      },
+      {
+        "check_md5": null,
+        "command": "SELECT",
+        "name": "profiles_select_self_or_executive",
+        "permissive": "PERMISSIVE",
+        "roles": [
+          "authenticated"
+        ],
+        "schema": "public",
+        "table": "profiles",
+        "using_md5": "12606b231341b5ebdd2940af2de19c4d"
+      },
+      {
+        "check_md5": null,
+        "command": "SELECT",
+        "name": "active indicator users can read team reference",
+        "permissive": "PERMISSIVE",
+        "roles": [
+          "authenticated"
+        ],
+        "schema": "public",
+        "table": "sales_team_reference",
+        "using_md5": "d957e2c56c35b28eed7ad52db2854bad"
+      },
+      {
+        "check_md5": null,
+        "command": "SELECT",
+        "name": "teams_select_authorized",
+        "permissive": "PERMISSIVE",
+        "roles": [
+          "authenticated"
+        ],
+        "schema": "public",
+        "table": "teams",
+        "using_md5": "c4146637da8d35592468b5b705deb20e"
+      },
+      {
+        "check_md5": null,
+        "command": "SELECT",
+        "name": "user_management_audit_select_executive",
+        "permissive": "PERMISSIVE",
+        "roles": [
+          "authenticated"
+        ],
+        "schema": "public",
+        "table": "user_management_audit",
+        "using_md5": "28dd93a62f5fb65685f7e57cd560b42f"
+      },
+      {
+        "check_md5": null,
+        "command": "DELETE",
+        "name": "Superadmins can delete roles",
+        "permissive": "PERMISSIVE",
+        "roles": [
+          "authenticated"
+        ],
+        "schema": "public",
+        "table": "user_roles",
+        "using_md5": "edf3686afbbd72005d4296fe23b0eaf8"
+      },
+      {
+        "check_md5": "edf3686afbbd72005d4296fe23b0eaf8",
+        "command": "INSERT",
+        "name": "Superadmins can insert roles",
+        "permissive": "PERMISSIVE",
+        "roles": [
+          "authenticated"
+        ],
+        "schema": "public",
+        "table": "user_roles",
+        "using_md5": null
+      },
+      {
+        "check_md5": "edf3686afbbd72005d4296fe23b0eaf8",
+        "command": "UPDATE",
+        "name": "Superadmins can update roles",
+        "permissive": "PERMISSIVE",
+        "roles": [
+          "authenticated"
+        ],
+        "schema": "public",
+        "table": "user_roles",
+        "using_md5": "edf3686afbbd72005d4296fe23b0eaf8"
+      },
+      {
+        "check_md5": null,
+        "command": "SELECT",
+        "name": "Users and superadmins can view roles",
+        "permissive": "PERMISSIVE",
+        "roles": [
+          "authenticated"
+        ],
+        "schema": "public",
+        "table": "user_roles",
+        "using_md5": "7d92c0ac01566e34adccfdef034f94a4"
+      },
+      {
+        "check_md5": null,
+        "command": "SELECT",
+        "name": "user_team_access_select_scope",
+        "permissive": "PERMISSIVE",
+        "roles": [
+          "authenticated"
+        ],
+        "schema": "public",
+        "table": "user_team_access",
+        "using_md5": "58817e9bfb56e5dbfd2cf728435be0c9"
+      }
+    ],
+    "schema_effective_privileges": [
+      {
+        "create": false,
+        "role": "anon",
+        "schema": "private",
+        "usage": false
+      },
+      {
+        "create": false,
+        "role": "authenticated",
+        "schema": "private",
+        "usage": true
+      },
+      {
+        "create": false,
+        "role": "service_role",
+        "schema": "private",
+        "usage": false
+      },
+      {
+        "create": false,
+        "role": "anon",
+        "schema": "public",
+        "usage": true
+      },
+      {
+        "create": false,
+        "role": "authenticated",
+        "schema": "public",
+        "usage": true
+      },
+      {
+        "create": false,
+        "role": "service_role",
+        "schema": "public",
+        "usage": true
+      },
+      {
+        "create": false,
+        "role": "anon",
+        "schema": "validation",
+        "usage": false
+      },
+      {
+        "create": false,
+        "role": "authenticated",
+        "schema": "validation",
+        "usage": false
+      },
+      {
+        "create": false,
+        "role": "service_role",
+        "schema": "validation",
+        "usage": false
+      }
+    ],
+    "table_effective_privileges": [
+      {
+        "privileges": [],
+        "role": "anon",
+        "schema": "public",
+        "table": "conversation_messages"
+      },
+      {
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "DELETE"
+        ],
+        "role": "authenticated",
+        "schema": "public",
+        "table": "conversation_messages"
+      },
+      {
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "UPDATE",
+          "DELETE",
+          "TRUNCATE",
+          "REFERENCES",
+          "TRIGGER",
+          "MAINTAIN"
+        ],
+        "role": "service_role",
+        "schema": "public",
+        "table": "conversation_messages"
+      },
+      {
+        "privileges": [],
+        "role": "anon",
+        "schema": "public",
+        "table": "conversations"
+      },
+      {
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "UPDATE",
+          "DELETE"
+        ],
+        "role": "authenticated",
+        "schema": "public",
+        "table": "conversations"
+      },
+      {
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "UPDATE",
+          "DELETE",
+          "TRUNCATE",
+          "REFERENCES",
+          "TRIGGER",
+          "MAINTAIN"
+        ],
+        "role": "service_role",
+        "schema": "public",
+        "table": "conversations"
+      },
+      {
+        "privileges": [],
+        "role": "anon",
+        "schema": "public",
+        "table": "integration_failure_diagnostics"
+      },
+      {
+        "privileges": [
+          "SELECT",
+          "INSERT"
+        ],
+        "role": "authenticated",
+        "schema": "public",
+        "table": "integration_failure_diagnostics"
+      },
+      {
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "UPDATE",
+          "DELETE",
+          "TRUNCATE",
+          "REFERENCES",
+          "TRIGGER",
+          "MAINTAIN"
+        ],
+        "role": "service_role",
+        "schema": "public",
+        "table": "integration_failure_diagnostics"
+      },
+      {
+        "privileges": [],
+        "role": "anon",
+        "schema": "public",
+        "table": "internal_sales_spreadsheet_rows"
+      },
+      {
+        "privileges": [
+          "SELECT"
+        ],
+        "role": "authenticated",
+        "schema": "public",
+        "table": "internal_sales_spreadsheet_rows"
+      },
+      {
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "UPDATE",
+          "DELETE",
+          "TRUNCATE",
+          "REFERENCES",
+          "TRIGGER",
+          "MAINTAIN"
+        ],
+        "role": "service_role",
+        "schema": "public",
+        "table": "internal_sales_spreadsheet_rows"
+      },
+      {
+        "privileges": [],
+        "role": "anon",
+        "schema": "public",
+        "table": "manager_team_reference"
+      },
+      {
+        "privileges": [
+          "SELECT"
+        ],
+        "role": "authenticated",
+        "schema": "public",
+        "table": "manager_team_reference"
+      },
+      {
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "UPDATE",
+          "DELETE",
+          "TRUNCATE",
+          "REFERENCES",
+          "TRIGGER",
+          "MAINTAIN"
+        ],
+        "role": "service_role",
+        "schema": "public",
+        "table": "manager_team_reference"
+      },
+      {
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "UPDATE",
+          "DELETE",
+          "TRUNCATE",
+          "REFERENCES",
+          "TRIGGER",
+          "MAINTAIN"
+        ],
+        "role": "anon",
+        "schema": "public",
+        "table": "profiles"
+      },
+      {
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "UPDATE",
+          "DELETE",
+          "TRUNCATE",
+          "REFERENCES",
+          "TRIGGER",
+          "MAINTAIN"
+        ],
+        "role": "authenticated",
+        "schema": "public",
+        "table": "profiles"
+      },
+      {
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "UPDATE",
+          "DELETE",
+          "TRUNCATE",
+          "REFERENCES",
+          "TRIGGER",
+          "MAINTAIN"
+        ],
+        "role": "service_role",
+        "schema": "public",
+        "table": "profiles"
+      },
+      {
+        "privileges": [],
+        "role": "anon",
+        "schema": "public",
+        "table": "sales_team_reference"
+      },
+      {
+        "privileges": [
+          "SELECT"
+        ],
+        "role": "authenticated",
+        "schema": "public",
+        "table": "sales_team_reference"
+      },
+      {
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "UPDATE",
+          "DELETE",
+          "TRUNCATE",
+          "REFERENCES",
+          "TRIGGER",
+          "MAINTAIN"
+        ],
+        "role": "service_role",
+        "schema": "public",
+        "table": "sales_team_reference"
+      },
+      {
+        "privileges": [],
+        "role": "anon",
+        "schema": "public",
+        "table": "teams"
+      },
+      {
+        "privileges": [
+          "SELECT"
+        ],
+        "role": "authenticated",
+        "schema": "public",
+        "table": "teams"
+      },
+      {
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "UPDATE",
+          "DELETE",
+          "TRUNCATE",
+          "REFERENCES",
+          "TRIGGER",
+          "MAINTAIN"
+        ],
+        "role": "service_role",
+        "schema": "public",
+        "table": "teams"
+      },
+      {
+        "privileges": [],
+        "role": "anon",
+        "schema": "public",
+        "table": "user_management_audit"
+      },
+      {
+        "privileges": [],
+        "role": "authenticated",
+        "schema": "public",
+        "table": "user_management_audit"
+      },
+      {
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "UPDATE",
+          "DELETE",
+          "TRUNCATE",
+          "REFERENCES",
+          "TRIGGER",
+          "MAINTAIN"
+        ],
+        "role": "service_role",
+        "schema": "public",
+        "table": "user_management_audit"
+      },
+      {
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "UPDATE",
+          "DELETE",
+          "TRUNCATE",
+          "REFERENCES",
+          "TRIGGER",
+          "MAINTAIN"
+        ],
+        "role": "anon",
+        "schema": "public",
+        "table": "user_roles"
+      },
+      {
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "UPDATE",
+          "DELETE",
+          "TRUNCATE",
+          "REFERENCES",
+          "TRIGGER",
+          "MAINTAIN"
+        ],
+        "role": "authenticated",
+        "schema": "public",
+        "table": "user_roles"
+      },
+      {
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "UPDATE",
+          "DELETE",
+          "TRUNCATE",
+          "REFERENCES",
+          "TRIGGER",
+          "MAINTAIN"
+        ],
+        "role": "service_role",
+        "schema": "public",
+        "table": "user_roles"
+      },
+      {
+        "privileges": [],
+        "role": "anon",
+        "schema": "public",
+        "table": "user_team_access"
+      },
+      {
+        "privileges": [
+          "SELECT"
+        ],
+        "role": "authenticated",
+        "schema": "public",
+        "table": "user_team_access"
+      },
+      {
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "UPDATE",
+          "DELETE",
+          "TRUNCATE",
+          "REFERENCES",
+          "TRIGGER",
+          "MAINTAIN"
+        ],
+        "role": "service_role",
+        "schema": "public",
+        "table": "user_team_access"
+      },
+      {
+        "privileges": [],
+        "role": "anon",
+        "schema": "validation",
+        "table": "broker_system_identifiers"
+      },
+      {
+        "privileges": [],
+        "role": "authenticated",
+        "schema": "validation",
+        "table": "broker_system_identifiers"
+      },
+      {
+        "privileges": [],
+        "role": "service_role",
+        "schema": "validation",
+        "table": "broker_system_identifiers"
+      },
+      {
+        "privileges": [],
+        "role": "anon",
+        "schema": "validation",
+        "table": "broker_team_history"
+      },
+      {
+        "privileges": [],
+        "role": "authenticated",
+        "schema": "validation",
+        "table": "broker_team_history"
+      },
+      {
+        "privileges": [],
+        "role": "service_role",
+        "schema": "validation",
+        "table": "broker_team_history"
+      },
+      {
+        "privileges": [],
+        "role": "anon",
+        "schema": "validation",
+        "table": "brokers"
+      },
+      {
+        "privileges": [],
+        "role": "authenticated",
+        "schema": "validation",
+        "table": "brokers"
+      },
+      {
+        "privileges": [],
+        "role": "service_role",
+        "schema": "validation",
+        "table": "brokers"
+      },
+      {
+        "privileges": [],
+        "role": "anon",
+        "schema": "validation",
+        "table": "consolidated_sales"
+      },
+      {
+        "privileges": [],
+        "role": "authenticated",
+        "schema": "validation",
+        "table": "consolidated_sales"
+      },
+      {
+        "privileges": [],
+        "role": "service_role",
+        "schema": "validation",
+        "table": "consolidated_sales"
+      },
+      {
+        "privileges": [],
+        "role": "anon",
+        "schema": "validation",
+        "table": "pipeimob_sales"
+      },
+      {
+        "privileges": [],
+        "role": "authenticated",
+        "schema": "validation",
+        "table": "pipeimob_sales"
+      },
+      {
+        "privileges": [],
+        "role": "service_role",
+        "schema": "validation",
+        "table": "pipeimob_sales"
+      },
+      {
+        "privileges": [],
+        "role": "anon",
+        "schema": "validation",
+        "table": "reconciliation_events"
+      },
+      {
+        "privileges": [],
+        "role": "authenticated",
+        "schema": "validation",
+        "table": "reconciliation_events"
+      },
+      {
+        "privileges": [],
+        "role": "service_role",
+        "schema": "validation",
+        "table": "reconciliation_events"
+      },
+      {
+        "privileges": [],
+        "role": "anon",
+        "schema": "validation",
+        "table": "source_ingestion_runs"
+      },
+      {
+        "privileges": [],
+        "role": "authenticated",
+        "schema": "validation",
+        "table": "source_ingestion_runs"
+      },
+      {
+        "privileges": [],
+        "role": "service_role",
+        "schema": "validation",
+        "table": "source_ingestion_runs"
+      },
+      {
+        "privileges": [],
+        "role": "anon",
+        "schema": "validation",
+        "table": "teams"
+      },
+      {
+        "privileges": [],
+        "role": "authenticated",
+        "schema": "validation",
+        "table": "teams"
+      },
+      {
+        "privileges": [],
+        "role": "service_role",
+        "schema": "validation",
+        "table": "teams"
+      },
+      {
+        "privileges": [],
+        "role": "anon",
+        "schema": "validation",
+        "table": "vista_gains"
+      },
+      {
+        "privileges": [],
+        "role": "authenticated",
+        "schema": "validation",
+        "table": "vista_gains"
+      },
+      {
+        "privileges": [],
+        "role": "service_role",
+        "schema": "validation",
+        "table": "vista_gains"
+      }
+    ],
+    "sequence_effective_privileges": [
+      {
+        "privileges": [
+          "USAGE",
+          "SELECT",
+          "UPDATE"
+        ],
+        "role": "anon",
+        "schema": "public",
+        "sequence": "conversation_messages_id_seq"
+      },
+      {
+        "privileges": [
+          "USAGE",
+          "SELECT",
+          "UPDATE"
+        ],
+        "role": "authenticated",
+        "schema": "public",
+        "sequence": "conversation_messages_id_seq"
+      },
+      {
+        "privileges": [
+          "USAGE",
+          "SELECT",
+          "UPDATE"
+        ],
+        "role": "service_role",
+        "schema": "public",
+        "sequence": "conversation_messages_id_seq"
+      },
+      {
+        "privileges": [
+          "USAGE",
+          "SELECT",
+          "UPDATE"
+        ],
+        "role": "anon",
+        "schema": "public",
+        "sequence": "internal_sales_spreadsheet_rows_id_seq"
+      },
+      {
+        "privileges": [
+          "USAGE",
+          "SELECT",
+          "UPDATE"
+        ],
+        "role": "authenticated",
+        "schema": "public",
+        "sequence": "internal_sales_spreadsheet_rows_id_seq"
+      },
+      {
+        "privileges": [
+          "USAGE",
+          "SELECT",
+          "UPDATE"
+        ],
+        "role": "service_role",
+        "schema": "public",
+        "sequence": "internal_sales_spreadsheet_rows_id_seq"
+      },
+      {
+        "privileges": [
+          "USAGE",
+          "SELECT",
+          "UPDATE"
+        ],
+        "role": "anon",
+        "schema": "public",
+        "sequence": "manager_team_reference_id_seq"
+      },
+      {
+        "privileges": [
+          "USAGE",
+          "SELECT",
+          "UPDATE"
+        ],
+        "role": "authenticated",
+        "schema": "public",
+        "sequence": "manager_team_reference_id_seq"
+      },
+      {
+        "privileges": [
+          "USAGE",
+          "SELECT",
+          "UPDATE"
+        ],
+        "role": "service_role",
+        "schema": "public",
+        "sequence": "manager_team_reference_id_seq"
+      },
+      {
+        "privileges": [
+          "USAGE",
+          "SELECT",
+          "UPDATE"
+        ],
+        "role": "anon",
+        "schema": "public",
+        "sequence": "sales_team_reference_id_seq"
+      },
+      {
+        "privileges": [
+          "USAGE",
+          "SELECT",
+          "UPDATE"
+        ],
+        "role": "authenticated",
+        "schema": "public",
+        "sequence": "sales_team_reference_id_seq"
+      },
+      {
+        "privileges": [
+          "USAGE",
+          "SELECT",
+          "UPDATE"
+        ],
+        "role": "service_role",
+        "schema": "public",
+        "sequence": "sales_team_reference_id_seq"
+      },
+      {
+        "privileges": [
+          "USAGE",
+          "SELECT",
+          "UPDATE"
+        ],
+        "role": "anon",
+        "schema": "public",
+        "sequence": "user_management_audit_id_seq"
+      },
+      {
+        "privileges": [
+          "USAGE",
+          "SELECT",
+          "UPDATE"
+        ],
+        "role": "authenticated",
+        "schema": "public",
+        "sequence": "user_management_audit_id_seq"
+      },
+      {
+        "privileges": [
+          "USAGE",
+          "SELECT",
+          "UPDATE"
+        ],
+        "role": "service_role",
+        "schema": "public",
+        "sequence": "user_management_audit_id_seq"
+      },
+      {
+        "privileges": [],
+        "role": "anon",
+        "schema": "validation",
+        "sequence": "broker_system_identifiers_id_seq"
+      },
+      {
+        "privileges": [],
+        "role": "authenticated",
+        "schema": "validation",
+        "sequence": "broker_system_identifiers_id_seq"
+      },
+      {
+        "privileges": [],
+        "role": "service_role",
+        "schema": "validation",
+        "sequence": "broker_system_identifiers_id_seq"
+      },
+      {
+        "privileges": [],
+        "role": "anon",
+        "schema": "validation",
+        "sequence": "broker_team_history_id_seq"
+      },
+      {
+        "privileges": [],
+        "role": "authenticated",
+        "schema": "validation",
+        "sequence": "broker_team_history_id_seq"
+      },
+      {
+        "privileges": [],
+        "role": "service_role",
+        "schema": "validation",
+        "sequence": "broker_team_history_id_seq"
+      },
+      {
+        "privileges": [],
+        "role": "anon",
+        "schema": "validation",
+        "sequence": "brokers_id_seq"
+      },
+      {
+        "privileges": [],
+        "role": "authenticated",
+        "schema": "validation",
+        "sequence": "brokers_id_seq"
+      },
+      {
+        "privileges": [],
+        "role": "service_role",
+        "schema": "validation",
+        "sequence": "brokers_id_seq"
+      },
+      {
+        "privileges": [],
+        "role": "anon",
+        "schema": "validation",
+        "sequence": "consolidated_sales_id_seq"
+      },
+      {
+        "privileges": [],
+        "role": "authenticated",
+        "schema": "validation",
+        "sequence": "consolidated_sales_id_seq"
+      },
+      {
+        "privileges": [],
+        "role": "service_role",
+        "schema": "validation",
+        "sequence": "consolidated_sales_id_seq"
+      },
+      {
+        "privileges": [],
+        "role": "anon",
+        "schema": "validation",
+        "sequence": "reconciliation_events_id_seq"
+      },
+      {
+        "privileges": [],
+        "role": "authenticated",
+        "schema": "validation",
+        "sequence": "reconciliation_events_id_seq"
+      },
+      {
+        "privileges": [],
+        "role": "service_role",
+        "schema": "validation",
+        "sequence": "reconciliation_events_id_seq"
+      },
+      {
+        "privileges": [],
+        "role": "anon",
+        "schema": "validation",
+        "sequence": "source_ingestion_runs_id_seq"
+      },
+      {
+        "privileges": [],
+        "role": "authenticated",
+        "schema": "validation",
+        "sequence": "source_ingestion_runs_id_seq"
+      },
+      {
+        "privileges": [],
+        "role": "service_role",
+        "schema": "validation",
+        "sequence": "source_ingestion_runs_id_seq"
+      },
+      {
+        "privileges": [],
+        "role": "anon",
+        "schema": "validation",
+        "sequence": "teams_id_seq"
+      },
+      {
+        "privileges": [],
+        "role": "authenticated",
+        "schema": "validation",
+        "sequence": "teams_id_seq"
+      },
+      {
+        "privileges": [],
+        "role": "service_role",
+        "schema": "validation",
+        "sequence": "teams_id_seq"
+      }
+    ],
+    "function_effective_privileges": [
+      {
+        "arguments": "",
+        "execute": false,
+        "function": "current_user_is_executive",
+        "role": "anon",
+        "schema": "private"
+      },
+      {
+        "arguments": "",
+        "execute": true,
+        "function": "current_user_is_executive",
+        "role": "authenticated",
+        "schema": "private"
+      },
+      {
+        "arguments": "",
+        "execute": false,
+        "function": "current_user_is_executive",
+        "role": "service_role",
+        "schema": "private"
+      },
+      {
+        "arguments": "",
+        "execute": false,
+        "function": "get_my_role",
+        "role": "anon",
+        "schema": "public"
+      },
+      {
+        "arguments": "",
+        "execute": true,
+        "function": "get_my_role",
+        "role": "authenticated",
+        "schema": "public"
+      },
+      {
+        "arguments": "",
+        "execute": true,
+        "function": "get_my_role",
+        "role": "service_role",
+        "schema": "public"
+      },
+      {
+        "arguments": "p_start date, p_end date",
+        "execute": false,
+        "function": "get_validation_sales_reconciliation",
+        "role": "anon",
+        "schema": "public"
+      },
+      {
+        "arguments": "p_start date, p_end date",
+        "execute": false,
+        "function": "get_validation_sales_reconciliation",
+        "role": "authenticated",
+        "schema": "public"
+      },
+      {
+        "arguments": "p_start date, p_end date",
+        "execute": true,
+        "function": "get_validation_sales_reconciliation",
+        "role": "service_role",
+        "schema": "public"
+      },
+      {
+        "arguments": "_user_id uuid, _role app_role",
+        "execute": false,
+        "function": "has_role",
+        "role": "anon",
+        "schema": "public"
+      },
+      {
+        "arguments": "_user_id uuid, _role app_role",
+        "execute": true,
+        "function": "has_role",
+        "role": "authenticated",
+        "schema": "public"
+      },
+      {
+        "arguments": "_user_id uuid, _role app_role",
+        "execute": true,
+        "function": "has_role",
+        "role": "service_role",
+        "schema": "public"
+      },
+      {
+        "arguments": "_user_id uuid",
+        "execute": false,
+        "function": "is_active_super_admin",
+        "role": "anon",
+        "schema": "public"
+      },
+      {
+        "arguments": "_user_id uuid",
+        "execute": true,
+        "function": "is_active_super_admin",
+        "role": "authenticated",
+        "schema": "public"
+      },
+      {
+        "arguments": "_user_id uuid",
+        "execute": true,
+        "function": "is_active_super_admin",
+        "role": "service_role",
+        "schema": "public"
+      },
+      {
+        "arguments": "_user_id uuid",
+        "execute": false,
+        "function": "is_active_user",
+        "role": "anon",
+        "schema": "public"
+      },
+      {
+        "arguments": "_user_id uuid",
+        "execute": true,
+        "function": "is_active_user",
+        "role": "authenticated",
+        "schema": "public"
+      },
+      {
+        "arguments": "_user_id uuid",
+        "execute": true,
+        "function": "is_active_user",
+        "role": "service_role",
+        "schema": "public"
+      },
+      {
+        "arguments": "",
+        "execute": false,
+        "function": "is_super_admin",
+        "role": "anon",
+        "schema": "public"
+      },
+      {
+        "arguments": "",
+        "execute": true,
+        "function": "is_super_admin",
+        "role": "authenticated",
+        "schema": "public"
+      },
+      {
+        "arguments": "",
+        "execute": true,
+        "function": "is_super_admin",
+        "role": "service_role",
+        "schema": "public"
+      },
+      {
+        "arguments": "",
+        "execute": false,
+        "function": "sync_validation_user_access",
+        "role": "anon",
+        "schema": "public"
+      },
+      {
+        "arguments": "",
+        "execute": false,
+        "function": "sync_validation_user_access",
+        "role": "authenticated",
+        "schema": "public"
+      },
+      {
+        "arguments": "",
+        "execute": true,
+        "function": "sync_validation_user_access",
+        "role": "service_role",
+        "schema": "public"
+      }
+    ],
+    "public_default_privileges": [
+      {
+        "grantable": false,
+        "grantee": "anon",
+        "object_type": "S",
+        "owner": "postgres",
+        "privilege": "SELECT",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "anon",
+        "object_type": "S",
+        "owner": "postgres",
+        "privilege": "UPDATE",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "anon",
+        "object_type": "S",
+        "owner": "postgres",
+        "privilege": "USAGE",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "authenticated",
+        "object_type": "S",
+        "owner": "postgres",
+        "privilege": "SELECT",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "authenticated",
+        "object_type": "S",
+        "owner": "postgres",
+        "privilege": "UPDATE",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "authenticated",
+        "object_type": "S",
+        "owner": "postgres",
+        "privilege": "USAGE",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "service_role",
+        "object_type": "S",
+        "owner": "postgres",
+        "privilege": "SELECT",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "service_role",
+        "object_type": "S",
+        "owner": "postgres",
+        "privilege": "UPDATE",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "service_role",
+        "object_type": "S",
+        "owner": "postgres",
+        "privilege": "USAGE",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "anon",
+        "object_type": "f",
+        "owner": "postgres",
+        "privilege": "EXECUTE",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "authenticated",
+        "object_type": "f",
+        "owner": "postgres",
+        "privilege": "EXECUTE",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "service_role",
+        "object_type": "f",
+        "owner": "postgres",
+        "privilege": "EXECUTE",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "anon",
+        "object_type": "r",
+        "owner": "postgres",
+        "privilege": "DELETE",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "anon",
+        "object_type": "r",
+        "owner": "postgres",
+        "privilege": "INSERT",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "anon",
+        "object_type": "r",
+        "owner": "postgres",
+        "privilege": "MAINTAIN",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "anon",
+        "object_type": "r",
+        "owner": "postgres",
+        "privilege": "REFERENCES",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "anon",
+        "object_type": "r",
+        "owner": "postgres",
+        "privilege": "SELECT",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "anon",
+        "object_type": "r",
+        "owner": "postgres",
+        "privilege": "TRIGGER",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "anon",
+        "object_type": "r",
+        "owner": "postgres",
+        "privilege": "TRUNCATE",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "anon",
+        "object_type": "r",
+        "owner": "postgres",
+        "privilege": "UPDATE",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "authenticated",
+        "object_type": "r",
+        "owner": "postgres",
+        "privilege": "DELETE",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "authenticated",
+        "object_type": "r",
+        "owner": "postgres",
+        "privilege": "INSERT",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "authenticated",
+        "object_type": "r",
+        "owner": "postgres",
+        "privilege": "MAINTAIN",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "authenticated",
+        "object_type": "r",
+        "owner": "postgres",
+        "privilege": "REFERENCES",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "authenticated",
+        "object_type": "r",
+        "owner": "postgres",
+        "privilege": "SELECT",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "authenticated",
+        "object_type": "r",
+        "owner": "postgres",
+        "privilege": "TRIGGER",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "authenticated",
+        "object_type": "r",
+        "owner": "postgres",
+        "privilege": "TRUNCATE",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "authenticated",
+        "object_type": "r",
+        "owner": "postgres",
+        "privilege": "UPDATE",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "service_role",
+        "object_type": "r",
+        "owner": "postgres",
+        "privilege": "DELETE",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "service_role",
+        "object_type": "r",
+        "owner": "postgres",
+        "privilege": "INSERT",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "service_role",
+        "object_type": "r",
+        "owner": "postgres",
+        "privilege": "MAINTAIN",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "service_role",
+        "object_type": "r",
+        "owner": "postgres",
+        "privilege": "REFERENCES",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "service_role",
+        "object_type": "r",
+        "owner": "postgres",
+        "privilege": "SELECT",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "service_role",
+        "object_type": "r",
+        "owner": "postgres",
+        "privilege": "TRIGGER",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "service_role",
+        "object_type": "r",
+        "owner": "postgres",
+        "privilege": "TRUNCATE",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "service_role",
+        "object_type": "r",
+        "owner": "postgres",
+        "privilege": "UPDATE",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "anon",
+        "object_type": "S",
+        "owner": "supabase_admin",
+        "privilege": "SELECT",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "anon",
+        "object_type": "S",
+        "owner": "supabase_admin",
+        "privilege": "UPDATE",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "anon",
+        "object_type": "S",
+        "owner": "supabase_admin",
+        "privilege": "USAGE",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "authenticated",
+        "object_type": "S",
+        "owner": "supabase_admin",
+        "privilege": "SELECT",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "authenticated",
+        "object_type": "S",
+        "owner": "supabase_admin",
+        "privilege": "UPDATE",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "authenticated",
+        "object_type": "S",
+        "owner": "supabase_admin",
+        "privilege": "USAGE",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "service_role",
+        "object_type": "S",
+        "owner": "supabase_admin",
+        "privilege": "SELECT",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "service_role",
+        "object_type": "S",
+        "owner": "supabase_admin",
+        "privilege": "UPDATE",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "service_role",
+        "object_type": "S",
+        "owner": "supabase_admin",
+        "privilege": "USAGE",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "anon",
+        "object_type": "f",
+        "owner": "supabase_admin",
+        "privilege": "EXECUTE",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "authenticated",
+        "object_type": "f",
+        "owner": "supabase_admin",
+        "privilege": "EXECUTE",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "service_role",
+        "object_type": "f",
+        "owner": "supabase_admin",
+        "privilege": "EXECUTE",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "anon",
+        "object_type": "r",
+        "owner": "supabase_admin",
+        "privilege": "DELETE",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "anon",
+        "object_type": "r",
+        "owner": "supabase_admin",
+        "privilege": "INSERT",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "anon",
+        "object_type": "r",
+        "owner": "supabase_admin",
+        "privilege": "MAINTAIN",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "anon",
+        "object_type": "r",
+        "owner": "supabase_admin",
+        "privilege": "REFERENCES",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "anon",
+        "object_type": "r",
+        "owner": "supabase_admin",
+        "privilege": "SELECT",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "anon",
+        "object_type": "r",
+        "owner": "supabase_admin",
+        "privilege": "TRIGGER",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "anon",
+        "object_type": "r",
+        "owner": "supabase_admin",
+        "privilege": "TRUNCATE",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "anon",
+        "object_type": "r",
+        "owner": "supabase_admin",
+        "privilege": "UPDATE",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "authenticated",
+        "object_type": "r",
+        "owner": "supabase_admin",
+        "privilege": "DELETE",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "authenticated",
+        "object_type": "r",
+        "owner": "supabase_admin",
+        "privilege": "INSERT",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "authenticated",
+        "object_type": "r",
+        "owner": "supabase_admin",
+        "privilege": "MAINTAIN",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "authenticated",
+        "object_type": "r",
+        "owner": "supabase_admin",
+        "privilege": "REFERENCES",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "authenticated",
+        "object_type": "r",
+        "owner": "supabase_admin",
+        "privilege": "SELECT",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "authenticated",
+        "object_type": "r",
+        "owner": "supabase_admin",
+        "privilege": "TRIGGER",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "authenticated",
+        "object_type": "r",
+        "owner": "supabase_admin",
+        "privilege": "TRUNCATE",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "authenticated",
+        "object_type": "r",
+        "owner": "supabase_admin",
+        "privilege": "UPDATE",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "service_role",
+        "object_type": "r",
+        "owner": "supabase_admin",
+        "privilege": "DELETE",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "service_role",
+        "object_type": "r",
+        "owner": "supabase_admin",
+        "privilege": "INSERT",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "service_role",
+        "object_type": "r",
+        "owner": "supabase_admin",
+        "privilege": "MAINTAIN",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "service_role",
+        "object_type": "r",
+        "owner": "supabase_admin",
+        "privilege": "REFERENCES",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "service_role",
+        "object_type": "r",
+        "owner": "supabase_admin",
+        "privilege": "SELECT",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "service_role",
+        "object_type": "r",
+        "owner": "supabase_admin",
+        "privilege": "TRIGGER",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "service_role",
+        "object_type": "r",
+        "owner": "supabase_admin",
+        "privilege": "TRUNCATE",
+        "schema": "public"
+      },
+      {
+        "grantable": false,
+        "grantee": "service_role",
+        "object_type": "r",
+        "owner": "supabase_admin",
+        "privilege": "UPDATE",
+        "schema": "public"
+      }
+    ],
+    "publication_membership": [],
+    "extension_observations": [
+      {
+        "name": "pg_stat_statements",
+        "schema": "extensions"
+      },
+      {
+        "name": "pgcrypto",
+        "schema": "extensions"
+      },
+      {
+        "name": "plpgsql",
+        "schema": "pg_catalog"
+      },
+      {
+        "name": "supabase_vault",
+        "schema": "vault"
+      },
+      {
+        "name": "uuid-ossp",
+        "schema": "extensions"
+      }
+    ]
+  },
+  "notes": [
+    "Definitions of column defaults, function bodies and policy predicates are represented only by hashes.",
+    "Extension versions are intentionally omitted; the baseline must not pin versions.",
+    "Effective privileges describe observed access and are not an authorization to preserve excessive grants.",
+    "The snapshot is evidence for review, not an executable migration or canonical schema source."
+  ]
+}
+
