@@ -511,7 +511,7 @@ def test_adversarial_manager_without_agency_in_snapshot_but_stable_deal_agency_r
 # 10. Circuit Breaker
 # ==============================================================================
 
-def test_circuit_breaker_halts_after_two_failures():
+def test_rejected_probe_fields_do_not_open_circuit_breaker():
     call_count = 0
 
     def failing_opener(req, *args, **kwargs):
@@ -525,12 +525,35 @@ def test_circuit_breaker_halts_after_two_failures():
         max_failure_threshold=2,
         opener=failing_opener,
     )
-    with pytest.raises(VistaOrganizationAPIError):
+    with pytest.raises(VistaOrganizationAPIError) as exc_info:
         client.fetch_anonymized_users()
+
+    assert exc_info.value.error_code == "vista_http_400"
+    assert client.is_circuit_broken() is False
+    assert call_count == 1
+
+
+def test_operational_failures_still_open_circuit_breaker():
+    call_count = 0
+
+    def failing_opener(req, *args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        raise urllib.error.URLError("temporary transport failure")
+
+    client = VistaOrganizationClient(
+        base_url="https://api.vista.com",
+        api_key="secret-key-123",
+        max_failure_threshold=2,
+        opener=failing_opener,
+    )
+    for _ in range(2):
+        with pytest.raises(VistaOrganizationAPIError):
+            client._execute_user_query(["Codigo"], is_probe=False)
 
     assert client.is_circuit_broken() is True
     before = call_count
     with pytest.raises(VistaOrganizationAPIError) as exc_info:
-        client.fetch_anonymized_users()
+        client._execute_user_query(["Codigo"], is_probe=False)
     assert exc_info.value.error_code == "vista_circuit_broken"
     assert call_count == before

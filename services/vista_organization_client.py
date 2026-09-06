@@ -56,8 +56,8 @@ class VistaOrganizationClient:
     FIELD_IDENTIFIER = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
 
     # Proven canonical fields for /usuarios/listar
-    USER_CORE_FIELDS = [
-        "Codigo",
+    USER_CORE_FIELDS = ["Codigo"]
+    USER_DISCOVERY_FIELDS = [
         "Status",
         "Ativo",
         "Cargo",
@@ -367,7 +367,9 @@ class VistaOrganizationClient:
         return deals, completeness
 
     def _negotiate_user_fields(self) -> List[str]:
-        # Only query proven canonical core fields plus explicitly configured user fields
+        # Start with the one field already proven by the sales/funnel adapters.
+        # Tenant-specific role/status fields are negotiated independently so one
+        # rejected label cannot make the whole users endpoint unavailable.
         configured_optionals = [
             f
             for f in (
@@ -380,30 +382,22 @@ class VistaOrganizationClient:
             )
             if f
         ]
-        candidates = self.USER_CORE_FIELDS + configured_optionals
+        candidates = (
+            self.USER_CORE_FIELDS
+            + self.USER_DISCOVERY_FIELDS
+            + configured_optionals
+        )
         unique_candidates: List[str] = []
         for c in candidates:
             if c not in unique_candidates:
                 unique_candidates.append(c)
 
         try:
-            self._execute_user_query(unique_candidates, page=1, is_probe=True)
-            self._probed_fields["accepted"].update(unique_candidates)
-            return unique_candidates
-        except VistaOrganizationAPIError as exc:
-            if self._circuit_broken:
-                raise
-            if exc.error_code != "vista_http_400":
-                raise
-
-        try:
             self._execute_user_query(self.USER_CORE_FIELDS, page=1, is_probe=True)
             accepted = list(self.USER_CORE_FIELDS)
             self._probed_fields["accepted"].update(self.USER_CORE_FIELDS)
         except VistaOrganizationAPIError as exc:
-            if self._circuit_broken:
-                raise
-            return []
+            raise
 
         optional_candidates = [
             f for f in unique_candidates if f not in self.USER_CORE_FIELDS
@@ -417,11 +411,11 @@ class VistaOrganizationClient:
                 self._probed_fields["accepted"].add(field)
             except VistaOrganizationAPIError as probe_exc:
                 self._probed_fields["rejected"].add(field)
-                if self._circuit_broken or probe_exc.error_code not in (
+                if probe_exc.error_code not in (
                     "vista_http_400",
                     "vista_invalid_contract",
                 ):
-                    break
+                    raise
 
         if self._circuit_broken:
             raise VistaOrganizationAPIError(
@@ -607,7 +601,10 @@ class VistaOrganizationClient:
 
         except urllib.error.HTTPError as exc:
             error_cat = f"http_{exc.code}"
-            self._record_failure(error_cat)
+            # A 400 while probing a documented candidate means this tenant does
+            # not expose that field. It is contract negotiation, not downtime.
+            if not (is_probe and exc.code == 400):
+                self._record_failure(error_cat)
             raise VistaOrganizationAPIError(
                 f"{endpoint_tag} request failed with HTTP {exc.code}",
                 f"vista_http_{exc.code}",
