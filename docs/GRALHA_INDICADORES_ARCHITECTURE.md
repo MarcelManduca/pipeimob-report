@@ -65,6 +65,25 @@ O escopo é aplicado no Edge Function MCP. Ocultar controles na interface não �
 | `manager_team_reference` | Referência histórica gerente→equipe |
 | `integration_failure_diagnostics` | Telemetria técnica sanitizada das integrações |
 
+O modelo comercial será ampliado por uma camada temporal de diretório vivo e
+fatos versionados. A especificação está em
+`docs/GRALHA_LIVE_TEAM_HISTORY.md`. Essa camada preserva resultados quando uma
+pessoa é transferida ou inativada e quando uma equipe é renomeada ou extinta.
+O estado atual das fontes não reatribui vendas passadas.
+
+Para o diretório novo, loja/filial, time comercial e grupo de acesso são
+conceitos separados. Grupos de acesso servem somente para permissões e não podem
+ser usados para atribuir vendas. A configuração estática atual de grupos do
+Pipeimob não será a autoridade do diretório vivo; a integração só será ativada
+com IDs e vínculos explícitos fornecidos pelos sistemas.
+
+O Vista será a autoridade do diretório organizacional. A loja de uma equipe
+pode ser resolvida por um vínculo direto ou pela cadeia equipe→gerente→agência
+do usuário, sempre com IDs estáveis. O status `ATIVO` do Vista não basta para
+classificar a equipe como operacional; essa classificação exige membros ativos
+ou atividade comercial atual. O Pipeimob continua como fonte oficial das vendas,
+datas de CCV e VGV, sem ser necessário para montar o diretório vigente.
+
 ## Endpoints do portal
 
 | Método e rota | Uso |
@@ -114,4 +133,4 @@ O design usa superfícies claras, branco e cinza suave, azul institucional `#3d4
 
 ## Limite atual para substituir o Power BI
 
-O portal pode substituir o Power BI para as consultas e visualizações já cobertas pelos contratos Pipeimob/Vista. A substituição integral para análises por equipe depende da qualidade da atribuição corretor/negócio→equipe. Esse trabalho de ampliação de cobertura é uma fase separada e permanece pausado até validação ponto a ponto.
+O portal pode substituir o Power BI para as consultas e visualizações já cobertas pelos contratos Pipeimob/Vista. A fase de validação da atribuição corretor/negócio→equipe foi desbloqueada com autorização explícita. A substituição integral para análises por loja e equipe ainda depende da validação ponto a ponto dos identificadores e campos vivos de Vista/Pipeimob, além da homologação da camada temporal descrita acima.
