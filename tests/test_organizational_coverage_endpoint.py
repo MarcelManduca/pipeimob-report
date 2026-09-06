@@ -5,7 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import main
-from main import app, verify_backend_api_key
+from main import app, require_vista_diagnostic_admin, verify_backend_api_key
 from services.vista_organization_client import VistaOrganizationAPIError
 from services.vista_sales_client import VistaSalesConfigurationError
 
@@ -55,8 +55,19 @@ def test_org_coverage_endpoint_requires_auth():
     assert response.status_code in (401, 403)
 
 
+def test_org_coverage_endpoint_rejects_authenticated_non_admin(monkeypatch):
+    monkeypatch.setenv("VISTA_DIAGNOSTIC_ADMIN_SUBS", "admin-sub")
+    app.dependency_overrides[verify_backend_api_key] = lambda: {"sub": "regular-sub"}
+    try:
+        response = TestClient(app).get("/api/vista/diagnostics/organizational-coverage")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 403
+
+
 def test_org_coverage_endpoint_success_with_bounded_cohort_and_completeness():
-    app.dependency_overrides[verify_backend_api_key] = lambda: {"sub": "test"}
+    app.dependency_overrides[require_vista_diagnostic_admin] = lambda: "test"
     fake = FakeVistaOrganizationClient()
     try:
         with patch("main.VistaOrganizationClient.from_env", return_value=fake):
@@ -84,7 +95,7 @@ def test_org_coverage_endpoint_success_with_bounded_cohort_and_completeness():
 
 
 def test_org_coverage_endpoint_truncated_snapshot_caps_to_partial():
-    app.dependency_overrides[verify_backend_api_key] = lambda: {"sub": "test"}
+    app.dependency_overrides[require_vista_diagnostic_admin] = lambda: "test"
     fake = FakeVistaOrganizationClient(
         user_comp={"pages_reported": 10, "pages_fetched": 3, "records_fetched": 150, "truncated": True, "complete": False}
     )
@@ -102,7 +113,7 @@ def test_org_coverage_endpoint_truncated_snapshot_caps_to_partial():
 
 
 def test_org_coverage_endpoint_rejects_single_date():
-    app.dependency_overrides[verify_backend_api_key] = lambda: {"sub": "test"}
+    app.dependency_overrides[require_vista_diagnostic_admin] = lambda: "test"
     try:
         response = TestClient(app).get(
             "/api/vista/diagnostics/organizational-coverage?data_inicio=2026-08-01"
@@ -115,7 +126,7 @@ def test_org_coverage_endpoint_rejects_single_date():
 
 
 def test_org_coverage_endpoint_caching_and_refresh():
-    app.dependency_overrides[verify_backend_api_key] = lambda: {"sub": "test"}
+    app.dependency_overrides[require_vista_diagnostic_admin] = lambda: "test"
     fake = FakeVistaOrganizationClient()
     try:
         with patch("main.VistaOrganizationClient.from_env", return_value=fake):
@@ -135,7 +146,7 @@ def test_org_coverage_endpoint_caching_and_refresh():
 
 
 def test_org_coverage_endpoint_circuit_broken_sanitized():
-    app.dependency_overrides[verify_backend_api_key] = lambda: {"sub": "test"}
+    app.dependency_overrides[require_vista_diagnostic_admin] = lambda: "test"
     fake = FakeVistaOrganizationClient(circuit_broken=True)
     fake.fetch_anonymized_users = lambda **kw: (_ for _ in ()).throw(
         VistaOrganizationAPIError("Circuit open", "vista_circuit_broken")
@@ -154,7 +165,7 @@ def test_org_coverage_endpoint_circuit_broken_sanitized():
 
 
 def test_org_coverage_endpoint_deal_query_error_preserves_error_and_caps_to_partial():
-    app.dependency_overrides[verify_backend_api_key] = lambda: {"sub": "test"}
+    app.dependency_overrides[require_vista_diagnostic_admin] = lambda: "test"
     fake = FakeVistaOrganizationClient()
     fake.fetch_bounded_deal_associations = lambda **kw: (_ for _ in ()).throw(
         VistaOrganizationAPIError("Deal query error", "vista_deal_query_failed")
@@ -179,7 +190,7 @@ def test_org_coverage_endpoint_deal_query_error_preserves_error_and_caps_to_part
 
 
 def test_org_coverage_endpoint_zero_fields_negotiated():
-    app.dependency_overrides[verify_backend_api_key] = lambda: {"sub": "test"}
+    app.dependency_overrides[require_vista_diagnostic_admin] = lambda: "test"
     fake = FakeVistaOrganizationClient(probed={"accepted": [], "rejected": ["BadField1"]})
     try:
         with patch("main.VistaOrganizationClient.from_env", return_value=fake):
