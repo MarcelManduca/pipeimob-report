@@ -15,13 +15,19 @@ descoberto por `db push`, `db reset` ou pelo fluxo de publicação atual.
 - recompõe os 20 objetos de tabela próprios observados, sem copiar dados;
 - reúne identidade/RBAC, estrutura comercial, portal, funções, RLS e grants;
 - não inclui usuário inicial, e-mail privilegiado, credencial ou seed comercial;
-- só executa quando o banco se chama exatamente `gralha_baseline_ci`;
+- só executa quando o banco se chama exatamente `gralha_baseline_ci` ou quando
+  uma sessão transacional autoriza explicitamente um projeto Supabase isolado
+  por meio de `gralha.baseline_ci_target=isolated-supabase-project`;
 - não inicia backfill nem ampliação da relação corretor→equipe;
 - preserva as seis migrações atuais e as cópias históricas como evidência.
 
 O gerador `scripts/build_gralha_baseline_candidate.mjs` monta o arquivo em ordem
 determinística a partir dos componentes revisados. O teste integral aplica apenas
 o arquivo unificado, em PostgreSQL descartável e sem conexão com o Supabase.
+
+Para a validação em projeto Supabase vazio, a autorização deve ser definida com
+`SET LOCAL` dentro da mesma transação do candidato. Sem essa marca de sessão, a
+execução continua bloqueada. O candidato permanece fora da cadeia automática.
 
 ## Por que não está na pasta ativa
 
@@ -44,6 +50,10 @@ decidida antes da promoção.
 5. Aprovar plano de rollout, observabilidade e migração corretiva de rollback.
 
 `migration repair`, `db push`, merge, SQL remoto e deploy continuam bloqueados.
+
+O replay em Supabase gerenciado e seus achados estão registrados em
+[`SUPABASE_VALIDATION_20260906.md`](SUPABASE_VALIDATION_20260906.md). A validação
+estrutural foi aprovada; a promoção continua bloqueada pelos portões acima.
 
 ## Recuperação atual
 

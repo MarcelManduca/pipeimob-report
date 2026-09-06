@@ -1,8 +1,10 @@
 -- TEST CANDIDATE ONLY. Structural DDL recovered from catalog metadata.
 -- No business rows, broker/team seeds, credentials, or production authorization.
 do $$ begin
-  if current_database() <> 'gralha_baseline_ci' then
-    raise exception 'Only disposable gralha_baseline_ci is allowed';
+  if current_database() <> 'gralha_baseline_ci'
+     and current_setting('gralha.baseline_ci_target', true)
+       is distinct from 'isolated-supabase-project' then
+    raise exception 'Only an explicitly authorized disposable baseline target is allowed';
   end if;
 end $$;
 
@@ -283,4 +285,3 @@ using (public.is_active_super_admin((select auth.uid())));
 create policy "active indicator users can read team reference"
 on public.sales_team_reference for select to authenticated
 using (public.is_active_user((select auth.uid())));
-

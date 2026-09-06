@@ -106,9 +106,10 @@ voltar ao repositório como arquivos de migração revisados, para evitar novo d
 Os componentes continuam divididos em identidade/RBAC, estrutura comercial e
 least privilege. A migração de revisão os reúne com os arquivos já reconciliados
 em ordem determinística e interrompe a execução se o banco não se chamar
-exatamente `gralha_baseline_ci`. O teste integral monta as dependências mínimas
-do Supabase com identidades fictícias, aplica somente o arquivo unificado e
-confere o catálogo esperado. Ele não é uma migração ativa.
+exatamente `gralha_baseline_ci` ou se uma sessão de projeto Supabase isolado não
+tiver sido explicitamente autorizada. O teste integral monta as dependências
+mínimas do Supabase com identidades fictícias, aplica somente o arquivo unificado
+e confere o catálogo esperado. Ele não é uma migração ativa.
 
 Resultado do CI em 04/09/2026:
 
@@ -124,6 +125,14 @@ testadas, ausência de acesso direto dos papéis de API a `validation`, RPC come
 restrita a `service_role` e trigger sem privilégio derivado de e-mail ou metadata.
 
 [Execução da baseline versionada 33887550936](https://github.com/MarcelManduca/pipeimob-report/actions/runs/33887550936).
+
+Em 06/09/2026, o mesmo candidato foi reproduzido num projeto Supabase gerenciado
+vazio e isolado. O replay confirmou novamente os totais estruturais, RLS e
+testes negativos de isolamento, sem persistir dados ou histórico de migração. A
+prova também identificou cinco funções `SECURITY DEFINER` expostas a
+`authenticated` e a redução deliberada de 20 para 17 políticas, itens que
+permanecem como portões antes de qualquer promoção. Consulte
+[`SUPABASE_VALIDATION_20260906.md`](migrations/baseline-candidate/SUPABASE_VALIDATION_20260906.md).
 
 ## Referências
 

@@ -1,8 +1,10 @@
 -- TEST CANDIDATE ONLY. Not a migration or a production authorization.
 -- Fresh identity/RBAC baseline: no privileged email and no user backfill.
 do $$ begin
-  if current_database() <> 'gralha_baseline_ci' then
-    raise exception 'Only disposable gralha_baseline_ci is allowed';
+  if current_database() <> 'gralha_baseline_ci'
+     and current_setting('gralha.baseline_ci_target', true)
+       is distinct from 'isolated-supabase-project' then
+    raise exception 'Only an explicitly authorized disposable baseline target is allowed';
   end if;
 end $$;
 

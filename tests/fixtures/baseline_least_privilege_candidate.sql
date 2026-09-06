@@ -1,7 +1,9 @@
 -- TEST CANDIDATE ONLY. Final grants for the disposable full-baseline replay.
 do $$ begin
-  if current_database() <> 'gralha_baseline_ci' then
-    raise exception 'Only disposable gralha_baseline_ci is allowed';
+  if current_database() <> 'gralha_baseline_ci'
+     and current_setting('gralha.baseline_ci_target', true)
+       is distinct from 'isolated-supabase-project' then
+    raise exception 'Only an explicitly authorized disposable baseline target is allowed';
   end if;
 end $$;
 

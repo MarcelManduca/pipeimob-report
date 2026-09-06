@@ -184,6 +184,8 @@ test('full baseline candidates stay outside automatic migration discovery', asyn
   for (const [index, source] of sources.entries()) {
     assert.match(source, /TEST CANDIDATE ONLY/);
     assert.match(source, /current_database\(\) <> 'gralha_baseline_ci'/);
+    assert.match(source, /current_setting\('gralha\.baseline_ci_target', true\)/);
+    assert.match(source, /is distinct from 'isolated-supabase-project'/);
     assert.doesNotMatch(source, /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i);
     assert.doesNotMatch(source, /eyJ[A-Za-z0-9_-]{20,}|sb_secret_|sbp_[A-Za-z0-9]{20,}/);
     await assert.rejects(access(new URL(
@@ -202,6 +204,8 @@ test('CLI-versioned baseline is one reproducible review-only migration', async (
   assert.match(candidate, /REVIEW CANDIDATE ONLY\. Not an active Supabase migration/);
   assert.match(candidate, /Supabase CLI 2\.20\.3 in GitHub Actions run 33886952900/);
   assert.match(candidate, /current_database\(\) <> 'gralha_baseline_ci'/);
+  assert.match(candidate, /current_setting\('gralha\.baseline_ci_target', true\)/);
+  assert.match(candidate, /is distinct from 'isolated-supabase-project'/);
   assert.doesNotMatch(candidate, /INICIAR-VALIDACAO-EQUIPES-GRALHA/);
   assert.doesNotMatch(
     candidate,
