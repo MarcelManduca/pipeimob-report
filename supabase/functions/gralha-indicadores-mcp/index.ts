@@ -11,7 +11,7 @@ import {
 
 const FUNCTION_SLUG = "gralha-indicadores-mcp";
 const SERVER_NAME = "Gralha — Indicadores Pipeimob × Vista";
-const SERVER_VERSION = "1.15.0";
+const SERVER_VERSION = "1.16.0";
 const JSON_HEADERS = {
   "Content-Type": "application/json; charset=utf-8",
   "Cache-Control": "no-store",
@@ -31,7 +31,8 @@ const CIRCUIT_COOLDOWN_MS = 60_000;
 type IntegrationOperation =
   | "sales_reconciliation"
   | "sales_neighborhood_detail"
-  | "vista_funnel_cohort";
+  | "vista_funnel_cohort"
+  | "vista_organizational_coverage";
 
 type JsonRpcId = string | number | null;
 type JsonRpcRequest = {
@@ -297,6 +298,7 @@ async function fetchBackendJson(
       status: response.status,
       payload,
       integrationError:
+        response.headers.get("X-Diagnostic-Error") ??
         response.headers.get("X-Funnel-Error") ??
         response.headers.get("X-Reconciliation-Error"),
     };
@@ -1922,6 +1924,108 @@ async function callVistaFunnelCohort(
   };
 }
 
+async function callVistaOrganizationalCoverage(
+  token: string,
+  args: Record<string, unknown>,
+): Promise<{ isError: boolean; value: unknown }> {
+  const hasStart = args.data_inicio !== undefined;
+  const hasEnd = args.data_fim !== undefined;
+  if (hasStart !== hasEnd) {
+    return {
+      isError: true,
+      value: {
+        error: "invalid_period",
+        detail: "Informe data inicial e final juntas, no formato YYYY-MM-DD.",
+      },
+    };
+  }
+  if (hasStart) {
+    const validationError = validatePeriod(args.data_inicio, args.data_fim);
+    if (validationError) {
+      return {
+        isError: true,
+        value: { error: "invalid_period", detail: validationError },
+      };
+    }
+  }
+
+  const backend = (
+    Deno.env.get("MCP_PIPEIMOB_BACKEND_URL") ??
+    "https://pipeimob-report.onrender.com"
+  ).replace(/\/+$/, "");
+  const endpoint = new URL(
+    backend + "/api/vista/diagnostics/organizational-coverage",
+  );
+  if (hasStart) {
+    endpoint.searchParams.set("data_inicio", String(args.data_inicio));
+    endpoint.searchParams.set("data_fim", String(args.data_fim));
+  }
+  endpoint.searchParams.set(
+    "max_pages",
+    String(boundedInteger(args.max_pages, 5, 1, 20)),
+  );
+
+  const result = await fetchBackendJson(endpoint, token);
+  if (!result.reachable) {
+    return {
+      isError: true,
+      value: {
+        error: "backend_unreachable",
+        detail: "O diagnóstico organizacional do Vista não respondeu no tempo esperado.",
+      },
+    };
+  }
+  if (result.status < 200 || result.status >= 300) {
+    const upstream = result.payload && typeof result.payload === "object"
+      ? result.payload as Record<string, unknown>
+      : {};
+    const code = safeDiagnosticCode(
+      result.integrationError ?? upstream.error_code,
+      result.status === 403
+        ? "organizational_diagnostic_access_denied"
+        : result.status === 401
+        ? "backend_auth_rejected"
+        : "organizational_diagnostic_unavailable",
+    );
+    return {
+      isError: true,
+      value: {
+        error: code,
+        status: result.status,
+        detail: result.status === 403
+          ? "Este administrador ainda não está autorizado no diagnóstico organizacional do backend."
+          : result.status === 401
+          ? "O backend não reconheceu a identidade deste usuário."
+          : "O diagnóstico organizacional do Vista está temporariamente indisponível.",
+      },
+    };
+  }
+  if (!result.payload || typeof result.payload !== "object") {
+    return {
+      isError: true,
+      value: {
+        error: "invalid_upstream_contract",
+        detail: "O diagnóstico organizacional respondeu em um formato inesperado.",
+      },
+    };
+  }
+
+  const payload = result.payload as Record<string, unknown>;
+  if (
+    payload.contract_version !== "1.0" ||
+    payload.diagnostic_target !== "vista_organizational_stable_id_coverage"
+  ) {
+    return {
+      isError: true,
+      value: {
+        error: "invalid_upstream_contract",
+        detail: "A versão do diagnóstico organizacional não é compatível com o portal.",
+      },
+    };
+  }
+  return { isError: false, value: payload };
+}
+
 const TOOLS = [
   {
     name: "verificar_disponibilidade_fontes",
@@ -2115,6 +2219,65 @@ const TOOLS = [
         "unsupported_without_stage_history",
         "response_guidance",
         "visualization",
+      ],
+    },
+  },
+  {
+    name: "diagnosticar_estrutura_organizacional_vista",
+    title: "Diagnosticar cobertura da estrutura organizacional no Vista",
+    description:
+      "Uso administrativo. Avalia, somente por métricas agregadas e IDs estáveis, se o Vista possui cobertura suficiente para relacionar corretor→equipe→gerente→loja. Não retorna nomes de pessoas, lista de equipes nem vínculos individuais e não deve ser usado como diretório operacional.",
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        data_inicio: {
+          type: "string",
+          format: "date",
+          description: "Data inicial opcional da coorte, no formato YYYY-MM-DD.",
+        },
+        data_fim: {
+          type: "string",
+          format: "date",
+          description: "Data final opcional da coorte, no formato YYYY-MM-DD.",
+        },
+        max_pages: {
+          type: "integer",
+          minimum: 1,
+          maximum: 20,
+          default: 5,
+          description: "Limite estrito de páginas consultadas em cada fonte.",
+        },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      properties: {
+        contract_version: { type: "string" },
+        diagnostic_target: { type: "string" },
+        generated_at: { type: "string" },
+        overall_status: { type: "string" },
+        completeness: { type: "object" },
+        role_summary: { type: "object" },
+        dimensions: { type: "object" },
+        blocks_found: { type: "array", items: { type: "string" } },
+        privacy_guarantee: { type: "object" },
+      },
+      required: [
+        "contract_version",
+        "diagnostic_target",
+        "generated_at",
+        "overall_status",
+        "completeness",
+        "dimensions",
+        "blocks_found",
+        "privacy_guarantee",
       ],
     },
   },
@@ -2318,7 +2481,7 @@ Deno.serve(async (request: Request) => {
       capabilities: { tools: { listChanged: false } },
       serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
       instructions:
-        "Use verificar_disponibilidade_fontes apenas como verificação técnica antes de uma análise generativa quando houver sinais de falhas recorrentes; se a fonte necessária estiver bloqueada, não execute outra consulta nem produza análise. Use consultar_ranking_vendas somente para vendas oficiais. Use consultar_funil_vista para negócios cadastrados no período, status geral, etapa atual e cruzamento entre etapa e status. Perguntas sobre visitas, agendamentos, propostas ou outras etapas, inclusive pedidos de separação por equipe, pertencem sempre a consultar_funil_vista; envie agrupar_por=equipe e equipe=<nome> quando uma equipe específica for solicitada. Para rankings de vendas por equipes, use consultar_ranking_vendas com agrupar_por=equipe; para avaliar uma equipe de vendas específica, informe também equipe. Para saber o bairro em que um corretor mais vendeu, use agrupar_por=bairro e informe corretor. Use top_n conforme solicitado, com padrão 10. Quantidade é o critério padrão; VGV deve ser solicitado explicitamente. O fim de períodos futuros é limitado automaticamente à data atual de São Paulo. Quantidade, data e VGV vêm das APIs ao vivo; a planilha é somente uma referência gerencial de responsável para equipe com vigência. Responda primeiro com o número, ranking ou conclusão solicitada, sem bordão ou prefixo padronizado. Perguntas objetivas devem receber uma ou duas frases; acrescente período, cobertura e fonte somente quando forem necessários para evitar interpretação errada ou quando o usuário pedir. Em avaliações gerenciais, apresente fatos, comparação, leitura executiva e ação recomendada apenas quando os dados sustentarem essas conclusões. No funil, diferencie obrigatoriamente negócios criados no período, etapa atual, status geral e eventos históricos de entrada em etapa. Uma contagem na etapa Visita representa negócios atualmente nessa etapa, não visitas realizadas. Nunca apresente negócios atualmente em Proposta como propostas geradas no período; esta métrica exige um histórico de entrada em etapas. Se pedirem uma métrica histórica indisponível, apresente primeiro a fotografia atual verificada em no máximo 80 palavras e esclareça a diferença em uma frase. Não repita a pergunta, não liste fontes, timestamps ou limitações técnicas salvo se forem solicitados e nunca diga que existe confirmação de contrato pendente. Se a ferramenta retornar erro, informe a falha em uma frase curta; não transforme valores ausentes em análise. Não conclua sobre conversão de pipeline, eventos históricos de visitas ou tempo entre etapas sem os dados operacionais correspondentes. A visualização é fornecida como dados estruturados e nunca deve ser substituída por barras ASCII ou código Python.",
+        "Use verificar_disponibilidade_fontes apenas como verificação técnica antes de uma análise generativa quando houver sinais de falhas recorrentes; se a fonte necessária estiver bloqueada, não execute outra consulta nem produza análise. Use diagnosticar_estrutura_organizacional_vista somente para administradores avaliarem a cobertura agregada de IDs estáveis entre corretor, equipe, gerente e loja. Esse diagnóstico não é um diretório: nunca deduza dele nomes, integrantes, equipes ativas ou mudanças individuais. Use consultar_ranking_vendas somente para vendas oficiais. Use consultar_funil_vista para negócios cadastrados no período, status geral, etapa atual e cruzamento entre etapa e status. Perguntas sobre visitas, agendamentos, propostas ou outras etapas, inclusive pedidos de separação por equipe, pertencem sempre a consultar_funil_vista; envie agrupar_por=equipe e equipe=<nome> quando uma equipe específica for solicitada. Para rankings de vendas por equipes, use consultar_ranking_vendas com agrupar_por=equipe; para avaliar uma equipe de vendas específica, informe também equipe. Para saber o bairro em que um corretor mais vendeu, use agrupar_por=bairro e informe corretor. Use top_n conforme solicitado, com padrão 10. Quantidade é o critério padrão; VGV deve ser solicitado explicitamente. O fim de períodos futuros é limitado automaticamente à data atual de São Paulo. Quantidade, data e VGV vêm das APIs ao vivo; a planilha é somente uma referência gerencial de responsável para equipe com vigência. Responda primeiro com o número, ranking ou conclusão solicitada, sem bordão ou prefixo padronizado. Perguntas objetivas devem receber uma ou duas frases; acrescente período, cobertura e fonte somente quando forem necessários para evitar interpretação errada ou quando o usuário pedir. Em avaliações gerenciais, apresente fatos, comparação, leitura executiva e ação recomendada apenas quando os dados sustentarem essas conclusões. No funil, diferencie obrigatoriamente negócios criados no período, etapa atual, status geral e eventos históricos de entrada em etapa. Uma contagem na etapa Visita representa negócios atualmente nessa etapa, não visitas realizadas. Nunca apresente negócios atualmente em Proposta como propostas geradas no período; esta métrica exige um histórico de entrada em etapas. Se pedirem uma métrica histórica indisponível, apresente primeiro a fotografia atual verificada em no máximo 80 palavras e esclareça a diferença em uma frase. Não repita a pergunta, não liste fontes, timestamps ou limitações técnicas salvo se forem solicitados e nunca diga que existe confirmação de contrato pendente. Se a ferramenta retornar erro, informe a falha em uma frase curta; não transforme valores ausentes em análise. Não conclua sobre conversão de pipeline, eventos históricos de visitas ou tempo entre etapas sem os dados operacionais correspondentes. A visualização é fornecida como dados estruturados e nunca deve ser substituída por barras ASCII ou código Python.",
     });
   }
   if (message.method === "tools/list") {
@@ -2333,9 +2496,16 @@ Deno.serve(async (request: Request) => {
     if (
       name !== "verificar_disponibilidade_fontes" &&
       name !== "consultar_ranking_vendas" &&
-      name !== "consultar_funil_vista"
+      name !== "consultar_funil_vista" &&
+      name !== "diagnosticar_estrutura_organizacional_vista"
     ) {
       return rpcError(message.id, -32602, "Unknown tool");
+    }
+    if (
+      name === "diagnosticar_estrutura_organizacional_vista" &&
+      !auth.hasGlobalAccess
+    ) {
+      return rpcError(message.id, -32604, "Administrative access required");
     }
     const scopedArgs = auth.hasGlobalAccess || name === "verificar_disponibilidade_fontes"
       ? args
@@ -2347,6 +2517,8 @@ Deno.serve(async (request: Request) => {
       };
     const result = name === "verificar_disponibilidade_fontes"
       ? await sourceAvailability(auth.userClient)
+      : name === "diagnosticar_estrutura_organizacional_vista"
+        ? await callVistaOrganizationalCoverage(auth.token, args)
       : name === "consultar_funil_vista"
         ? await callVistaFunnelCohort(auth.token, scopedArgs, auth.userClient)
         : await callSalesRanking(auth.token, scopedArgs, auth.userClient);

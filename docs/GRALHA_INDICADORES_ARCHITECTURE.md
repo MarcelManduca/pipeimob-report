@@ -321,8 +321,8 @@ por testes e sem misturar refatoração estrutural com mudança de regra de neg�
 
 | Ambiente | Referência | Estado em 2026-09-06 |
 |---|---|---|
-| Produção | `main` em `e53627b` | Portal, histórico, RBAC e gráficos conhecidos |
-| Desenvolvimento organizacional | `feat/gralha-org-consolidated-20260906` em `5a204f5` | Motor temporal, diagnóstico Vista v5 e documentação; sem deploy |
+| Produção | `main` em `4aca97e` | Backend organizacional consolidado; MCP v23/contrato 1.15.0 e Worker v11 conhecidos |
+| Integração do diagnóstico no portal | `feat/portal-organizational-diagnostic-20260906` | MCP 1.16.0 e Worker v12 em validação; publicação pendente |
 | Auditoria Antigravity | Patches v2–v5 auditados | v5 aceita para desenvolvimento local, com ressalva registrada |
 | Supabase temporal | Esquema candidato | Nenhuma migração publicada nesta fase |
 
