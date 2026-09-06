@@ -30,6 +30,11 @@ from services.vista_funnel_client import (
     VistaFunnelClient,
     summarize_created_deal_cohort,
 )
+from services.vista_organization_client import (
+    VistaOrganizationAPIError,
+    VistaOrganizationClient,
+)
+from services.organizational_coverage import evaluate_organizational_coverage
 
 # Centralized HTTP Timeout configuration for external API requests (connection and read timeout)
 try:
@@ -113,6 +118,16 @@ except ValueError:
 
 vista_funnel_cache = DashboardCache()
 vista_funnel_cache.clear()
+
+try:
+    VISTA_ORG_COVERAGE_CACHE_TTL_SECONDS = max(
+        30, min(900, int(os.getenv("VISTA_ORG_COVERAGE_CACHE_TTL_SECONDS", "180")))
+    )
+except ValueError:
+    VISTA_ORG_COVERAGE_CACHE_TTL_SECONDS = 180
+
+vista_org_coverage_cache = DashboardCache()
+vista_org_coverage_cache.clear()
 
 DASHBOARD_CACHE_VERSION = "v2"
 
@@ -4376,6 +4391,29 @@ async def require_contracts_control_temporary_admin(
         )
     return sub
 
+
+async def require_vista_diagnostic_admin(
+    payload: dict = Depends(verify_backend_api_key),
+) -> str:
+    """Restrict Vista organizational diagnostics to an explicit, fail-closed allowlist."""
+    sub = str(payload.get("sub") or "").strip()
+    if not sub:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+
+    raw_subs = os.getenv("VISTA_DIAGNOSTIC_ADMIN_SUBS", "")
+    admin_subs = {item.strip() for item in raw_subs.split(",") if item.strip()}
+    if not admin_subs:
+        raise HTTPException(
+            status_code=503,
+            detail="Vista organizational diagnostic administrators are not configured.",
+        )
+    if sub not in admin_subs:
+        raise HTTPException(
+            status_code=403,
+            detail="Vista organizational diagnostic access is unauthorized.",
+        )
+    return sub
+
 @app.get(
     "/api/transactions",
     response_model=TransactionsListResponse,
@@ -5447,6 +5485,218 @@ async def get_vista_funnel_cohort(
     response.headers["X-Funnel-Cache"] = cache_status
     response.headers["X-Funnel-Contract"] = "1.1"
     response.headers["X-Funnel-Semantics"] = "created_deals_current_stage"
+    return payload
+
+
+@app.get(
+    "/api/vista/diagnostics/organizational-coverage",
+    dependencies=[Depends(require_vista_diagnostic_admin)],
+    summary="Evaluate stable ID coverage across organizational entities in Vista CRM",
+    description=(
+        "Assesses stable ID coverage for broker->team, team->manager, manager->agency, "
+        "and team->agency relationships using Vista REST APIs with bounded queries. "
+        "Categorizes unknown roles as unknown. Flags multiple mappings as conflict. "
+        "Never matches entities by name alone. Strips all personal names, emails, "
+        "credentials, and raw payloads. Returns only aggregate metrics and status codes."
+    ),
+)
+async def get_vista_organizational_coverage(
+    response: Response,
+    data_inicio: Optional[str] = Query(None, description="Optional cohort start date (YYYY-MM-DD)"),
+    data_fim: Optional[str] = Query(None, description="Optional cohort end date (YYYY-MM-DD)"),
+    pipe_id: Optional[str] = Query(None, description="Optional pipeline ID override"),
+    max_pages: int = Query(5, ge=1, le=20, description="Strict maximum pagination limit"),
+    refresh: bool = Query(False),
+):
+    snapshot_date = datetime.now(timezone.utc).date().isoformat()
+    start_date = None
+    end_date = None
+    if data_inicio or data_fim:
+        if not (data_inicio and data_fim):
+            raise HTTPException(
+                status_code=400,
+                detail="Both data_inicio and data_fim must be provided together",
+            )
+        try:
+            start_date = date.fromisoformat(data_inicio)
+            end_date = date.fromisoformat(data_fim)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400, detail="Dates must use YYYY-MM-DD"
+            ) from exc
+        if start_date > end_date:
+            raise HTTPException(
+                status_code=400, detail="data_inicio cannot be after data_fim"
+            )
+
+    cache_key = (
+        "vista_org_coverage_v2",
+        "1.0",
+        str(data_inicio),
+        str(data_fim),
+        str(pipe_id),
+        str(max_pages),
+    )
+
+    def sync_fetch():
+        client = VistaOrganizationClient.from_env()
+        user_meta = {
+            "requested": True,
+            "successful": False,
+            "complete": False,
+            "truncated": False,
+            "error_code": None,
+            "pages_reported": 0,
+            "pages_fetched": 0,
+            "records_fetched": 0,
+        }
+        deal_meta = {
+            "requested": bool(start_date and end_date),
+            "successful": not bool(start_date and end_date),
+            "complete": not bool(start_date and end_date),
+            "truncated": False,
+            "error_code": None,
+            "pages_reported": 0,
+            "pages_fetched": 0,
+            "records_fetched": 0,
+        }
+
+        try:
+            users, user_comp = client.fetch_anonymized_users(max_pages=max_pages)
+            user_meta["successful"] = True
+            user_meta["complete"] = bool(user_comp.get("complete", not user_comp.get("truncated", False)))
+            user_meta["truncated"] = bool(user_comp.get("truncated", False))
+            user_meta["pages_reported"] = user_comp.get("pages_reported", 1)
+            user_meta["pages_fetched"] = user_comp.get("pages_fetched", 0)
+            user_meta["records_fetched"] = user_comp.get("records_fetched", 0)
+        except VistaOrganizationAPIError as exc:
+            user_meta["successful"] = False
+            user_meta["complete"] = False
+            user_meta["error_code"] = getattr(exc, "error_code", None) or "vista_organization_api_error"
+            if client.is_circuit_broken():
+                user_meta["error_code"] = "vista_circuit_broken"
+                probed = client.get_probed_fields()
+                return evaluate_organizational_coverage(
+                    anonymized_users=[],
+                    anonymized_deals=[],
+                    probed_fields_summary=probed,
+                    circuit_broken=True,
+                    period=(
+                        {"start": data_inicio, "end": data_fim, "basis": client.created_field}
+                        if data_inicio
+                        else None
+                    ),
+                    sources={"users": user_meta, "deals": deal_meta},
+                    snapshot_date=snapshot_date,
+                )
+            raise
+        except VistaSalesConfigurationError as exc:
+            user_meta["successful"] = False
+            user_meta["complete"] = False
+            user_meta["error_code"] = getattr(exc, "error_code", None) or "vista_not_configured"
+            probed = client.get_probed_fields()
+            return evaluate_organizational_coverage(
+                anonymized_users=[],
+                anonymized_deals=[],
+                probed_fields_summary=probed,
+                circuit_broken=client.is_circuit_broken(),
+                period=(
+                    {"start": data_inicio, "end": data_fim, "basis": client.created_field}
+                    if data_inicio
+                    else None
+                ),
+                sources={"users": user_meta, "deals": deal_meta},
+                snapshot_date=snapshot_date,
+            )
+
+        deals = []
+        if start_date and end_date:
+            try:
+                deals, deal_comp = client.fetch_bounded_deal_associations(
+                    start_date=start_date,
+                    end_date=end_date,
+                    pipe_id=pipe_id,
+                    max_pages=max_pages,
+                )
+                deal_meta["successful"] = True
+                deal_meta["complete"] = bool(deal_comp.get("complete", not deal_comp.get("truncated", False)))
+                deal_meta["truncated"] = bool(deal_comp.get("truncated", False))
+                deal_meta["pages_reported"] = deal_comp.get("pages_reported", 1)
+                deal_meta["pages_fetched"] = deal_comp.get("pages_fetched", 0)
+                deal_meta["records_fetched"] = deal_comp.get("records_fetched", 0)
+            except VistaOrganizationAPIError as exc:
+                deal_meta["successful"] = False
+                deal_meta["complete"] = False
+                deal_meta["error_code"] = getattr(exc, "error_code", None) or "vista_deal_query_failed"
+                deals = []
+            except VistaSalesConfigurationError as exc:
+                deal_meta["successful"] = False
+                deal_meta["complete"] = False
+                deal_meta["error_code"] = getattr(exc, "error_code", None) or "vista_not_configured"
+                deals = []
+
+        probed = client.get_probed_fields()
+        return evaluate_organizational_coverage(
+            anonymized_users=users,
+            anonymized_deals=deals,
+            probed_fields_summary=probed,
+            circuit_broken=client.is_circuit_broken(),
+            period=(
+                {"start": data_inicio, "end": data_fim, "basis": client.created_field}
+                if data_inicio
+                else None
+            ),
+            sources={"users": user_meta, "deals": deal_meta},
+            snapshot_date=snapshot_date,
+        )
+
+    if refresh:
+        vista_org_coverage_cache.clear()
+        cached_payload = None
+        cache_status = "miss"
+    else:
+        cached_payload, cache_status = vista_org_coverage_cache.get_status(cache_key)
+
+    try:
+        if cache_status == "fresh" and cached_payload is not None:
+            payload = cached_payload
+        else:
+            payload = await single_flight_registry.execute(
+                cache_key,
+                lambda: asyncio.to_thread(sync_fetch),
+                caller_endpoint="vista_organizational_coverage",
+                timeout=30,
+            )
+            vista_org_coverage_cache.set(
+                cache_key, payload, ttl=VISTA_ORG_COVERAGE_CACHE_TTL_SECONDS
+            )
+            cache_status = "miss"
+    except VistaSalesConfigurationError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Vista organizational integration is not configured.",
+            headers={"X-Diagnostic-Error": "vista_not_configured"},
+        ) from exc
+    except VistaSalesAPIError as exc:
+        error_code = getattr(exc, "error_code", "vista_unavailable")
+        raise HTTPException(
+            status_code=503,
+            detail="Vista organizational diagnostic is temporarily unavailable.",
+            headers={"X-Diagnostic-Error": error_code, "Retry-After": "60"},
+        ) from exc
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(
+            status_code=504,
+            detail="Vista organizational diagnostic query timed out.",
+            headers={"X-Diagnostic-Error": "vista_timeout"},
+        ) from exc
+
+    response.headers["X-Data-Mode"] = (
+        "live" if cache_status == "miss" else "cached"
+    )
+    response.headers["X-Diagnostic-Cache"] = cache_status
+    response.headers["X-Diagnostic-Contract"] = "1.0"
+    response.headers["X-Diagnostic-Status"] = str(payload.get("overall_status") or "blocked")
     return payload
 
 

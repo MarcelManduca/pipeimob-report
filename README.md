@@ -175,7 +175,13 @@ VISTA_FUNNEL_REQUEST_MAX_ATTEMPTS=2
 VISTA_FUNNEL_RETRY_BACKOFF_SECONDS=0.25
 VISTA_FUNNEL_PAGE_CONCURRENCY=4
 VISTA_FUNNEL_CACHE_TTL_SECONDS=180
+VISTA_DIAGNOSTIC_ADMIN_SUBS=
 ```
+
+`VISTA_DIAGNOSTIC_ADMIN_SUBS` deve conter somente os IDs (`sub`) dos usuários
+autorizados a executar o diagnóstico organizacional do Vista. O endpoint fica
+indisponível quando a lista não está configurada e retorna `403` para qualquer
+usuário autenticado que não esteja explicitamente autorizado.
 
 `VISTA_SALES_TEAM_FIELD` é opcional e deve ser preenchido somente depois de
 confirmar, no tenant Vista, o campo de equipe do negócio. Quando ausente, a
