@@ -1,16 +1,16 @@
 # Gralha Indicadores — arquitetura e operação v2
 
-> **Versão documental:** 2.0-draft
+> **Versão documental:** 2.1-draft
 >
 > **Data de referência:** 2026-09-06
 >
-> **Baseline de produção conhecida (`main`):** `e53627b`
+> **Baseline de código conhecida (`main`):** `1c713a8`
 >
-> **Baseline desta especificação:** `ecbc40c`, branch de diretório vivo
+> **Integração do diagnóstico no portal:** `90dfaa7`, PR #38
 >
-> **Consolidação funcional local:** `5a204f5`, diagnóstico Vista v5
+> **Correção mais recente do diagnóstico:** `1c713a8`, PR #39
 >
-> **Regra:** itens marcados como candidatos não estão publicados nem autorizados para produção.
+> **Regra:** a matriz de ambientes diferencia código integrado de versão publicada e validada.
 
 ## Objetivo
 
@@ -321,13 +321,27 @@ por testes e sem misturar refatoração estrutural com mudança de regra de neg�
 
 | Ambiente | Referência | Estado em 2026-09-06 |
 |---|---|---|
-| Produção | `main` em `4aca97e` | Backend organizacional consolidado; MCP v23/contrato 1.15.0 e Worker v11 conhecidos |
-| Integração do diagnóstico no portal | `feat/portal-organizational-diagnostic-20260906` | MCP 1.16.0 e Worker v12 em validação; publicação pendente |
+| GitHub | `main` em `1c713a8` | PR #38 integrou MCP 1.16.0 e Worker v12; PR #39 corrigiu a negociação de campos do Vista |
+| Supabase produção | `gralha-indicadores-mcp` v24, servidor 1.16.0 | Função ativa; ferramenta agregada, trava executiva e endpoint do Render confirmados por leitura |
+| Cloudflare | Worker v12 selecionado em `wrangler.jsonc` | Código integrado; o identificador do deploy ativo ainda deve ser registrado após validação operacional |
+| Render | Endpoint organizacional presente no código de `main` | Versão ativa e `VISTA_DIAGNOSTIC_ADMIN_SUBS` ainda precisam de confirmação operacional |
 | Auditoria Antigravity | Patches v2–v5 auditados | v5 aceita para desenvolvimento local, com ressalva registrada |
 | Supabase temporal | Esquema candidato | Nenhuma migração publicada nesta fase |
 
 Antes de qualquer deploy, a tabela deve ser atualizada com os commits reais de
 Worker, MCP, função administrativa, Render e migrações aplicadas.
+
+### Evidência de validação no portal em 2026-09-06
+
+O portal respondeu corretamente a rankings por equipe e corretor usando vendas
+atribuídas. Também deixou de afirmar o vínculo atual de um corretor com uma equipe
+quando a fonte de vendas não trazia essa relação. A busca textual por `Equipe 1`
+não encontrou vendas atribuídas no mês de agosto nem no acumulado de 2026.
+
+Essa evidência confirma o comportamento seguro já existente, mas não constitui
+teste do novo diagnóstico: a conversa seguiu pela opção de ranking. A aceitação
+da PR #38 exige uma pergunta explícita de cobertura organizacional e a confirmação
+de que o Render reconhece o usuário executivo autorizado.
 
 ### Limitação conhecida do diagnóstico v5
 
