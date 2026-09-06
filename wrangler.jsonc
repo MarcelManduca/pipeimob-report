@@ -1,7 +1,7 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "gralha-indicadores-chat",
-  "main": "cloudflare/gralha-indicadores-chat-worker-v11.js",
+  "main": "cloudflare/gralha-indicadores-chat-worker-v12.js",
   "compatibility_date": "2026-08-30",
   "keep_vars": true,
   "vars": {

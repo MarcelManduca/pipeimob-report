@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-09-06 — Diagnóstico organizacional disponível no portal
+
+- Adiciona ao MCP a ferramenta administrativa `diagnosticar_estrutura_organizacional_vista`, conectada ao contrato agregado `1.0` do Render.
+- Restringe a execução aos papéis executivos globais (`CEO`, `CSO` e `CMO`) e mantém a autorização adicional, fechada por padrão, no backend.
+- Valida período, paginação e versão do contrato antes de devolver qualquer resultado ao portal.
+- Atualiza o Worker Cloudflare v12 para permitir que a IA avalie a cobertura de IDs estáveis entre corretor, equipe, gerente e loja.
+- Explicita que o diagnóstico não é um diretório operacional e não pode listar nomes, integrantes, equipes ativas ou mudanças individuais.
+- Mantém o Worker v11 como artefato de rollback.
+
 ## 2026-09-01 — Identidade Gralha e funil visual premium
 
 - Substitui a identidade verde pela marca oficial Gralha, com predominância de superfícies claras e detalhes em azul institucional, vinho e cinza.

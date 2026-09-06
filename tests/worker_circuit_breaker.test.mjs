@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const workerPath = new URL(
-  "../cloudflare/gralha-indicadores-chat-worker-v11.js",
+  "../cloudflare/gralha-indicadores-chat-worker-v12.js",
   import.meta.url,
 );
 
@@ -315,10 +315,10 @@ test("returns 401 when the MCP rejects an otherwise validated session", async ()
   }
 });
 
-test("calls OpenAI only after the required source is verified", async () => {
+test("calls OpenAI only after the required source is verified and exposes the organizational diagnostic", async () => {
   const originalFetch = globalThis.fetch;
   let openAiCalls = 0;
-  globalThis.fetch = async (input) => {
+  globalThis.fetch = async (input, init) => {
     const url = String(input);
     if (url.endsWith("/auth/v1/user")) return new Response("{}", { status: 200 });
     if (url.includes("/functions/v1/gralha-indicadores-mcp/mcp")) {
@@ -326,6 +326,13 @@ test("calls OpenAI only after the required source is verified", async () => {
     }
     if (url === "https://api.openai.com/v1/responses") {
       openAiCalls += 1;
+      const body = JSON.parse(init.body);
+      assert.ok(
+        body.tools[0].allowed_tools.includes(
+          "diagnosticar_estrutura_organizacional_vista",
+        ),
+      );
+      assert.match(body.instructions, /diagnóstico retorna somente cobertura agregada/i);
       return new Response(
         JSON.stringify({ output_text: "Análise confirmada pelas fontes." }),
         { status: 200, headers: { "Content-Type": "application/json" } },
