@@ -1,0 +1,40 @@
+-- Harden the isolated validation RBAC after the initial bootstrap.
+
+REVOKE EXECUTE ON FUNCTION public.has_role(uuid, public.app_role) FROM anon;
+REVOKE EXECUTE ON FUNCTION public.is_super_admin() FROM anon;
+REVOKE EXECUTE ON FUNCTION public.get_my_role() FROM anon;
+REVOKE EXECUTE ON FUNCTION public.is_active_user(uuid) FROM anon;
+REVOKE EXECUTE ON FUNCTION public.is_active_super_admin(uuid) FROM anon;
+REVOKE ALL ON FUNCTION public.sync_validation_user_access() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.sync_validation_user_access() FROM anon, authenticated;
+
+DROP POLICY IF EXISTS "Users can view own profile" ON public.profiles;
+DROP POLICY IF EXISTS "Superadmins can view profiles" ON public.profiles;
+DROP POLICY IF EXISTS "Users and superadmins can view profiles" ON public.profiles;
+CREATE POLICY "Users and superadmins can view profiles"
+ON public.profiles FOR SELECT TO authenticated
+USING (id = (SELECT auth.uid()) OR public.is_super_admin());
+
+DROP POLICY IF EXISTS "Users can view own role" ON public.user_roles;
+DROP POLICY IF EXISTS "Users and superadmins can view roles" ON public.user_roles;
+DROP POLICY IF EXISTS "Superadmins can manage roles" ON public.user_roles;
+DROP POLICY IF EXISTS "Superadmins can insert roles" ON public.user_roles;
+DROP POLICY IF EXISTS "Superadmins can update roles" ON public.user_roles;
+DROP POLICY IF EXISTS "Superadmins can delete roles" ON public.user_roles;
+
+CREATE POLICY "Users and superadmins can view roles"
+ON public.user_roles FOR SELECT TO authenticated
+USING (user_id = (SELECT auth.uid()) OR public.is_super_admin());
+
+CREATE POLICY "Superadmins can insert roles"
+ON public.user_roles FOR INSERT TO authenticated
+WITH CHECK (public.is_super_admin());
+
+CREATE POLICY "Superadmins can update roles"
+ON public.user_roles FOR UPDATE TO authenticated
+USING (public.is_super_admin())
+WITH CHECK (public.is_super_admin());
+
+CREATE POLICY "Superadmins can delete roles"
+ON public.user_roles FOR DELETE TO authenticated
+USING (public.is_super_admin());

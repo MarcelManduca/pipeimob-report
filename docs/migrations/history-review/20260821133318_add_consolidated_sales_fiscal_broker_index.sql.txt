@@ -1,0 +1,1 @@
+create index if not exists consolidated_sales_fiscal_broker_period_idx on validation.consolidated_sales (fiscal_broker_id, official_sale_date desc);
