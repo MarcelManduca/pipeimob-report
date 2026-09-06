@@ -66,6 +66,7 @@ def evaluate_organizational_coverage(
     period: Optional[Dict[str, Any]] = None,
     sources: Optional[Dict[str, Dict[str, Any]]] = None,
     completeness: Optional[Dict[str, Any]] = None,
+    snapshot_date: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Calculate aggregate organizational coverage metrics with strict role isolation and temporal semantics."""
     probed = probed_fields_summary or {"accepted": [], "rejected": []}
@@ -74,6 +75,23 @@ def evaluate_organizational_coverage(
 
     users = list(anonymized_users)
     deals = list(anonymized_deals or [])
+    current_snapshot_date = str(snapshot_date or "").strip()[:10] or None
+
+    def current_snapshot_conflicts(
+        current_values: Set[str],
+        dated_values: Dict[Optional[str], Set[str]],
+    ) -> bool:
+        """Treat unordered or same-day differences from the live snapshot as conflicts."""
+        if not current_values:
+            return False
+        unknown_date_values = dated_values.get(None, set())
+        if len(current_values | unknown_date_values) > 1:
+            return True
+        if current_snapshot_date:
+            same_day_values = dated_values.get(current_snapshot_date, set())
+            if len(current_values | same_day_values) > 1:
+                return True
+        return False
 
     # Source completeness tracking
     if sources is not None:
@@ -183,7 +201,7 @@ def evaluate_organizational_coverage(
 
         has_simultaneous_conflict = len(curr_teams) > 1 or any(
             len(dteams) > 1 for dteams in dated_teams.values()
-        )
+        ) or current_snapshot_conflicts(curr_teams, dated_teams)
 
         if has_simultaneous_conflict:
             brokers_conflict += 1
@@ -272,7 +290,7 @@ def evaluate_organizational_coverage(
 
         has_simultaneous_conflict = len(curr_mgrs) > 1 or any(
             len(dmgrs) > 1 for dmgrs in dated_mgrs.values()
-        )
+        ) or current_snapshot_conflicts(curr_mgrs, dated_mgrs)
 
         if has_simultaneous_conflict:
             teams_conflict_manager += 1
@@ -337,7 +355,7 @@ def evaluate_organizational_coverage(
 
         has_simultaneous_conflict = len(curr_agencies) > 1 or any(
             len(dagencies) > 1 for dagencies in dated_agencies.values()
-        )
+        ) or current_snapshot_conflicts(curr_agencies, dated_agencies)
 
         if has_simultaneous_conflict:
             managers_conflict_agency += 1
@@ -368,7 +386,7 @@ def evaluate_organizational_coverage(
 
         has_simultaneous_conflict = len(curr_agencies) > 1 or any(
             len(dagencies) > 1 for dagencies in dated_agencies.values()
-        )
+        ) or current_snapshot_conflicts(curr_agencies, dated_agencies)
 
         if has_simultaneous_conflict:
             teams_conflict_agency += 1
@@ -402,7 +420,6 @@ def evaluate_organizational_coverage(
         broker_to_team_supported = bool(
             has_broker_team_evidence
             or has_team_field
-            or (org_accepted_fields and not any("gerente" in f.lower() or "manager" in f.lower() or "agencia" in f.lower() or "loja" in f.lower() or "agency" in f.lower() or "store" in f.lower() for f in org_accepted_fields))
         )
 
         has_manager_field = any("gerente" in f.lower() or "gestor" in f.lower() or "manager" in f.lower() for f in org_accepted_fields)
@@ -414,7 +431,6 @@ def evaluate_organizational_coverage(
         team_to_manager_supported = bool(
             has_team_mgr_evidence
             or has_manager_field
-            or (org_accepted_fields and not any("equipe" in f.lower() or "team" in f.lower() or "agencia" in f.lower() or "loja" in f.lower() for f in org_accepted_fields))
         )
 
         has_agency_field = any("agencia" in f.lower() or "loja" in f.lower() or "agency" in f.lower() or "store" in f.lower() or "filial" in f.lower() for f in org_accepted_fields)
@@ -426,7 +442,6 @@ def evaluate_organizational_coverage(
         manager_to_agency_supported = bool(
             has_mgr_agency_evidence
             or has_agency_field
-            or (org_accepted_fields and not any("equipe" in f.lower() or "team" in f.lower() or "gerente" in f.lower() or "gestor" in f.lower() for f in org_accepted_fields))
         )
 
         has_team_agency_evidence = bool(
@@ -437,7 +452,6 @@ def evaluate_organizational_coverage(
         team_to_agency_supported = bool(
             has_team_agency_evidence
             or has_agency_field
-            or (org_accepted_fields and not any("equipe" in f.lower() or "team" in f.lower() or "gerente" in f.lower() or "gestor" in f.lower() for f in org_accepted_fields))
         )
 
         overall_supported = bool(
@@ -593,6 +607,7 @@ def evaluate_organizational_coverage(
         "completeness": combined_completeness,
         "semantics": {
             "snapshot_type": "point_in_time_cohort",
+            "snapshot_observed_date": current_snapshot_date,
             "event_history_preserved": False,
             "warning": (
                 "Vista REST APIs provide point-in-time snapshot and bounded period cohorts. "
