@@ -408,6 +408,63 @@ def test_adversarial_only_generic_fields_accepted_yields_unsupported():
     assert "no_supported_fields_negotiated" in result["blocks_found"]
 
 
+def test_adversarial_opaque_organizational_field_does_not_claim_support():
+    result = evaluate_organizational_coverage(
+        anonymized_users=[
+            {"user_id": "101", "role_type": "broker", "team_id": None, "is_active": True},
+        ],
+        probed_fields_summary={"accepted": ["CampoOrganizacionalX"], "rejected": []},
+        circuit_broken=False,
+    )
+
+    assert result["field_negotiation"]["supported"] is False
+    assert result["overall_status"] == "blocked"
+    assert all(
+        dimension["supported"] is False
+        for dimension in result["dimensions"].values()
+    )
+
+
+def test_current_snapshot_and_same_day_deal_disagreement_is_conflict():
+    users = [
+        {"user_id": "101", "role_type": "broker", "team_id": "24", "is_active": True},
+    ]
+    deals = [
+        {"deal_id": "d1", "broker_id": "101", "team_id": "99", "deal_date": "2026-09-06"},
+    ]
+    result = evaluate_organizational_coverage(
+        anonymized_users=users,
+        anonymized_deals=deals,
+        probed_fields_summary={"accepted": ["CodigoEquipe"], "rejected": []},
+        circuit_broken=False,
+        snapshot_date="2026-09-06",
+    )
+
+    dimension = result["dimensions"]["broker_to_team"]
+    assert dimension["status"] == "partial"
+    assert dimension["metrics"]["conflict"] == 1
+    assert dimension["metrics"]["historical_multi_team_evidence"] == 0
+    assert "broker_to_team_contains_simultaneous_conflicts" in result["blocks_found"]
+
+
+def test_current_snapshot_and_undated_deal_disagreement_is_conflict():
+    result = evaluate_organizational_coverage(
+        anonymized_users=[
+            {"user_id": "101", "role_type": "broker", "team_id": "24", "is_active": True},
+        ],
+        anonymized_deals=[
+            {"deal_id": "d1", "broker_id": "101", "team_id": "99", "deal_date": None},
+        ],
+        probed_fields_summary={"accepted": ["CodigoEquipe"], "rejected": []},
+        circuit_broken=False,
+        snapshot_date="2026-09-06",
+    )
+
+    dimension = result["dimensions"]["broker_to_team"]
+    assert dimension["metrics"]["conflict"] == 1
+    assert dimension["status"] == "partial"
+
+
 def test_adversarial_broker_without_team_in_snapshot_but_stable_deal_team_resolves_ready():
     users = [
         {"user_id": "101", "role_type": "broker", "team_id": None, "is_active": True},
