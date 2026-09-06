@@ -4391,6 +4391,29 @@ async def require_contracts_control_temporary_admin(
         )
     return sub
 
+
+async def require_vista_diagnostic_admin(
+    payload: dict = Depends(verify_backend_api_key),
+) -> str:
+    """Restrict Vista organizational diagnostics to an explicit, fail-closed allowlist."""
+    sub = str(payload.get("sub") or "").strip()
+    if not sub:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+
+    raw_subs = os.getenv("VISTA_DIAGNOSTIC_ADMIN_SUBS", "")
+    admin_subs = {item.strip() for item in raw_subs.split(",") if item.strip()}
+    if not admin_subs:
+        raise HTTPException(
+            status_code=503,
+            detail="Vista organizational diagnostic administrators are not configured.",
+        )
+    if sub not in admin_subs:
+        raise HTTPException(
+            status_code=403,
+            detail="Vista organizational diagnostic access is unauthorized.",
+        )
+    return sub
+
 @app.get(
     "/api/transactions",
     response_model=TransactionsListResponse,
@@ -5467,7 +5490,7 @@ async def get_vista_funnel_cohort(
 
 @app.get(
     "/api/vista/diagnostics/organizational-coverage",
-    dependencies=[Depends(verify_backend_api_key)],
+    dependencies=[Depends(require_vista_diagnostic_admin)],
     summary="Evaluate stable ID coverage across organizational entities in Vista CRM",
     description=(
         "Assesses stable ID coverage for broker->team, team->manager, manager->agency, "
@@ -5485,6 +5508,7 @@ async def get_vista_organizational_coverage(
     max_pages: int = Query(5, ge=1, le=20, description="Strict maximum pagination limit"),
     refresh: bool = Query(False),
 ):
+    snapshot_date = datetime.now(timezone.utc).date().isoformat()
     start_date = None
     end_date = None
     if data_inicio or data_fim:
@@ -5563,6 +5587,7 @@ async def get_vista_organizational_coverage(
                         else None
                     ),
                     sources={"users": user_meta, "deals": deal_meta},
+                    snapshot_date=snapshot_date,
                 )
             raise
         except VistaSalesConfigurationError as exc:
@@ -5581,6 +5606,7 @@ async def get_vista_organizational_coverage(
                     else None
                 ),
                 sources={"users": user_meta, "deals": deal_meta},
+                snapshot_date=snapshot_date,
             )
 
         deals = []
@@ -5621,6 +5647,7 @@ async def get_vista_organizational_coverage(
                 else None
             ),
             sources={"users": user_meta, "deals": deal_meta},
+            snapshot_date=snapshot_date,
         )
 
     if refresh:
