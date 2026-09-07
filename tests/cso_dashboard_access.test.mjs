@@ -46,3 +46,47 @@ test("accepts the top-level contract returned by dashboard full", () => {
     /summary: upstream\.summary,[\s\S]*managers: upstream\.managers,[\s\S]*origins: upstream\.origins,[\s\S]*timeline: upstream\.timeline/,
   );
 });
+
+test("adminApi enforces explicit timeout and returns 503 on failure", () => {
+  assert.match(worker, /signal:\s*AbortSignal\.timeout\([\d_]+\)/);
+  assert.match(worker, /catch\s*\{\s*return json\(\{ error: "Serviço indisponível\." \}, 503\);\s*\}/);
+});
+
+test("hides CSO executive button in initial HTML until authorized", () => {
+  assert.match(
+    worker,
+    /<button id="cso-dashboard-button" class="nav-button hidden" type="button">/,
+  );
+});
+
+test("handles error states in bootPortal without infinite loading and preserves session on 503", () => {
+  assert.match(worker, /headers\.apikey\s*=\s*env\.SUPABASE_PUBLISHABLE_KEY/);
+  assert.match(worker, /env\.SUPABASE_URL \? supabaseUrl\(env, "\/functions\/v1\/gralha-portal-admin"\) : ADMIN_URL/);
+  assert.match(
+    worker,
+    /\$\("profile-role"\)\.textContent\s*=\s*res\.status===401\?"Sessão expirada":"Perfil indisponível"/,
+  );
+  assert.match(
+    worker,
+    /if\(res\.status===401\)\{save\(null\);showLogin\(\)\}/,
+  );
+});
+
+test("renders monthly timeline table headers with visible contrast and sticky styling", () => {
+  assert.match(
+    worker,
+    /<thead><tr><th>Período<\/th><th>Vendas<\/th><th>VGV<\/th><th>VGC<\/th><\/tr><\/thead>/,
+  );
+  assert.match(
+    worker,
+    /\.cso-table th\{[^}]*position:\s*sticky;[^}]*top:\s*0;[^}]*z-index:\s*2;[^}]*background:\s*#f7f8fc;[^}]*color:\s*var\(--ink\);[^}]*font-weight:\s*750;/,
+  );
+});
+
+test("uses faithful broker nomenclature for VGV por corretor in CSO dashboard", () => {
+  assert.match(worker, /<h2>VGV por corretor<\/h2>/);
+  assert.doesNotMatch(worker, /<h2>VGV por gerente<\/h2>/);
+  assert.match(worker, /csoBars\(managers,"manager","volume"\)/);
+});
+
+
