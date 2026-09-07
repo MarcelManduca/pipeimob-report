@@ -247,6 +247,46 @@ def test_broker_directory_classifies_users_without_retaining_names():
     }]
 
 
+def test_user_field_catalog_accepts_list_contract():
+    def list_catalog_opener(req, *args, **kwargs):
+        path = urllib.parse.urlparse(req.full_url).path
+        if path.endswith("/usuarios/listarcampos"):
+            return MockHTTPResponse(["Codigo", "CodigoEquipeComercial"])
+        return MockHTTPResponse({"total": 1, "paginas": 1, "1": {"Codigo": "9"}})
+
+    client = VistaOrganizationClient(
+        base_url="https://api.vista.com",
+        api_key="secret-key-123",
+        opener=list_catalog_opener,
+    )
+    users, _ = client.fetch_anonymized_users(max_pages=1)
+
+    assert users[0]["user_id"] == "9"
+    assert "CodigoEquipeComercial" in client.get_probed_fields()["accepted"]
+
+
+def test_broker_directory_failure_does_not_discard_user_catalog_result():
+    def optional_broker_opener(req, *args, **kwargs):
+        path = urllib.parse.urlparse(req.full_url).path
+        if path.endswith("/usuarios/listarcampos"):
+            return MockHTTPResponse({"fields": {"Codigo": "Codigo"}})
+        if path.endswith("/corretores/listar"):
+            raise urllib.error.HTTPError(
+                req.full_url, 403, "Forbidden", {}, io.BytesIO(b"{}")
+            )
+        return MockHTTPResponse({"total": 1, "paginas": 1, "1": {"Codigo": "88"}})
+
+    client = VistaOrganizationClient(
+        base_url="https://api.vista.com",
+        api_key="secret-key-123",
+        opener=optional_broker_opener,
+    )
+    users, _ = client.fetch_anonymized_users(max_pages=1)
+
+    assert users[0]["user_id"] == "88"
+    assert users[0]["role_type"] == "unknown"
+
+
 # ==============================================================================
 # 5. Role Categorization: Unknown Must Be 'unknown' and Never Count as Broker
 # ==============================================================================
