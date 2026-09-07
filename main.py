@@ -5664,7 +5664,7 @@ async def get_vista_organizational_coverage(
                 cache_key,
                 lambda: asyncio.to_thread(sync_fetch),
                 caller_endpoint="vista_organizational_coverage",
-                timeout=30,
+                timeout=50,
             )
             vista_org_coverage_cache.set(
                 cache_key, payload, ttl=VISTA_ORG_COVERAGE_CACHE_TTL_SECONDS
