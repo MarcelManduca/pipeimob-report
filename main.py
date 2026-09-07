@@ -5575,21 +5575,20 @@ async def get_vista_organizational_coverage(
             user_meta["error_code"] = getattr(exc, "error_code", None) or "vista_organization_api_error"
             if client.is_circuit_broken():
                 user_meta["error_code"] = "vista_circuit_broken"
-                probed = client.get_probed_fields()
-                return evaluate_organizational_coverage(
-                    anonymized_users=[],
-                    anonymized_deals=[],
-                    probed_fields_summary=probed,
-                    circuit_broken=True,
-                    period=(
-                        {"start": data_inicio, "end": data_fim, "basis": client.created_field}
-                        if data_inicio
-                        else None
-                    ),
-                    sources={"users": user_meta, "deals": deal_meta},
-                    snapshot_date=snapshot_date,
-                )
-            raise
+            probed = client.get_probed_fields()
+            return evaluate_organizational_coverage(
+                anonymized_users=[],
+                anonymized_deals=[],
+                probed_fields_summary=probed,
+                circuit_broken=client.is_circuit_broken(),
+                period=(
+                    {"start": data_inicio, "end": data_fim, "basis": client.created_field}
+                    if data_inicio
+                    else None
+                ),
+                sources={"users": user_meta, "deals": deal_meta},
+                snapshot_date=snapshot_date,
+            )
         except VistaSalesConfigurationError as exc:
             user_meta["successful"] = False
             user_meta["complete"] = False
