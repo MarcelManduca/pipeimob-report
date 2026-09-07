@@ -14,7 +14,7 @@ const mcp = await readFile(
 test("shows the executive dashboard only to global executive roles", () => {
   assert.match(
     worker,
-    /\["ceo","cso","cmo"\]\.includes\(profile\.access_role\)/,
+    /profile\.has_global_access===true\|\|profile\.can_manage_users===true/,
   );
   assert.match(mcp, /const EXECUTIVE_ROLES = new Set\(\["ceo", "cso", "cmo"\]\)/);
   assert.match(
