@@ -1,5 +1,5 @@
 const MCP_URL =
-  "https://kmysinxpdkeszrtdyhid.supabase.co/functions/v1/gralha-indicadores-mcp/mcp";
+  "https://kmysinxpdkeszrtdyhid.supabase.co/functions/v1/gralha-indicadores-mcp-pr-40/mcp";
 const ADMIN_URL =
   "https://kmysinxpdkeszrtdyhid.supabase.co/functions/v1/gralha-portal-admin";
 const DEFAULT_OPENAI_MODEL = "gpt-5-mini";
@@ -1681,7 +1681,7 @@ export default {
           status: "ok",
           configured: configured(env),
           auth_configured: authConfigured(env),
-          openai_model: env.OPENAI_MODEL || DEFAULT_OPENAI_MODEL,
+          openai_model: env.OPENAI_MODEL || DEFAULT_OPENAI_MODEL,\n          preview_target: "pr40-isolated",
         });
       }
       if (request.method === "POST" && url.pathname === "/api/login")
