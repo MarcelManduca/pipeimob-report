@@ -11,7 +11,7 @@ import {
 
 const FUNCTION_SLUG = "gralha-indicadores-mcp";
 const SERVER_NAME = "Gralha — Indicadores Pipeimob × Vista";
-const SERVER_VERSION = "1.17.1";
+const SERVER_VERSION = "1.18.0";
 const JSON_HEADERS = {
   "Content-Type": "application/json; charset=utf-8",
   "Cache-Control": "no-store",
@@ -2095,7 +2095,84 @@ async function callPipeimobOrganizationalCoverage(
   return { isError: false, value: result.payload };
 }
 
+async function callCsoDashboard(
+  token: string,
+  args: Record<string, unknown>,
+): Promise<{ isError: boolean; value: unknown }> {
+  const today = todayInSaoPaulo();
+  const start = typeof args.data_inicio === "string"
+    ? args.data_inicio
+    : today.slice(0, 4) + "-01-01";
+  const end = typeof args.data_fim === "string" ? args.data_fim : today;
+  const validationError = validatePeriod(start, end);
+  if (validationError) {
+    return { isError: true, value: { error: "invalid_period", detail: validationError } };
+  }
+  const backend = (Deno.env.get("MCP_PIPEIMOB_BACKEND_URL") ??
+    "https://pipeimob-report.onrender.com").replace(/\/+$/, "");
+  const endpoint = new URL(backend + "/api/dashboard/full");
+  endpoint.searchParams.set("data_inicio_ccv", start);
+  endpoint.searchParams.set("data_fim_ccv", end);
+  endpoint.searchParams.set("granularity", "month");
+  const result = await fetchBackendJson(endpoint, token);
+  if (!result.reachable || result.status < 200 || result.status >= 300) {
+    return {
+      isError: true,
+      value: {
+        error: safeDiagnosticCode(result.integrationError, "cso_dashboard_unavailable"),
+        detail: "Os indicadores executivos estão temporariamente indisponíveis.",
+      },
+    };
+  }
+  const upstream = result.payload && typeof result.payload === "object"
+    ? result.payload as Record<string, unknown>
+    : null;
+  const data = upstream?.data;
+  if (!data || typeof data !== "object") {
+    return {
+      isError: true,
+      value: { error: "invalid_upstream_contract", detail: "O painel recebeu dados em formato incompatível." },
+    };
+  }
+  return {
+    isError: false,
+    value: {
+      contract_version: "1.0",
+      source: "pipeimob_live",
+      period: { start, end, basis: "ccv" },
+      generated_at: upstream.generated_at ?? new Date().toISOString(),
+      data,
+      unavailable_metrics: [
+        "official_team_and_branch_directory",
+        "adjusted_vgv_business_rule",
+        "cso_commission_by_role",
+        "cso_received_amount",
+      ],
+    },
+  };
+}
+
 const TOOLS = [
+  {
+    name: "consultar_painel_cso",
+    title: "Consultar painel executivo do CSO",
+    description:
+      "Retorna indicadores executivos agregados de vendas e comissões do Pipeimob. Disponível somente para perfis executivos com acesso global.",
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        data_inicio: { type: "string", format: "date" },
+        data_fim: { type: "string", format: "date" },
+      },
+    },
+  },
   {
     name: "verificar_disponibilidade_fontes",
     title: "Verificar disponibilidade das fontes de indicadores",
@@ -2584,6 +2661,7 @@ Deno.serve(async (request: Request) => {
         : {};
     if (
       name !== "verificar_disponibilidade_fontes" &&
+      name !== "consultar_painel_cso" &&
       name !== "consultar_ranking_vendas" &&
       name !== "consultar_funil_vista" &&
       name !== "diagnosticar_estrutura_organizacional_pipeimob" &&
@@ -2592,7 +2670,8 @@ Deno.serve(async (request: Request) => {
       return rpcError(message.id, -32602, "Unknown tool");
     }
     if (
-      (name === "diagnosticar_estrutura_organizacional_vista" ||
+      (name === "consultar_painel_cso" ||
+        name === "diagnosticar_estrutura_organizacional_vista" ||
         name === "diagnosticar_estrutura_organizacional_pipeimob") &&
       !auth.hasGlobalAccess
     ) {
@@ -2608,6 +2687,8 @@ Deno.serve(async (request: Request) => {
       };
     const result = name === "verificar_disponibilidade_fontes"
       ? await sourceAvailability(auth.userClient)
+      : name === "consultar_painel_cso"
+        ? await callCsoDashboard(auth.token, args)
       : name === "diagnosticar_estrutura_organizacional_vista"
         ? await callVistaOrganizationalCoverage(auth.token, args)
       : name === "diagnosticar_estrutura_organizacional_pipeimob"
