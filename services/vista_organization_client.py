@@ -519,7 +519,11 @@ class VistaOrganizationClient:
                 allow_list=True,
             )
         except VistaOrganizationAPIError as exc:
-            if exc.error_code in ("vista_http_400", "vista_http_404"):
+            # Field discovery is an optimization. If this tenant exposes the
+            # catalog with a different contract or permission, fall back to the
+            # bounded compatibility negotiation instead of failing the whole
+            # organizational diagnostic.
+            if not self._circuit_broken:
                 return []
             raise
 
