@@ -557,3 +557,89 @@ def test_operational_failures_still_open_circuit_breaker():
         client._execute_user_query(["Codigo"], is_probe=False)
     assert exc_info.value.error_code == "vista_circuit_broken"
     assert call_count == before
+
+
+def test_field_catalog_returns_only_organizational_candidate_codes():
+    def catalog_opener(req, *args, **kwargs):
+        if "/usuarios/listarcampos" in req.full_url:
+            return MockHTTPResponse(
+                {
+                    "campos": [
+                        {"Codigo": "CodigoEquipeUsuario", "Nome": "Equipe"},
+                        {"Codigo": "CodigoAgenciaUsuario", "Nome": "Agência"},
+                        {"Codigo": "Nome", "Nome": "Nome completo"},
+                    ]
+                }
+            )
+        if "/negocios/listarcampos" in req.full_url:
+            return MockHTTPResponse(
+                {
+                    "CodigoEquipeNegocio": {"label": "Equipe responsável"},
+                    "CodigoGerenteNegocio": {"label": "Gerente"},
+                    "Valor": {"label": "Valor do negócio"},
+                }
+            )
+        raise AssertionError("unexpected catalog URL")
+
+    client = VistaOrganizationClient(
+        base_url="https://api.vista.com",
+        api_key="secret-key-123",
+        pipe_id="pipe-1",
+        opener=catalog_opener,
+    )
+    catalog = client.discover_organizational_field_catalog()
+
+    assert catalog["users"]["available"] is True
+    assert catalog["users"]["candidate_codes"]["team"] == [
+        "CodigoEquipeUsuario"
+    ]
+    assert catalog["users"]["candidate_codes"]["agency"] == [
+        "CodigoAgenciaUsuario"
+    ]
+    assert "Nome" not in json.dumps(catalog, ensure_ascii=False)
+    assert catalog["deals"]["candidate_codes"]["team"] == [
+        "CodigoEquipeNegocio"
+    ]
+    assert catalog["deals"]["candidate_codes"]["manager"] == [
+        "CodigoGerenteNegocio"
+    ]
+
+
+def test_probe_results_are_separated_by_source():
+    client = VistaOrganizationClient(
+        base_url="https://api.vista.com",
+        api_key="secret-key-123",
+    )
+    client._record_probed_fields("users", "rejected", ["Status"])
+    client._record_probed_fields("deals", "accepted", ["Status"])
+
+    by_source = client.get_probed_fields_by_source()
+    assert by_source["users"] == {"accepted": [], "rejected": ["Status"]}
+    assert by_source["deals"] == {"accepted": ["Status"], "rejected": []}
+    assert client.get_probed_fields() == {
+        "accepted": ["Status"],
+        "rejected": ["Status"],
+    }
+
+
+def test_missing_optional_field_catalog_does_not_open_circuit_breaker():
+    def missing_catalog(req, *args, **kwargs):
+        raise urllib.error.HTTPError(
+            req.full_url,
+            404,
+            "Not Found",
+            {},
+            io.BytesIO(b"{}"),
+        )
+
+    client = VistaOrganizationClient(
+        base_url="https://api.vista.com",
+        api_key="secret-key-123",
+        max_failure_threshold=2,
+        opener=missing_catalog,
+    )
+    catalog = client.discover_organizational_field_catalog()
+
+    assert catalog["users"]["available"] is False
+    assert catalog["deals"]["available"] is False
+    assert client.is_circuit_broken() is False

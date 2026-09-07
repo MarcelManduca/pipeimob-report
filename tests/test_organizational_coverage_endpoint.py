@@ -13,6 +13,7 @@ from services.vista_sales_client import VistaSalesConfigurationError
 class FakeVistaOrganizationClient:
     def __init__(self, users=None, deals=None, circuit_broken=False, probed=None, user_comp=None, deal_comp=None):
         self.created_field = "DataInicial"
+        self.max_pages_limit = 5
         self._users = users or [
             {"user_id": "101", "role_type": "broker", "team_id": "24", "manager_id": "5", "agency_id": "1", "is_active": True},
             {"user_id": "102", "role_type": "broker", "team_id": "24", "manager_id": "5", "agency_id": "1", "is_active": True},
@@ -40,6 +41,33 @@ class FakeVistaOrganizationClient:
 
     def get_probed_fields(self):
         return self._probed
+
+    def get_probed_fields_by_source(self):
+        return {
+            "users": {
+                "accepted": list(self._probed["accepted"]),
+                "rejected": list(self._probed["rejected"]),
+            },
+            "deals": {"accepted": [], "rejected": []},
+        }
+
+    def discover_organizational_field_catalog(self):
+        empty_candidates = {
+            "team": [],
+            "manager": [],
+            "agency": [],
+            "role": [],
+            "lifecycle": [],
+        }
+        return {
+            source: {
+                "available": True,
+                "error_code": None,
+                "candidate_codes": dict(empty_candidates),
+                "candidate_count": 0,
+            }
+            for source in ("users", "deals")
+        }
 
 
 @pytest.fixture(autouse=True)
@@ -89,6 +117,13 @@ def test_org_coverage_endpoint_success_with_bounded_cohort_and_completeness():
     assert payload["semantics"]["snapshot_type"] == "point_in_time_cohort"
     assert payload["semantics"]["event_history_preserved"] is False
     assert payload["privacy_guarantee"]["only_aggregate_counts"] is True
+    assert payload["field_negotiation"]["by_source"]["users"]["accepted"]
+    assert payload["field_catalog"]["users"]["available"] is True
+    assert payload["pagination_limits"] == {
+        "requested_max_pages": 3,
+        "effective_max_pages": 3,
+        "configured_max_pages": 5,
+    }
     assert response.headers["X-Diagnostic-Contract"] == "1.0"
     assert response.headers["X-Diagnostic-Status"] == "ready"
     assert response.headers["X-Data-Mode"] == "live"

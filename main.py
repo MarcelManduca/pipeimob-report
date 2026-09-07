@@ -5540,6 +5540,20 @@ async def get_vista_organizational_coverage(
 
     def sync_fetch():
         client = VistaOrganizationClient.from_env()
+        field_catalog = client.discover_organizational_field_catalog()
+
+        def with_diagnostic_metadata(payload):
+            payload["field_negotiation"]["by_source"] = (
+                client.get_probed_fields_by_source()
+            )
+            payload["field_catalog"] = field_catalog
+            payload["pagination_limits"] = {
+                "requested_max_pages": max_pages,
+                "effective_max_pages": min(max_pages, client.max_pages_limit),
+                "configured_max_pages": client.max_pages_limit,
+            }
+            return payload
+
         user_meta = {
             "requested": True,
             "successful": False,
@@ -5576,7 +5590,7 @@ async def get_vista_organizational_coverage(
             if client.is_circuit_broken():
                 user_meta["error_code"] = "vista_circuit_broken"
                 probed = client.get_probed_fields()
-                return evaluate_organizational_coverage(
+                return with_diagnostic_metadata(evaluate_organizational_coverage(
                     anonymized_users=[],
                     anonymized_deals=[],
                     probed_fields_summary=probed,
@@ -5588,14 +5602,14 @@ async def get_vista_organizational_coverage(
                     ),
                     sources={"users": user_meta, "deals": deal_meta},
                     snapshot_date=snapshot_date,
-                )
+                ))
             raise
         except VistaSalesConfigurationError as exc:
             user_meta["successful"] = False
             user_meta["complete"] = False
             user_meta["error_code"] = getattr(exc, "error_code", None) or "vista_not_configured"
             probed = client.get_probed_fields()
-            return evaluate_organizational_coverage(
+            return with_diagnostic_metadata(evaluate_organizational_coverage(
                 anonymized_users=[],
                 anonymized_deals=[],
                 probed_fields_summary=probed,
@@ -5607,7 +5621,7 @@ async def get_vista_organizational_coverage(
                 ),
                 sources={"users": user_meta, "deals": deal_meta},
                 snapshot_date=snapshot_date,
-            )
+            ))
 
         deals = []
         if start_date and end_date:
@@ -5636,7 +5650,7 @@ async def get_vista_organizational_coverage(
                 deals = []
 
         probed = client.get_probed_fields()
-        return evaluate_organizational_coverage(
+        payload = evaluate_organizational_coverage(
             anonymized_users=users,
             anonymized_deals=deals,
             probed_fields_summary=probed,
@@ -5649,6 +5663,7 @@ async def get_vista_organizational_coverage(
             sources={"users": user_meta, "deals": deal_meta},
             snapshot_date=snapshot_date,
         )
+        return with_diagnostic_metadata(payload)
 
     if refresh:
         vista_org_coverage_cache.clear()

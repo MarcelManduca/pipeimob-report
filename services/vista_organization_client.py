@@ -65,6 +65,14 @@ class VistaOrganizationClient:
         "Perfil",
     ]
 
+    ORGANIZATIONAL_FIELD_TERMS = {
+        "team": ("equipe", "team"),
+        "manager": ("gerente", "gestor", "manager"),
+        "agency": ("agencia", "loja", "filial", "unidade", "agency", "store"),
+        "role": ("cargo", "funcao", "perfil", "role"),
+        "lifecycle": ("ativo", "inativo", "status"),
+    }
+
     # Proven canonical fields for /negocios/listar
     DEAL_CORE_FIELDS = [
         "Codigo",
@@ -162,6 +170,10 @@ class VistaOrganizationClient:
             "accepted": set(),
             "rejected": set(),
         }
+        self._probed_fields_by_source: Dict[str, Dict[str, Set[str]]] = {
+            "users": {"accepted": set(), "rejected": set()},
+            "deals": {"accepted": set(), "rejected": set()},
+        }
 
     @classmethod
     def from_env(cls) -> "VistaOrganizationClient":
@@ -197,6 +209,146 @@ class VistaOrganizationClient:
         return {
             "accepted": sorted(self._probed_fields["accepted"]),
             "rejected": sorted(self._probed_fields["rejected"]),
+        }
+
+    def get_probed_fields_by_source(self) -> Dict[str, Dict[str, List[str]]]:
+        return {
+            source: {
+                outcome: sorted(fields)
+                for outcome, fields in outcomes.items()
+            }
+            for source, outcomes in self._probed_fields_by_source.items()
+        }
+
+    def _record_probed_fields(
+        self, source: str, outcome: str, fields: List[str]
+    ) -> None:
+        self._probed_fields[outcome].update(fields)
+        self._probed_fields_by_source[source][outcome].update(fields)
+
+    def discover_organizational_field_catalog(self) -> Dict[str, Any]:
+        """Read Vista field catalogs and return only non-PII candidate field codes."""
+        result: Dict[str, Any] = {}
+        for source, resource in (("users", "usuarios"), ("deals", "negocios")):
+            try:
+                payload = self._execute_field_catalog(resource)
+                candidates = self._organizational_catalog_candidates(payload)
+                result[source] = {
+                    "available": True,
+                    "error_code": None,
+                    "candidate_codes": candidates,
+                    "candidate_count": sum(len(values) for values in candidates.values()),
+                }
+            except VistaOrganizationAPIError as exc:
+                result[source] = {
+                    "available": False,
+                    "error_code": exc.error_code,
+                    "candidate_codes": {
+                        category: []
+                        for category in self.ORGANIZATIONAL_FIELD_TERMS
+                    },
+                    "candidate_count": 0,
+                }
+        return result
+
+    def _execute_field_catalog(self, resource: str) -> Dict[str, Any]:
+        params: Dict[str, str] = {"key": self.api_key}
+        if resource == "negocios" and self.pipe_id:
+            params["codigo_pipe"] = self.pipe_id
+        url = f"{self.base_url}/{resource}/listarcampos?{urllib.parse.urlencode(params)}"
+        return self._send_request(
+            url,
+            endpoint_tag=f"{resource}_listarcampos",
+            is_probe=True,
+        )
+
+    def _organizational_catalog_candidates(
+        self, payload: Dict[str, Any]
+    ) -> Dict[str, List[str]]:
+        discovered: Dict[str, Set[str]] = {
+            category: set() for category in self.ORGANIZATIONAL_FIELD_TERMS
+        }
+
+        def visit(node: Any, parent_code: Optional[str] = None) -> None:
+            if isinstance(node, dict):
+                normalized_keys = {
+                    str(key).lower(): value for key, value in node.items()
+                }
+                explicit_code = next(
+                    (
+                        str(normalized_keys[key]).strip()
+                        for key in ("codigo", "code", "campo", "field", "id")
+                        if isinstance(normalized_keys.get(key), str)
+                        and self.FIELD_IDENTIFIER.fullmatch(
+                            str(normalized_keys[key]).strip()
+                        )
+                    ),
+                    None,
+                )
+                searchable = " ".join(
+                    str(value)
+                    for value in node.values()
+                    if isinstance(value, (str, int, float, bool))
+                ).lower()
+                if explicit_code:
+                    searchable = f"{explicit_code} {searchable}".lower()
+                    for category, terms in self.ORGANIZATIONAL_FIELD_TERMS.items():
+                        if any(term in searchable for term in terms):
+                            discovered[category].add(explicit_code)
+
+                    # A descriptor such as {"Codigo": "CodigoEquipe", "Nome":
+                    # "Equipe"} represents one field. Its metadata keys are not
+                    # independent Vista field codes.
+                    for value in node.values():
+                        if isinstance(value, (dict, list)):
+                            visit(value)
+                    return
+
+                if parent_code:
+                    searchable = f"{parent_code} {searchable}".lower()
+                    for category, terms in self.ORGANIZATIONAL_FIELD_TERMS.items():
+                        if any(term in searchable for term in terms):
+                            discovered[category].add(parent_code)
+
+                    # Nested descriptor metadata (for example
+                    # {"label": "Equipe responsável"}) describes its parent
+                    # field; metadata keys must not become Vista candidates.
+                    for value in node.values():
+                        if isinstance(value, (dict, list)):
+                            visit(value)
+                    return
+
+                for key, value in node.items():
+                    key_code = (
+                        str(key)
+                        if self.FIELD_IDENTIFIER.fullmatch(str(key))
+                        else None
+                    )
+                    if key_code:
+                        scalar_description = (
+                            str(value)
+                            if isinstance(value, (str, int, float, bool))
+                            else ""
+                        )
+                        if isinstance(value, dict):
+                            scalar_description = " ".join(
+                                str(child)
+                                for child in value.values()
+                                if isinstance(child, (str, int, float, bool))
+                            )
+                        key_searchable = f"{key_code} {scalar_description}".lower()
+                        for category, terms in self.ORGANIZATIONAL_FIELD_TERMS.items():
+                            if any(term in key_searchable for term in terms):
+                                discovered[category].add(key_code)
+                    visit(value, key_code)
+            elif isinstance(node, list):
+                for item in node:
+                    visit(item, parent_code)
+
+        visit(payload)
+        return {
+            category: sorted(values)[:50]
+            for category, values in discovered.items()
         }
 
     def fetch_anonymized_users(
@@ -395,7 +547,7 @@ class VistaOrganizationClient:
         try:
             self._execute_user_query(self.USER_CORE_FIELDS, page=1, is_probe=True)
             accepted = list(self.USER_CORE_FIELDS)
-            self._probed_fields["accepted"].update(self.USER_CORE_FIELDS)
+            self._record_probed_fields("users", "accepted", self.USER_CORE_FIELDS)
         except VistaOrganizationAPIError as exc:
             raise
 
@@ -408,9 +560,9 @@ class VistaOrganizationClient:
             try:
                 self._execute_user_query(accepted + [field], page=1, is_probe=True)
                 accepted.append(field)
-                self._probed_fields["accepted"].add(field)
+                self._record_probed_fields("users", "accepted", [field])
             except VistaOrganizationAPIError as probe_exc:
-                self._probed_fields["rejected"].add(field)
+                self._record_probed_fields("users", "rejected", [field])
                 if probe_exc.error_code not in (
                     "vista_http_400",
                     "vista_invalid_contract",
@@ -455,7 +607,7 @@ class VistaOrganizationClient:
                 page=1,
                 is_probe=True,
             )
-            self._probed_fields["accepted"].update(unique_candidates)
+            self._record_probed_fields("deals", "accepted", unique_candidates)
             return unique_candidates
         except VistaOrganizationAPIError as exc:
             if self._circuit_broken:
@@ -473,7 +625,7 @@ class VistaOrganizationClient:
                 is_probe=True,
             )
             accepted = list(self.DEAL_CORE_FIELDS)
-            self._probed_fields["accepted"].update(self.DEAL_CORE_FIELDS)
+            self._record_probed_fields("deals", "accepted", self.DEAL_CORE_FIELDS)
         except VistaOrganizationAPIError as exc:
             if self._circuit_broken:
                 raise
@@ -495,9 +647,9 @@ class VistaOrganizationClient:
                     is_probe=True,
                 )
                 accepted.append(field)
-                self._probed_fields["accepted"].add(field)
+                self._record_probed_fields("deals", "accepted", [field])
             except VistaOrganizationAPIError as probe_exc:
-                self._probed_fields["rejected"].add(field)
+                self._record_probed_fields("deals", "rejected", [field])
                 if self._circuit_broken or probe_exc.error_code not in (
                     "vista_http_400",
                     "vista_invalid_contract",
@@ -603,7 +755,7 @@ class VistaOrganizationClient:
             error_cat = f"http_{exc.code}"
             # A 400 while probing a documented candidate means this tenant does
             # not expose that field. It is contract negotiation, not downtime.
-            if not (is_probe and exc.code == 400):
+            if not (is_probe and exc.code in (400, 404)):
                 self._record_failure(error_cat)
             raise VistaOrganizationAPIError(
                 f"{endpoint_tag} request failed with HTTP {exc.code}",
