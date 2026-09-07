@@ -164,6 +164,28 @@ def test_org_coverage_endpoint_circuit_broken_sanitized():
     assert "circuit_breaker_triggered_after_two_failures" in payload["blocks_found"]
 
 
+def test_org_coverage_endpoint_user_source_error_returns_safe_diagnostic():
+    app.dependency_overrides[require_vista_diagnostic_admin] = lambda: "test"
+    fake = FakeVistaOrganizationClient(circuit_broken=False)
+    fake.fetch_anonymized_users = lambda **kw: (_ for _ in ()).throw(
+        VistaOrganizationAPIError("Forbidden", "vista_http_403")
+    )
+    try:
+        with patch("main.VistaOrganizationClient.from_env", return_value=fake):
+            response = TestClient(app).get(
+                "/api/vista/diagnostics/organizational-coverage?refresh=true"
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["overall_status"] == "blocked"
+    assert payload["sources"]["users"]["successful"] is False
+    assert payload["sources"]["users"]["error_code"] == "vista_http_403"
+    assert "one_or_more_requested_sources_failed" in payload["blocks_found"]
+
+
 def test_org_coverage_endpoint_deal_query_error_preserves_error_and_caps_to_partial():
     app.dependency_overrides[require_vista_diagnostic_admin] = lambda: "test"
     fake = FakeVistaOrganizationClient()
