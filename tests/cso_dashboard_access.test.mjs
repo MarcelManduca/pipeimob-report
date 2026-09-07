@@ -48,7 +48,8 @@ test("accepts the top-level contract returned by dashboard full", () => {
 });
 
 test("adminApi enforces explicit timeout and returns 503 on failure", () => {
-  assert.match(worker, /signal:\s*AbortSignal\.timeout\([\d_]+\)/);
+  assert.match(worker, /const ADMIN_TIMEOUT_MS = 35_000;/);
+  assert.match(worker, /signal:\s*AbortSignal\.timeout\(ADMIN_TIMEOUT_MS\)/);
   assert.match(worker, /catch\s*\{\s*return json\(\{ error: "Serviço indisponível\." \}, 503\);\s*\}/);
 });
 
@@ -59,9 +60,13 @@ test("hides CSO executive button in initial HTML until authorized", () => {
   );
 });
 
-test("handles error states in bootPortal without infinite loading and preserves session on 503", () => {
+test("handles error states in bootPortal with cold-start retry and preserves session on 503", () => {
   assert.match(worker, /headers\.apikey\s*=\s*env\.SUPABASE_PUBLISHABLE_KEY/);
   assert.match(worker, /env\.SUPABASE_URL \? supabaseUrl\(env, "\/functions\/v1\/gralha-portal-admin"\) : ADMIN_URL/);
+  assert.match(
+    worker,
+    /if\(!res\.ok&&res\.status===503\)\{\s*await new Promise\(r=>setTimeout\(r,1200\)\);\s*res=await authedRequest\("\/api\/admin\/me"\)\s*\}/,
+  );
   assert.match(
     worker,
     /\$\("profile-role"\)\.textContent\s*=\s*res\.status===401\?"Sessão expirada":"Perfil indisponível"/,
