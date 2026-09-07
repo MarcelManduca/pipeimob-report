@@ -419,6 +419,55 @@ test("routes a Pipeimob organizational diagnostic directly to the Pipeimob tool"
   }
 });
 
+test("answers the latest broker sale over the last twelve months without follow-up questions", async () => {
+  const originalFetch = globalThis.fetch;
+  let openAiCalls = 0;
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/auth/v1/user")) return new Response("{}", { status: 200 });
+    if (url.includes("/functions/v1/gralha-indicadores-mcp/mcp")) {
+      const body = JSON.parse(init.body);
+      assert.equal(body.params.name, "consultar_ranking_vendas");
+      assert.equal(body.params.arguments.corretor, "Michele Prietsch");
+      assert.equal(body.params.arguments.data_inicio, "2025-09-07");
+      assert.equal(body.params.arguments.data_fim, "2026-09-07");
+      return new Response(JSON.stringify({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: {
+          structuredContent: {
+            matched_brokers: ["Michele Prietsch"],
+            summary: {
+              latest_sale_date: "2026-07-20",
+              days_since_latest_sale: 49,
+            },
+          },
+        },
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    if (url === "https://api.openai.com/v1/responses") {
+      openAiCalls += 1;
+      throw new Error("OpenAI must not ask a follow-up for the latest sale");
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  try {
+    const worker = await loadWorker();
+    const response = await worker.default.fetch(
+      request("Qual foi a última venda da corretora Michele Prietsch e quantos dias que ela não vende?"),
+      env,
+    );
+    const payload = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(openAiCalls, 0);
+    assert.match(payload.answer, /20\/07\/2026/);
+    assert.match(payload.answer, /49 dias sem uma nova venda/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("uses the latest month and treats current Proposal stage as a snapshot", async () => {
   const originalFetch = globalThis.fetch;
   let openAiCalls = 0;
@@ -576,6 +625,8 @@ test("omits teams with zero open Proposals from the team chart", async () => {
 
     assert.equal(response.status, 200);
     assert.equal(payload.visualization.type, "bar");
+    assert.equal(payload.visualization.unit, "deals");
+    assert.equal(payload.visualization.metric, "deals_count");
     assert.deepEqual(
       payload.visualization.series.map(({ label, value }) => ({ label, value })),
       [
@@ -699,6 +750,8 @@ test("creates a direct status chart from the latest Proposal follow-up without O
     assert.equal(response.status, 200);
     assert.equal(openAiCalls, 0);
     assert.equal(payload.visualization.type, "bar");
+    assert.equal(payload.visualization.unit, "deals");
+    assert.equal(payload.visualization.metric, "deals_count");
     assert.deepEqual(
       payload.visualization.series.map(({ label, value }) => ({ label, value })),
       [

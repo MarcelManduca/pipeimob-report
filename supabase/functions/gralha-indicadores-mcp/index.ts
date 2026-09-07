@@ -11,7 +11,7 @@ import {
 
 const FUNCTION_SLUG = "gralha-indicadores-mcp";
 const SERVER_NAME = "Gralha — Indicadores Pipeimob × Vista";
-const SERVER_VERSION = "1.17.0";
+const SERVER_VERSION = "1.17.1";
 const JSON_HEADERS = {
   "Content-Type": "application/json; charset=utf-8",
   "Cache-Control": "no-store",
@@ -1037,6 +1037,7 @@ async function callSalesRanking(
     let missingNeighborhoodSales = 0;
     let attributedSales = 0;
     let attributedVgv = 0;
+    let latestSaleDate: string | null = null;
 
     for (const candidate of items) {
       if (!candidate || typeof candidate !== "object") continue;
@@ -1051,21 +1052,29 @@ async function callSalesRanking(
         typeof item.commercial_broker === "string"
           ? item.commercial_broker.replace(/\s+/g, " ").trim()
           : "";
-      if (!broker) continue;
-      const normalizedBroker = normalizeBrokerName(broker);
-      if (
-        requestedBroker &&
-        normalizedBroker !== requestedBroker &&
-        !normalizedBroker.includes(requestedBroker)
-      ) {
-        continue;
+      if (requestedBroker) {
+        if (!broker) continue;
+        const normalizedBroker = normalizeBrokerName(broker);
+        if (
+          normalizedBroker !== requestedBroker &&
+          !normalizedBroker.includes(requestedBroker)
+        ) {
+          continue;
+        }
       }
 
       officialIds.add(transactionId);
-      matchedBrokers.add(broker);
+      if (broker) matchedBrokers.add(broker);
       const value = asNumber(item.official_value) ?? 0;
       attributedSales += 1;
       attributedVgv += value;
+      const saleDate = typeof item.official_sale_date === "string" &&
+          /^\d{4}-\d{2}-\d{2}$/.test(item.official_sale_date)
+        ? item.official_sale_date
+        : null;
+      if (saleDate && (!latestSaleDate || saleDate > latestSaleDate)) {
+        latestSaleDate = saleDate;
+      }
 
       const neighborhood = neighborhoodByTransaction.get(transactionId);
       if (!neighborhood) {
@@ -1138,10 +1147,22 @@ async function callSalesRanking(
         coverage: periodCoverage,
         generated_at: root.generated_at ?? new Date().toISOString(),
         summary: {
+          official_sales: officialIds.size,
           attributed_sales: attributedSales,
           attributed_vgv: attributedVgv,
           sales_with_neighborhood: attributedSales - missingNeighborhoodSales,
           sales_without_neighborhood: missingNeighborhoodSales,
+          latest_sale_date: requestedBroker ? latestSaleDate : null,
+          days_since_latest_sale: requestedBroker && latestSaleDate
+            ? Math.max(
+              0,
+              Math.floor(
+                (Date.parse(`${today}T00:00:00Z`) -
+                  Date.parse(`${latestSaleDate}T00:00:00Z`)) /
+                  86_400_000,
+              ),
+            )
+            : null,
         },
         total_ranked: completeRanking.length,
         top_n: topN,
@@ -1161,7 +1182,7 @@ async function callSalesRanking(
             sales_count: row.sales_count,
             vgv: row.vgv,
           })),
-          footnote: `Período efetivo: ${start} a ${end}. ${attributedSales - missingNeighborhoodSales} de ${attributedSales} vendas possuem bairro informado.`,
+          footnote: `Período efetivo: ${start} a ${end}. ${attributedSales - missingNeighborhoodSales} de ${attributedSales} vendas oficiais possuem bairro informado.`,
         },
       },
     };
@@ -2549,7 +2570,7 @@ Deno.serve(async (request: Request) => {
       capabilities: { tools: { listChanged: false } },
       serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
       instructions:
-        "Use verificar_disponibilidade_fontes apenas como verificação técnica antes de uma análise generativa quando houver sinais de falhas recorrentes; se a fonte necessária estiver bloqueada, não execute outra consulta nem produza análise. Use diagnosticar_estrutura_organizacional_pipeimob para administradores avaliarem se as transações do Pipeimob contêm IDs de grupo e se o adaptador possui um diretório oficial capaz de classificar automaticamente equipes, filiais e relações com gestores. Use diagnosticar_estrutura_organizacional_vista somente para administradores avaliarem a cobertura agregada de IDs estáveis entre corretor, equipe, gerente e loja. Esses diagnósticos não são diretórios: nunca deduza deles nomes, integrantes, equipes ativas ou mudanças individuais. Use consultar_ranking_vendas somente para vendas oficiais. Use consultar_funil_vista para negócios cadastrados no período, status geral, etapa atual e cruzamento entre etapa e status. Perguntas sobre visitas, agendamentos, propostas ou outras etapas, inclusive pedidos de separação por equipe, pertencem sempre a consultar_funil_vista; envie agrupar_por=equipe e equipe=<nome> quando uma equipe específica for solicitada. Para rankings de vendas por equipes, use consultar_ranking_vendas com agrupar_por=equipe; para avaliar uma equipe de vendas específica, informe também equipe. Para saber o bairro em que um corretor mais vendeu, use agrupar_por=bairro e informe corretor. Use top_n conforme solicitado, com padrão 10. Quantidade é o critério padrão; VGV deve ser solicitado explicitamente. O fim de períodos futuros é limitado automaticamente à data atual de São Paulo. Quantidade, data e VGV vêm das APIs ao vivo; a planilha é somente uma referência gerencial de responsável para equipe com vigência. Responda primeiro com o número, ranking ou conclusão solicitada, sem bordão ou prefixo padronizado. Perguntas objetivas devem receber uma ou duas frases; acrescente período, cobertura e fonte somente quando forem necessários para evitar interpretação errada ou quando o usuário pedir. Em avaliações gerenciais, apresente fatos, comparação, leitura executiva e ação recomendada apenas quando os dados sustentarem essas conclusões. No funil, diferencie obrigatoriamente negócios criados no período, etapa atual, status geral e eventos históricos de entrada em etapa. Uma contagem na etapa Visita representa negócios atualmente nessa etapa, não visitas realizadas. Nunca apresente negócios atualmente em Proposta como propostas geradas no período; esta métrica exige um histórico de entrada em etapas. Se pedirem uma métrica histórica indisponível, apresente primeiro a fotografia atual verificada em no máximo 80 palavras e esclareça a diferença em uma frase. Não repita a pergunta, não liste fontes, timestamps ou limitações técnicas salvo se forem solicitados e nunca diga que existe confirmação de contrato pendente. Se a ferramenta retornar erro, informe a falha em uma frase curta; não transforme valores ausentes em análise. Não conclua sobre conversão de pipeline, eventos históricos de visitas ou tempo entre etapas sem os dados operacionais correspondentes. A visualização é fornecida como dados estruturados e nunca deve ser substituída por barras ASCII ou código Python.",
+        "Use verificar_disponibilidade_fontes apenas como verificação técnica antes de uma análise generativa quando houver sinais de falhas recorrentes; se a fonte necessária estiver bloqueada, não execute outra consulta nem produza análise. Use diagnosticar_estrutura_organizacional_pipeimob para administradores avaliarem se as transações do Pipeimob contêm IDs de grupo e se o adaptador possui um diretório oficial capaz de classificar automaticamente equipes, filiais e relações com gestores. Use diagnosticar_estrutura_organizacional_vista somente para administradores avaliarem a cobertura agregada de IDs estáveis entre corretor, equipe, gerente e loja. Esses diagnósticos não são diretórios: nunca deduza deles nomes, integrantes, equipes ativas ou mudanças individuais. O limite de páginas do diagnóstico Vista é técnico e fixo; nunca diga que o usuário pode autorizar ou alterar max_pages pelo chat. Use consultar_ranking_vendas somente para vendas oficiais. Use consultar_funil_vista para negócios cadastrados no período, status geral, etapa atual e cruzamento entre etapa e status. Perguntas sobre visitas, agendamentos, propostas ou outras etapas, inclusive pedidos de separação por equipe, pertencem sempre a consultar_funil_vista; envie agrupar_por=equipe e equipe=<nome> quando uma equipe específica for solicitada. Para rankings de vendas por equipes, use consultar_ranking_vendas com agrupar_por=equipe; para avaliar uma equipe de vendas específica, informe também equipe. Para saber o bairro em que um corretor mais vendeu, use agrupar_por=bairro e informe corretor. Use top_n conforme solicitado, com padrão 10. Quantidade é o critério padrão; VGV deve ser solicitado explicitamente. O fim de períodos futuros é limitado automaticamente à data atual de São Paulo. Quantidade, data e VGV vêm das APIs ao vivo; a planilha é somente uma referência gerencial de responsável para equipe com vigência. Responda primeiro com o número, ranking ou conclusão solicitada, sem bordão ou prefixo padronizado. Perguntas objetivas devem receber uma ou duas frases; acrescente período, cobertura e fonte somente quando forem necessários para evitar interpretação errada ou quando o usuário pedir. Em avaliações gerenciais, apresente fatos, comparação, leitura executiva e ação recomendada apenas quando os dados sustentarem essas conclusões. No funil, diferencie obrigatoriamente negócios criados no período, etapa atual, status geral e eventos históricos de entrada em etapa. Uma contagem na etapa Visita representa negócios atualmente nessa etapa, não visitas realizadas. Nunca apresente negócios atualmente em Proposta como propostas geradas no período; esta métrica exige um histórico de entrada em etapas. Se pedirem uma métrica histórica indisponível, apresente primeiro a fotografia atual verificada em no máximo 80 palavras e esclareça a diferença em uma frase. Não repita a pergunta, não liste fontes, timestamps ou limitações técnicas salvo se forem solicitados e nunca diga que existe confirmação de contrato pendente. Se a ferramenta retornar erro, informe a falha em uma frase curta; não transforme valores ausentes em análise. Não conclua sobre conversão de pipeline, eventos históricos de visitas ou tempo entre etapas sem os dados operacionais correspondentes. A visualização é fornecida como dados estruturados e nunca deve ser substituída por barras ASCII ou código Python.",
     });
   }
   if (message.method === "tools/list") {

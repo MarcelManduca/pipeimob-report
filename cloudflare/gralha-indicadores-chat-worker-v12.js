@@ -576,6 +576,35 @@ function pipeimobOrganizationalDiagnosticAnswer(value) {
   ].filter(Boolean).join("\n\n");
 }
 
+function latestBrokerSaleIntent(messages) {
+  const raw = String(messages.at(-1)?.content || "").replace(/\s+/g, " ").trim();
+  const normalized = normalizedQuestion(raw);
+  if (!/\bultima venda\b/.test(normalized) || !/\bcorretor/.test(normalized)) return null;
+  const match = raw.match(
+    /corretor(?:a)?\s+(.+?)(?=\s+e\s+quant|\s+e\s+ha\s+quant|\s+est[aá]\s+sem|[?.!,]|$)/i,
+  );
+  const broker = match?.[1]?.trim();
+  if (!broker) return null;
+  const end = todayInSaoPaulo();
+  const startDate = new Date(`${end}T00:00:00Z`);
+  startDate.setUTCFullYear(startDate.getUTCFullYear() - 1);
+  return { broker, start: startDate.toISOString().slice(0, 10), end };
+}
+
+function latestBrokerSaleAnswer(value, broker) {
+  const summary = value?.summary || {};
+  const latest = typeof summary.latest_sale_date === "string"
+    ? summary.latest_sale_date
+    : null;
+  const days = Number(summary.days_since_latest_sale);
+  const matched = Array.isArray(value?.matched_brokers) && value.matched_brokers.length
+    ? value.matched_brokers.join(", ")
+    : broker;
+  if (!latest || !Number.isFinite(days)) return "";
+  const formattedDate = latest.split("-").reverse().join("/");
+  return `A última venda encontrada de ${matched} foi em ${formattedDate}. Até hoje, são ${days.toLocaleString("pt-BR")} dias sem uma nova venda registrada. Fonte: vendas oficiais conciliadas no período dos últimos 12 meses.`;
+}
+
 function indicatorSource(messages) {
   const latest = normalizedQuestion(messages.at(-1)?.content);
   if (
@@ -971,8 +1000,8 @@ function proposalStatusVisualization(value, period) {
   return safeVisualization({
     type: "bar",
     title: `Negócios em Proposta por status — ${period.label}`,
-    metric: "sales_count",
-    unit: "sales",
+    metric: "deals_count",
+    unit: "deals",
     series: rows.map((row) => ({
       label: row.status,
       value: row.count,
@@ -1000,8 +1029,8 @@ function proposalTeamVisualization(value, period) {
   const teamVisualization = safeVisualization({
     type: "bar",
     title: `Propostas em aberto por equipe — ${period.label}`,
-    metric: "sales_count",
-    unit: "sales",
+    metric: "deals_count",
+    unit: "deals",
     series: (Array.isArray(rows) ? rows : [])
       .filter((row) => Number(row?.open_deals_count || 0) > 0)
       .map((row) => ({
@@ -1110,7 +1139,11 @@ function safeVisualization(value) {
       typeof value.title === "string"
         ? value.title.slice(0, 140)
         : "Comparativo",
-    metric: value.metric === "vgv" ? "vgv" : "sales_count",
+    metric: value.metric === "vgv"
+      ? "vgv"
+      : value.metric === "deals_count"
+      ? "deals_count"
+      : "sales_count",
     unit: value.unit === "BRL"
       ? "BRL"
       : value.unit === "deals"
@@ -1177,6 +1210,34 @@ async function generateChat(request, env) {
   if (!valid) return json({ error: "Digite uma pergunta válida." }, 400);
   const latestQuestion = messages.at(-1)?.content || "";
   const currentDate = todayInSaoPaulo();
+
+  const latestSaleIntent = latestBrokerSaleIntent(messages);
+  if (latestSaleIntent) {
+    const directValue = await callMcpToolDirect(
+      accessToken,
+      "consultar_ranking_vendas",
+      {
+        data_inicio: latestSaleIntent.start,
+        data_fim: latestSaleIntent.end,
+        criterio: "quantidade",
+        agrupar_por: "bairro",
+        corretor: latestSaleIntent.broker,
+        top_n: 1,
+      },
+      60_000,
+    );
+    if (directValue?.error) {
+      const notFound = directValue.error === "broker_not_found";
+      return json({
+        answer: notFound
+          ? `Não encontrei venda atribuída a ${latestSaleIntent.broker} nos últimos 12 meses. Isso não permite calcular uma quantidade exata de dias sem vender; apenas confirma que o intervalo é superior ou igual ao período pesquisado.`
+          : "A consulta da última venda está temporariamente indisponível. Tente novamente em instantes.",
+        visualization: null,
+      });
+    }
+    const answer = latestBrokerSaleAnswer(directValue, latestSaleIntent.broker);
+    if (answer) return json({ answer, visualization: null });
+  }
 
   const pipeimobDiagnostic = pipeimobOrganizationalDiagnosticIntent(messages);
   if (pipeimobDiagnostic) {
@@ -1434,7 +1495,7 @@ async function generateChat(request, env) {
         instructions: [
         "Você é o assistente de indicadores comerciais da Gralha Imóveis.",
         "Responda em português do Brasil. Comece pelo número, ranking ou conclusão solicitada, sem bordões ou introduções padronizadas.",
-        "Para perguntas sobre vendas oficiais, rankings de vendas, corretores, bairros, VGV ou ticket, use consultar_ranking_vendas. Para perguntas sobre negócios cadastrados no período, status geral, etapa atual do funil, visitas, agendamentos ou propostas, use consultar_funil_vista. Para avaliar se as transações do Pipeimob e o adaptador atual oferecem cadastro organizacional oficial suficiente, use diagnosticar_estrutura_organizacional_pipeimob. Para avaliar se o Vista possui IDs estáveis suficientes para estruturar corretor, equipe, gerente e loja, use diagnosticar_estrutura_organizacional_vista. Cada diagnóstico retorna somente cobertura agregada: não o use para inventar nomes, listar integrantes, afirmar quais equipes estão ativas ou identificar mudanças individuais. Todo pedido de etapa ou funil por equipe deve chamar consultar_funil_vista com agrupar_por=equipe e, quando houver uma equipe específica, também equipe=<nome>. Preserve o período da conversa. Nunca use consultar_ranking_vendas para responder sobre etapas do funil.",
+        "Para perguntas sobre vendas oficiais, rankings de vendas, corretores, bairros, VGV ou ticket, use consultar_ranking_vendas. Para perguntas sobre negócios cadastrados no período, status geral, etapa atual do funil, visitas, agendamentos ou propostas, use consultar_funil_vista. Para avaliar se as transações do Pipeimob e o adaptador atual oferecem cadastro organizacional oficial suficiente, use diagnosticar_estrutura_organizacional_pipeimob. Para avaliar se o Vista possui IDs estáveis suficientes para estruturar corretor, equipe, gerente e loja, use diagnosticar_estrutura_organizacional_vista. Cada diagnóstico retorna somente cobertura agregada: não o use para inventar nomes, listar integrantes, afirmar quais equipes estão ativas ou identificar mudanças individuais. O limite de páginas do diagnóstico Vista é técnico e fixo; nunca ofereça ao usuário autorização ou alteração de max_pages pelo chat. Todo pedido de etapa ou funil por equipe deve chamar consultar_funil_vista com agrupar_por=equipe e, quando houver uma equipe específica, também equipe=<nome>. Preserve o período da conversa. Nunca use consultar_ranking_vendas para responder sobre etapas do funil.",
         "Nunca invente valores, nomes, posições, critérios ou períodos.",
         `A data atual em São Paulo é ${currentDate}. Nunca trate datas posteriores como já realizadas; para ano corrente, consulte do primeiro dia do ano até a data atual.`,
         "Em perguntas objetivas, responda em uma ou duas frases. Só acrescente período, critério, fonte ou cobertura quando isso evitar uma interpretação errada ou quando o usuário pedir detalhes.",
