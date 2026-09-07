@@ -1,2 +1,6 @@
 [functions.gralha-indicadores-mcp]
 verify_jwt = false
+
+[functions.gralha-portal-admin]
+verify_jwt = false
+
