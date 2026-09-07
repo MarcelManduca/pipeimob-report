@@ -1724,7 +1724,7 @@ const HTML = `<!doctype html>
       <div class="nav-actions">
         <button id="new-conversation" class="nav-button primary-nav" type="button"><span>＋</span> Nova conversa</button>
         <button id="home-button" class="nav-button home-button" type="button"><span>←</span> Voltar para a Home</button>
-        <button id="cso-dashboard-button" class="nav-button hidden" type="button"><span>▦</span> Painel executivo</button>
+        <button id="cso-dashboard-button" class="nav-button" type="button"><span>▦</span> Painel executivo</button>
         <button id="manage-users" class="nav-button hidden" type="button"><span>◇</span> Gestão de usuários</button>
       </div>
       <p class="history-title">Histórico</p>
