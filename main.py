@@ -5699,6 +5699,133 @@ async def get_vista_organizational_coverage(
     return payload
 
 
+@app.get(
+    "/api/pipeimob/diagnostics/organizational-coverage",
+    dependencies=[Depends(require_vista_diagnostic_admin)],
+    summary="Evaluate organizational coverage available in Pipeimob transactions",
+)
+async def get_pipeimob_organizational_coverage(
+    response: Response,
+    request: Request,
+    data_inicio: str = Query(..., description="CCV start date (YYYY-MM-DD)"),
+    data_fim: str = Query(..., description="CCV end date (YYYY-MM-DD)"),
+    refresh: bool = Query(False),
+):
+    try:
+        start = date.fromisoformat(data_inicio)
+        end = date.fromisoformat(data_fim)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Dates must use YYYY-MM-DD") from exc
+    if start > end or (end - start).days > 366:
+        raise HTTPException(status_code=400, detail="Period must be ordered and at most 366 days")
+
+    req_id = request.headers.get("x-request-id") or request.headers.get("x-correlation-id")
+    mode, source, dataset, pages, cache_status = await load_transactions_dataset(
+        data_inicio_ccv=data_inicio,
+        data_fim_ccv=data_fim,
+        request_id=req_id,
+        refresh=refresh,
+    )
+    validate_dataset_origin(mode, source, dataset)
+    aggregates = compute_dashboard_aggregates(
+        dataset,
+        data_inicio_ccv=data_inicio,
+        data_fim_ccv=data_fim,
+    )
+    quality = aggregates.get("data_quality") or {}
+    summary = quality.get("summary") or {}
+    teams = quality.get("teams") or {}
+    observed_group_ids = set()
+    transactions_with_group_ids_count = 0
+    transactions_with_branch_label_count = 0
+    for tx in dataset:
+        if not isinstance(tx, dict):
+            continue
+        groups = tx.get("agente_gestor_grupos_a_que_pertence")
+        current_group_ids = {
+            str(value).strip()
+            for value in groups
+            if isinstance(groups, list)
+            and value is not None
+            and str(value).strip()
+        } if isinstance(groups, list) else set()
+        if current_group_ids:
+            transactions_with_group_ids_count += 1
+            observed_group_ids.update(current_group_ids)
+        if str(tx.get("agente_gestor_grupo_filial") or "").strip():
+            transactions_with_branch_label_count += 1
+
+    stable_group_ids_observed = bool(observed_group_ids)
+    directory_source_available = False
+    automation_blocks = [
+        "group_type_directory_not_available",
+        "team_to_manager_relationship_not_available",
+        "branch_stable_id_not_available",
+    ]
+    if not stable_group_ids_observed:
+        automation_blocks.append("stable_group_ids_not_observed")
+    issue_counts = [
+        {
+            "id": issue.get("id"),
+            "severity": issue.get("severity"),
+            "affected_agents_count": issue.get("affected_agents_count", 0),
+            "affected_transactions_count": issue.get("affected_transactions_count", 0),
+        }
+        for issue in teams.get("issues", [])
+        if isinstance(issue, dict)
+    ]
+    payload = {
+        "contract_version": "1.0",
+        "diagnostic_target": "pipeimob_organizational_coverage",
+        "period": {"start": data_inicio, "end": data_fim, "basis": "ccv"},
+        "source": source,
+        "pages_fetched": pages,
+        "transactions_evaluated": quality.get("transaction_count", len(dataset)),
+        "overall_status": summary.get("status", "critical"),
+        "automation_status": "blocked",
+        "coverage": {
+            "distinct_agents_count": summary.get("distinct_agents_count", 0),
+            "compliant_agents_count": summary.get("compliant_agents_count", 0),
+            "affected_agents_count": summary.get("affected_agents_count", 0),
+            "review_only_agents_count": summary.get("review_only_agents_count", 0),
+            "agent_compliance_ratio": summary.get("agent_compliance_ratio", 0),
+            "transaction_compliance_ratio": summary.get("transaction_compliance_ratio", 0),
+            "unassigned_manager_transactions_count": summary.get("unassigned_manager_transactions_count", 0),
+        },
+        "group_contract": {
+            "source_fields": teams.get("source_fields", {}),
+            "configuration_status": teams.get("configuration_status", "missing"),
+            "official_teams_configured": bool(teams.get("official_teams_configured", False)),
+            "stable_group_ids_observed": stable_group_ids_observed,
+            "distinct_group_ids_observed_count": len(observed_group_ids),
+            "transactions_with_group_ids_count": transactions_with_group_ids_count,
+            "transactions_with_branch_label_count": transactions_with_branch_label_count,
+            "branch_field_is_stable_id": False,
+            "directory_source_available": directory_source_available,
+            "manual_configuration_is_authoritative_source": False,
+        },
+        "automation_blocks": automation_blocks,
+        "conclusion": (
+            "Pipeimob transaction snapshots expose group identifiers, but the current API adapter "
+            "does not expose an authoritative directory that classifies each group as commercial "
+            "team, branch, or administrative group, nor the team-to-manager relationship. Manual "
+            "configuration may support compatibility checks but is not an acceptable source of truth."
+        ),
+        "issues": issue_counts,
+        "privacy_guarantee": {
+            "contains_names": False,
+            "contains_emails": False,
+            "contains_raw_records": False,
+            "aggregate_only": True,
+        },
+    }
+    response.headers["X-Data-Mode"] = mode
+    response.headers["X-Diagnostic-Cache"] = cache_status
+    response.headers["X-Diagnostic-Contract"] = "1.0"
+    response.headers["X-Diagnostic-Status"] = "blocked"
+    return payload
+
+
 # ======================================================================
 # CONTRACTS CONTROL (SECRETARIA DE VENDAS) BI MODULE
 # ======================================================================
