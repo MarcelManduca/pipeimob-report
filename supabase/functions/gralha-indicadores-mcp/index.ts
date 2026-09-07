@@ -11,7 +11,7 @@ import {
 
 const FUNCTION_SLUG = "gralha-indicadores-mcp";
 const SERVER_NAME = "Gralha — Indicadores Pipeimob × Vista";
-const SERVER_VERSION = "1.16.1";
+const SERVER_VERSION = "1.17.0";
 const JSON_HEADERS = {
   "Content-Type": "application/json; charset=utf-8",
   "Cache-Control": "no-store",
@@ -2026,6 +2026,54 @@ async function callVistaOrganizationalCoverage(
   return { isError: false, value: payload };
 }
 
+async function callPipeimobOrganizationalCoverage(
+  token: string,
+  args: Record<string, unknown>,
+): Promise<{ isError: boolean; value: unknown }> {
+  const today = todayInSaoPaulo();
+  const start = typeof args.data_inicio === "string"
+    ? args.data_inicio
+    : today.slice(0, 4) + "-01-01";
+  const end = typeof args.data_fim === "string" ? args.data_fim : today;
+  const validationError = validatePeriod(start, end);
+  if (validationError) {
+    return { isError: true, value: { error: "invalid_period", detail: validationError } };
+  }
+  const backend = (Deno.env.get("MCP_PIPEIMOB_BACKEND_URL") ??
+    "https://pipeimob-report.onrender.com").replace(/\/+$/, "");
+  const endpoint = new URL(
+    backend + "/api/pipeimob/diagnostics/organizational-coverage",
+  );
+  endpoint.searchParams.set("data_inicio", start);
+  endpoint.searchParams.set("data_fim", end);
+  const result = await fetchBackendJson(endpoint, token);
+  if (!result.reachable || result.status < 200 || result.status >= 300) {
+    return {
+      isError: true,
+      value: {
+        error: safeDiagnosticCode(result.integrationError, "pipeimob_diagnostic_unavailable"),
+        detail: "O diagnóstico organizacional do Pipeimob não respondeu corretamente.",
+      },
+    };
+  }
+  if (
+    !result.payload ||
+    typeof result.payload !== "object" ||
+    (result.payload as Record<string, unknown>).contract_version !== "1.0" ||
+    (result.payload as Record<string, unknown>).diagnostic_target !==
+      "pipeimob_organizational_coverage"
+  ) {
+    return {
+      isError: true,
+      value: {
+        error: "invalid_upstream_contract",
+        detail: "O diagnóstico organizacional do Pipeimob respondeu em formato incompatível.",
+      },
+    };
+  }
+  return { isError: false, value: result.payload };
+}
+
 const TOOLS = [
   {
     name: "verificar_disponibilidade_fontes",
@@ -2220,6 +2268,26 @@ const TOOLS = [
         "response_guidance",
         "visualization",
       ],
+    },
+  },
+  {
+    name: "diagnosticar_estrutura_organizacional_pipeimob",
+    title: "Diagnosticar cobertura organizacional no Pipeimob",
+    description:
+      "Uso administrativo. Avalia de forma agregada a cobertura de agentes, grupos/equipes e filiais observada nas transações do Pipeimob, sem retornar nomes ou registros individuais.",
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        data_inicio: { type: "string", format: "date" },
+        data_fim: { type: "string", format: "date" },
+      },
     },
   },
   {
@@ -2481,7 +2549,7 @@ Deno.serve(async (request: Request) => {
       capabilities: { tools: { listChanged: false } },
       serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
       instructions:
-        "Use verificar_disponibilidade_fontes apenas como verificação técnica antes de uma análise generativa quando houver sinais de falhas recorrentes; se a fonte necessária estiver bloqueada, não execute outra consulta nem produza análise. Use diagnosticar_estrutura_organizacional_vista somente para administradores avaliarem a cobertura agregada de IDs estáveis entre corretor, equipe, gerente e loja. Esse diagnóstico não é um diretório: nunca deduza dele nomes, integrantes, equipes ativas ou mudanças individuais. Use consultar_ranking_vendas somente para vendas oficiais. Use consultar_funil_vista para negócios cadastrados no período, status geral, etapa atual e cruzamento entre etapa e status. Perguntas sobre visitas, agendamentos, propostas ou outras etapas, inclusive pedidos de separação por equipe, pertencem sempre a consultar_funil_vista; envie agrupar_por=equipe e equipe=<nome> quando uma equipe específica for solicitada. Para rankings de vendas por equipes, use consultar_ranking_vendas com agrupar_por=equipe; para avaliar uma equipe de vendas específica, informe também equipe. Para saber o bairro em que um corretor mais vendeu, use agrupar_por=bairro e informe corretor. Use top_n conforme solicitado, com padrão 10. Quantidade é o critério padrão; VGV deve ser solicitado explicitamente. O fim de períodos futuros é limitado automaticamente à data atual de São Paulo. Quantidade, data e VGV vêm das APIs ao vivo; a planilha é somente uma referência gerencial de responsável para equipe com vigência. Responda primeiro com o número, ranking ou conclusão solicitada, sem bordão ou prefixo padronizado. Perguntas objetivas devem receber uma ou duas frases; acrescente período, cobertura e fonte somente quando forem necessários para evitar interpretação errada ou quando o usuário pedir. Em avaliações gerenciais, apresente fatos, comparação, leitura executiva e ação recomendada apenas quando os dados sustentarem essas conclusões. No funil, diferencie obrigatoriamente negócios criados no período, etapa atual, status geral e eventos históricos de entrada em etapa. Uma contagem na etapa Visita representa negócios atualmente nessa etapa, não visitas realizadas. Nunca apresente negócios atualmente em Proposta como propostas geradas no período; esta métrica exige um histórico de entrada em etapas. Se pedirem uma métrica histórica indisponível, apresente primeiro a fotografia atual verificada em no máximo 80 palavras e esclareça a diferença em uma frase. Não repita a pergunta, não liste fontes, timestamps ou limitações técnicas salvo se forem solicitados e nunca diga que existe confirmação de contrato pendente. Se a ferramenta retornar erro, informe a falha em uma frase curta; não transforme valores ausentes em análise. Não conclua sobre conversão de pipeline, eventos históricos de visitas ou tempo entre etapas sem os dados operacionais correspondentes. A visualização é fornecida como dados estruturados e nunca deve ser substituída por barras ASCII ou código Python.",
+        "Use verificar_disponibilidade_fontes apenas como verificação técnica antes de uma análise generativa quando houver sinais de falhas recorrentes; se a fonte necessária estiver bloqueada, não execute outra consulta nem produza análise. Use diagnosticar_estrutura_organizacional_pipeimob para administradores avaliarem se as transações do Pipeimob contêm IDs de grupo e se o adaptador possui um diretório oficial capaz de classificar automaticamente equipes, filiais e relações com gestores. Use diagnosticar_estrutura_organizacional_vista somente para administradores avaliarem a cobertura agregada de IDs estáveis entre corretor, equipe, gerente e loja. Esses diagnósticos não são diretórios: nunca deduza deles nomes, integrantes, equipes ativas ou mudanças individuais. Use consultar_ranking_vendas somente para vendas oficiais. Use consultar_funil_vista para negócios cadastrados no período, status geral, etapa atual e cruzamento entre etapa e status. Perguntas sobre visitas, agendamentos, propostas ou outras etapas, inclusive pedidos de separação por equipe, pertencem sempre a consultar_funil_vista; envie agrupar_por=equipe e equipe=<nome> quando uma equipe específica for solicitada. Para rankings de vendas por equipes, use consultar_ranking_vendas com agrupar_por=equipe; para avaliar uma equipe de vendas específica, informe também equipe. Para saber o bairro em que um corretor mais vendeu, use agrupar_por=bairro e informe corretor. Use top_n conforme solicitado, com padrão 10. Quantidade é o critério padrão; VGV deve ser solicitado explicitamente. O fim de períodos futuros é limitado automaticamente à data atual de São Paulo. Quantidade, data e VGV vêm das APIs ao vivo; a planilha é somente uma referência gerencial de responsável para equipe com vigência. Responda primeiro com o número, ranking ou conclusão solicitada, sem bordão ou prefixo padronizado. Perguntas objetivas devem receber uma ou duas frases; acrescente período, cobertura e fonte somente quando forem necessários para evitar interpretação errada ou quando o usuário pedir. Em avaliações gerenciais, apresente fatos, comparação, leitura executiva e ação recomendada apenas quando os dados sustentarem essas conclusões. No funil, diferencie obrigatoriamente negócios criados no período, etapa atual, status geral e eventos históricos de entrada em etapa. Uma contagem na etapa Visita representa negócios atualmente nessa etapa, não visitas realizadas. Nunca apresente negócios atualmente em Proposta como propostas geradas no período; esta métrica exige um histórico de entrada em etapas. Se pedirem uma métrica histórica indisponível, apresente primeiro a fotografia atual verificada em no máximo 80 palavras e esclareça a diferença em uma frase. Não repita a pergunta, não liste fontes, timestamps ou limitações técnicas salvo se forem solicitados e nunca diga que existe confirmação de contrato pendente. Se a ferramenta retornar erro, informe a falha em uma frase curta; não transforme valores ausentes em análise. Não conclua sobre conversão de pipeline, eventos históricos de visitas ou tempo entre etapas sem os dados operacionais correspondentes. A visualização é fornecida como dados estruturados e nunca deve ser substituída por barras ASCII ou código Python.",
     });
   }
   if (message.method === "tools/list") {
@@ -2497,12 +2565,14 @@ Deno.serve(async (request: Request) => {
       name !== "verificar_disponibilidade_fontes" &&
       name !== "consultar_ranking_vendas" &&
       name !== "consultar_funil_vista" &&
+      name !== "diagnosticar_estrutura_organizacional_pipeimob" &&
       name !== "diagnosticar_estrutura_organizacional_vista"
     ) {
       return rpcError(message.id, -32602, "Unknown tool");
     }
     if (
-      name === "diagnosticar_estrutura_organizacional_vista" &&
+      (name === "diagnosticar_estrutura_organizacional_vista" ||
+        name === "diagnosticar_estrutura_organizacional_pipeimob") &&
       !auth.hasGlobalAccess
     ) {
       return rpcError(message.id, -32604, "Administrative access required");
@@ -2519,6 +2589,8 @@ Deno.serve(async (request: Request) => {
       ? await sourceAvailability(auth.userClient)
       : name === "diagnosticar_estrutura_organizacional_vista"
         ? await callVistaOrganizationalCoverage(auth.token, args)
+      : name === "diagnosticar_estrutura_organizacional_pipeimob"
+        ? await callPipeimobOrganizationalCoverage(auth.token, args)
       : name === "consultar_funil_vista"
         ? await callVistaFunnelCohort(auth.token, scopedArgs, auth.userClient)
         : await callSalesRanking(auth.token, scopedArgs, auth.userClient);
