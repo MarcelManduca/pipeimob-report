@@ -277,7 +277,12 @@ class VistaOrganizationClient:
         # /corretores/listar is the authoritative broker directory for this
         # tenant. It exposes only stable code and name; we retain the code only
         # and use it to classify matching users without persisting PII.
-        broker_ids = self._fetch_broker_ids(max_pages=page_limit)
+        try:
+            broker_ids = self._fetch_broker_ids(max_pages=page_limit)
+        except VistaOrganizationAPIError:
+            # The richer users catalog remains useful even when the auxiliary
+            # broker directory is unavailable or its tenant contract differs.
+            broker_ids = set()
         for user in users:
             if user.get("user_id") in broker_ids:
                 user["role_type"] = "broker"
@@ -449,6 +454,20 @@ class VistaOrganizationClient:
             if c not in unique_candidates:
                 unique_candidates.append(c)
 
+        if catalog_organization_fields:
+            try:
+                self._execute_user_query(
+                    unique_candidates, page=1, is_probe=True
+                )
+                self._probed_fields["accepted"].update(unique_candidates)
+                return unique_candidates
+            except VistaOrganizationAPIError as exc:
+                if exc.error_code not in (
+                    "vista_http_400",
+                    "vista_invalid_contract",
+                ):
+                    raise
+
         try:
             self._execute_user_query(self.USER_CORE_FIELDS, page=1, is_probe=True)
             accepted = list(self.USER_CORE_FIELDS)
@@ -494,7 +513,10 @@ class VistaOrganizationClient:
         url = f"{self.base_url}/usuarios/listarcampos?{query}"
         try:
             payload = self._send_request(
-                url, endpoint_tag="usuarios_listarcampos", is_probe=True
+                url,
+                endpoint_tag="usuarios_listarcampos",
+                is_probe=True,
+                allow_list=True,
             )
         except VistaOrganizationAPIError as exc:
             if exc.error_code in ("vista_http_400", "vista_http_404"):
@@ -688,7 +710,11 @@ class VistaOrganizationClient:
         )
 
     def _send_request(
-        self, url: str, endpoint_tag: str, is_probe: bool = False
+        self,
+        url: str,
+        endpoint_tag: str,
+        is_probe: bool = False,
+        allow_list: bool = False,
     ) -> Dict[str, Any]:
         request = urllib.request.Request(
             url, headers={"Accept": "application/json"}
@@ -701,6 +727,8 @@ class VistaOrganizationClient:
             self._consecutive_failures = 0
             self._last_error_category = None
 
+            if allow_list and isinstance(payload, list):
+                return {"fields": payload}
             if not isinstance(payload, dict):
                 self._record_failure("invalid_contract")
                 raise VistaOrganizationAPIError(
