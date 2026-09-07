@@ -11,7 +11,7 @@ import {
 
 const FUNCTION_SLUG = "gralha-indicadores-mcp";
 const SERVER_NAME = "Gralha — Indicadores Pipeimob × Vista";
-const SERVER_VERSION = "1.16.0";
+const SERVER_VERSION = "1.16.1";
 const JSON_HEADERS = {
   "Content-Type": "application/json; charset=utf-8",
   "Cache-Control": "no-store",
@@ -284,7 +284,7 @@ async function fetchBackendJson(
         Accept: "application/json",
         Authorization: "Bearer " + token,
       },
-      signal: AbortSignal.timeout(35_000),
+      signal: AbortSignal.timeout(60_000),
     });
     const raw = await response.text();
     let payload: unknown = null;
