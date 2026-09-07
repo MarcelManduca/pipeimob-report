@@ -176,12 +176,20 @@ VISTA_FUNNEL_RETRY_BACKOFF_SECONDS=0.25
 VISTA_FUNNEL_PAGE_CONCURRENCY=4
 VISTA_FUNNEL_CACHE_TTL_SECONDS=180
 VISTA_DIAGNOSTIC_ADMIN_SUBS=
+VISTA_ORGANIZATION_MAX_PAGES=5
 ```
 
 `VISTA_DIAGNOSTIC_ADMIN_SUBS` deve conter somente os IDs (`sub`) dos usuários
 autorizados a executar o diagnóstico organizacional do Vista. O endpoint fica
 indisponível quando a lista não está configurada e retorna `403` para qualquer
 usuário autenticado que não esteja explicitamente autorizado.
+
+O diagnóstico consulta os catálogos oficiais de campos do Vista antes de
+avaliar a cobertura. A resposta expõe somente códigos candidatos agregados por
+categoria (`team`, `manager`, `agency`, `role` e `lifecycle`), nunca rótulos,
+nomes ou payloads brutos. `pagination_limits` diferencia o valor pedido no
+portal do limite efetivamente permitido por `VISTA_ORGANIZATION_MAX_PAGES`;
+aumentar `max_pages` na pergunta não ultrapassa essa configuração do Render.
 
 `VISTA_SALES_TEAM_FIELD` é opcional e deve ser preenchido somente depois de
 confirmar, no tenant Vista, o campo de equipe do negócio. Quando ausente, a
