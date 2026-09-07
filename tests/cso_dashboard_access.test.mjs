@@ -35,3 +35,14 @@ test("exposes the dashboard through an authenticated portal route", () => {
   assert.match(worker, /callMcpToolDirect\(accessToken, "consultar_painel_cso"/);
   assert.match(worker, /url\.pathname === "\/api\/cso-dashboard"/);
 });
+
+test("accepts the top-level contract returned by dashboard full", () => {
+  assert.match(
+    mcp,
+    /Array\.isArray\(upstream\.managers\)[\s\S]*Array\.isArray\(upstream\.origins\)[\s\S]*Array\.isArray\(upstream\.timeline\)/,
+  );
+  assert.match(
+    mcp,
+    /summary: upstream\.summary,[\s\S]*managers: upstream\.managers,[\s\S]*origins: upstream\.origins,[\s\S]*timeline: upstream\.timeline/,
+  );
+});

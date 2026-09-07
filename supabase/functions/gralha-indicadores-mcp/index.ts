@@ -2127,7 +2127,23 @@ async function callCsoDashboard(
   const upstream = result.payload && typeof result.payload === "object"
     ? result.payload as Record<string, unknown>
     : null;
-  const data = upstream?.data;
+  // /api/dashboard/full returns aggregates at the top level. Preserve
+  // compatibility with the older nested data envelope during deployments.
+  const nestedData = upstream?.data;
+  const data = nestedData && typeof nestedData === "object"
+    ? nestedData
+    : upstream &&
+        upstream.summary && typeof upstream.summary === "object" &&
+        Array.isArray(upstream.managers) &&
+        Array.isArray(upstream.origins) &&
+        Array.isArray(upstream.timeline)
+      ? {
+        summary: upstream.summary,
+        managers: upstream.managers,
+        origins: upstream.origins,
+        timeline: upstream.timeline,
+      }
+      : null;
   if (!data || typeof data !== "object") {
     return {
       isError: true,
