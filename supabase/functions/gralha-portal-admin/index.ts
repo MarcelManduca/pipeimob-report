@@ -389,13 +389,22 @@ async function updateUser(
   return json({ user: { ...updated, role_label: roleLabel(role), team_keys: teamKeys } });
 }
 
+export function extractSuffix(pathname: string): string {
+  const normalized = pathname.replace(/\/+$/, "") || "/";
+  const stripped = normalized.replace(
+    new RegExp(`^(?:/functions/v1)?/${FUNCTION_SLUG}(?=/|$)`),
+    "",
+  );
+  return stripped || "/";
+}
+
 Deno.serve(async (request: Request) => {
   if (request.method === "OPTIONS") return new Response(null, { status: 204 });
   const url = new URL(request.url);
   const auth = await authorize(request);
   if (!auth.ok) return json({ error: auth.error }, auth.status);
 
-  const suffix = url.pathname.split(`/functions/v1/${FUNCTION_SLUG}`).pop() || "/";
+  const suffix = extractSuffix(url.pathname);
   if (request.method === "GET" && suffix === "/me") return json({ profile: auth.profile });
   if (request.method === "GET" && suffix === "/teams") return listTeams(auth);
   if (request.method === "GET" && suffix === "/users") return listUsers(auth);
