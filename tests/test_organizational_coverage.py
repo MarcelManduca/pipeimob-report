@@ -173,6 +173,80 @@ def test_unconfigured_fields_not_queried():
     assert "CodigoGestor" not in queried_fields
 
 
+def test_user_field_catalog_drives_organizational_field_negotiation():
+    requested_paths = []
+    queried_fields = []
+
+    def catalog_opener(req, *args, **kwargs):
+        parsed = urllib.parse.urlparse(req.full_url)
+        requested_paths.append(parsed.path)
+        if parsed.path.endswith("/usuarios/listarcampos"):
+            return MockHTTPResponse({
+                "fields": {
+                    "Codigo": "Codigo",
+                    "CodigoEquipeComercial": "CodigoEquipeComercial",
+                    "CodigoFilial": "CodigoFilial",
+                    "CampoSemRelacao": "CampoSemRelacao",
+                }
+            })
+        params = urllib.parse.parse_qs(parsed.query)
+        pesquisa = json.loads(params["pesquisa"][0])
+        queried_fields.extend(pesquisa.get("fields", []))
+        return MockHTTPResponse({"total": 1, "paginas": 1, "1": {"Codigo": "1"}})
+
+    client = VistaOrganizationClient(
+        base_url="https://api.vista.com",
+        api_key="secret-key-123",
+        opener=catalog_opener,
+    )
+    client.fetch_anonymized_users(max_pages=1)
+
+    assert requested_paths[0].endswith("/usuarios/listarcampos")
+    assert "CodigoEquipeComercial" in queried_fields
+    assert "CodigoFilial" in queried_fields
+    assert "CampoSemRelacao" not in queried_fields
+    assert "Cargo" not in queried_fields
+
+
+def test_broker_directory_classifies_users_without_retaining_names():
+    def broker_opener(req, *args, **kwargs):
+        path = urllib.parse.urlparse(req.full_url).path
+        if path.endswith("/usuarios/listarcampos"):
+            return MockHTTPResponse({"fields": {"Codigo": "Codigo"}})
+        if path.endswith("/corretores/listar"):
+            return MockHTTPResponse({
+                "total": 1,
+                "paginas": 1,
+                "1": {"Codigo": "77", "Nome": "Nome não deve sair do cliente"},
+            })
+        return MockHTTPResponse({
+            "total": 1,
+            "paginas": 1,
+            "1": {"Codigo": "77"},
+        })
+
+    client = VistaOrganizationClient(
+        base_url="https://api.vista.com",
+        api_key="secret-key-123",
+        opener=broker_opener,
+    )
+    users, _ = client.fetch_anonymized_users(max_pages=1)
+
+    assert users == [{
+        "user_id": "77",
+        "role_type": "broker",
+        "team_id": None,
+        "manager_id": None,
+        "agency_id": None,
+        "team_name_only": False,
+        "manager_name_only": False,
+        "agency_name_only": False,
+        "is_active": True,
+        "is_inactive": False,
+        "is_deleted": False,
+    }]
+
+
 # ==============================================================================
 # 5. Role Categorization: Unknown Must Be 'unknown' and Never Count as Broker
 # ==============================================================================
@@ -530,7 +604,8 @@ def test_rejected_probe_fields_do_not_open_circuit_breaker():
 
     assert exc_info.value.error_code == "vista_http_400"
     assert client.is_circuit_broken() is False
-    assert call_count == 1
+    # One rejected catalog request followed by the bounded compatibility probe.
+    assert call_count == 2
 
 
 def test_operational_failures_still_open_circuit_breaker():
