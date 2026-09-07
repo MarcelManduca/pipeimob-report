@@ -362,6 +362,63 @@ test("calls OpenAI only after the required source is verified and exposes the or
   }
 });
 
+test("routes a Pipeimob organizational diagnostic directly to the Pipeimob tool", async () => {
+  const originalFetch = globalThis.fetch;
+  let openAiCalls = 0;
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/auth/v1/user")) return new Response("{}", { status: 200 });
+    if (url.includes("/functions/v1/gralha-indicadores-mcp/mcp")) {
+      const body = JSON.parse(init.body);
+      assert.equal(body.params.name, "diagnosticar_estrutura_organizacional_pipeimob");
+      assert.deepEqual(body.params.arguments, {
+        data_inicio: "2026-01-01",
+        data_fim: "2026-09-07",
+      });
+      return new Response(JSON.stringify({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: {
+          structuredContent: {
+            contract_version: "1.0",
+            diagnostic_target: "pipeimob_organizational_coverage",
+            transactions_evaluated: 120,
+            period: { start: "2026-01-01", end: "2026-09-07", basis: "ccv" },
+            group_contract: {
+              stable_group_ids_observed: true,
+              transactions_with_group_ids_count: 90,
+              distinct_group_ids_observed_count: 8,
+              directory_source_available: false,
+            },
+            automation_status: "blocked",
+          },
+        },
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    if (url === "https://api.openai.com/v1/responses") {
+      openAiCalls += 1;
+      throw new Error("OpenAI must not choose the source for this diagnostic");
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  try {
+    const worker = await loadWorker();
+    const response = await worker.default.fetch(
+      request("Reexecute o diagnóstico da estrutura organizacional do Pipeimob para 2026."),
+      env,
+    );
+    const payload = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(openAiCalls, 0);
+    assert.match(payload.answer, /adaptador atual do Pipeimob/i);
+    assert.match(payload.answer, /90 de 120 transações possuem IDs de grupo/i);
+    assert.doesNotMatch(payload.answer, /Vista/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("uses the latest month and treats current Proposal stage as a snapshot", async () => {
   const originalFetch = globalThis.fetch;
   let openAiCalls = 0;
