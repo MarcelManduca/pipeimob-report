@@ -332,6 +332,11 @@ test("calls OpenAI only after the required source is verified and exposes the or
           "diagnosticar_estrutura_organizacional_vista",
         ),
       );
+      assert.ok(
+        body.tools[0].allowed_tools.includes(
+          "diagnosticar_estrutura_organizacional_pipeimob",
+        ),
+      );
       assert.match(body.instructions, /diagnóstico retorna somente cobertura agregada/i);
       return new Response(
         JSON.stringify({ output_text: "Análise confirmada pelas fontes." }),
