@@ -1962,7 +1962,7 @@ async function callVistaOrganizationalCoverage(
   }
   endpoint.searchParams.set(
     "max_pages",
-    String(boundedInteger(args.max_pages, 5, 1, 20)),
+    String(boundedInteger(args.max_pages, 10, 1, 20)),
   );
 
   const result = await fetchBackendJson(endpoint, token);
@@ -2251,7 +2251,7 @@ const TOOLS = [
           type: "integer",
           minimum: 1,
           maximum: 20,
-          default: 5,
+          default: 10,
           description: "Limite estrito de páginas consultadas em cada fonte.",
         },
       },

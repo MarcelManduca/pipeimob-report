@@ -64,6 +64,23 @@ class VistaOrganizationClient:
         "Funcao",
         "Perfil",
     ]
+    USER_ORGANIZATIONAL_FIELD_TOKENS = (
+        "equipe",
+        "time",
+        "team",
+        "gerente",
+        "gestor",
+        "manager",
+        "agencia",
+        "loja",
+        "filial",
+        "cargo",
+        "funcao",
+        "perfil",
+        "status",
+        "situacao",
+        "ativo",
+    )
 
     # Proven canonical fields for /negocios/listar
     DEAL_CORE_FIELDS = [
@@ -94,7 +111,7 @@ class VistaOrganizationClient:
         deal_agency_field: Optional[str] = None,
         timeout_seconds: int = 12,
         max_failure_threshold: int = 2,
-        max_pages_limit: int = 5,
+        max_pages_limit: int = 10,
         opener: Optional[Callable[..., Any]] = None,
     ) -> None:
         if not str(base_url or "").strip():
@@ -187,7 +204,7 @@ class VistaOrganizationClient:
             deal_agency_id_field=os.getenv("VISTA_DEAL_AGENCY_ID_FIELD"),
             deal_agency_field=os.getenv("VISTA_DEAL_AGENCY_FIELD"),
             timeout_seconds=int(os.getenv("VISTA_HTTP_TIMEOUT_SECONDS", "12")),
-            max_pages_limit=int(os.getenv("VISTA_ORGANIZATION_MAX_PAGES", "5")),
+            max_pages_limit=int(os.getenv("VISTA_ORGANIZATION_MAX_PAGES", "10")),
         )
 
     def is_circuit_broken(self) -> bool:
@@ -257,6 +274,14 @@ class VistaOrganizationClient:
                 break
             page += 1
 
+        # /corretores/listar is the authoritative broker directory for this
+        # tenant. It exposes only stable code and name; we retain the code only
+        # and use it to classify matching users without persisting PII.
+        broker_ids = self._fetch_broker_ids(max_pages=page_limit)
+        for user in users:
+            if user.get("user_id") in broker_ids:
+                user["role_type"] = "broker"
+
         pages_fetched = min(page, page_limit) if users else 0
         total_pages = pages_reported if pages_reported is not None else pages_fetched
         truncated = bool(total_pages > pages_fetched)
@@ -270,6 +295,31 @@ class VistaOrganizationClient:
         }
 
         return users, completeness
+
+    def _fetch_broker_ids(self, max_pages: int) -> Set[str]:
+        broker_ids: Set[str] = set()
+        page = 1
+        while page <= max_pages:
+            payload = self._execute_broker_query(page=page)
+            records = [
+                value
+                for key, value in payload.items()
+                if key not in self.PAGINATION_KEYS and isinstance(value, dict)
+            ]
+            for record in records:
+                broker_id = self._extract_stable_id(
+                    record, "Codigo", "CodigoCorretor", "id"
+                )
+                if broker_id:
+                    broker_ids.add(broker_id)
+
+            pages_reported = self._optional_int(payload.get("paginas"))
+            if pages_reported is not None and page >= pages_reported:
+                break
+            if pages_reported is None and len(records) < 50:
+                break
+            page += 1
+        return broker_ids
 
     def fetch_bounded_deal_associations(
         self,
@@ -367,9 +417,10 @@ class VistaOrganizationClient:
         return deals, completeness
 
     def _negotiate_user_fields(self) -> List[str]:
-        # Start with the one field already proven by the sales/funnel adapters.
-        # Tenant-specific role/status fields are negotiated independently so one
-        # rejected label cannot make the whole users endpoint unavailable.
+        # Vista documents /usuarios/listarcampos as the authoritative catalog
+        # for tenant-specific user fields. Prefer it over guessing field names,
+        # while retaining bounded probes as a compatibility fallback.
+        catalog_fields = self._fetch_user_field_catalog()
         configured_optionals = [
             f
             for f in (
@@ -382,11 +433,17 @@ class VistaOrganizationClient:
             )
             if f
         ]
-        candidates = (
-            self.USER_CORE_FIELDS
-            + self.USER_DISCOVERY_FIELDS
-            + configured_optionals
-        )
+        catalog_organization_fields = [
+            field
+            for field in catalog_fields
+            if any(
+                token in field.casefold()
+                for token in self.USER_ORGANIZATIONAL_FIELD_TOKENS
+            )
+        ][:40]
+        candidates = self.USER_CORE_FIELDS + catalog_organization_fields + configured_optionals
+        if not catalog_fields:
+            candidates += self.USER_DISCOVERY_FIELDS
         unique_candidates: List[str] = []
         for c in candidates:
             if c not in unique_candidates:
@@ -424,6 +481,42 @@ class VistaOrganizationClient:
             )
 
         return accepted
+
+    def _fetch_user_field_catalog(self) -> List[str]:
+        """Return safe technical identifiers advertised by usuarios/listarcampos.
+
+        The endpoint has had more than one response shape across Vista tenants,
+        so identifiers are collected recursively from object keys and scalar
+        values. Only strict field identifiers are retained; labels containing
+        spaces, payload data and arbitrary text are ignored.
+        """
+        query = urllib.parse.urlencode({"key": self.api_key})
+        url = f"{self.base_url}/usuarios/listarcampos?{query}"
+        try:
+            payload = self._send_request(
+                url, endpoint_tag="usuarios_listarcampos", is_probe=True
+            )
+        except VistaOrganizationAPIError as exc:
+            if exc.error_code in ("vista_http_400", "vista_http_404"):
+                return []
+            raise
+
+        found: Set[str] = set()
+
+        def visit(value: Any) -> None:
+            if isinstance(value, dict):
+                for key, nested in value.items():
+                    if isinstance(key, str) and self.FIELD_IDENTIFIER.fullmatch(key):
+                        found.add(key)
+                    visit(nested)
+            elif isinstance(value, list):
+                for nested in value:
+                    visit(nested)
+            elif isinstance(value, str) and self.FIELD_IDENTIFIER.fullmatch(value):
+                found.add(value)
+
+        visit(payload)
+        return sorted(found)
 
     def _negotiate_deal_fields(self, pipe_id: str) -> List[str]:
         optional_configured = [
@@ -538,6 +631,23 @@ class VistaOrganizationClient:
         return self._send_request(
             url, endpoint_tag="usuarios_listar", is_probe=is_probe
         )
+
+    def _execute_broker_query(self, page: int = 1) -> Dict[str, Any]:
+        pesquisa = {
+            "fields": ["Codigo"],
+            "paginacao": {"pagina": page, "quantidade": 50},
+        }
+        query = urllib.parse.urlencode(
+            {
+                "key": self.api_key,
+                "showtotal": "1",
+                "pesquisa": json.dumps(
+                    pesquisa, ensure_ascii=False, separators=(",", ":")
+                ),
+            }
+        )
+        url = f"{self.base_url}/corretores/listar?{query}"
+        return self._send_request(url, endpoint_tag="corretores_listar")
 
     def _execute_deal_query(
         self,
