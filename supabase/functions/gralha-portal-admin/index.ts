@@ -277,10 +277,18 @@ async function inviteUser(
 
   const { data: existing } = await auth.adminClient
     .from("profiles")
-    .select("id")
+    .select("id,status")
     .ilike("email", email)
     .maybeSingle();
-  if (existing) return json({ error: "Este e-mail já possui um usuário." }, 409);
+  if (existing) {
+    const isPending = existing.status === "invited";
+    return json({
+      error: isPending
+        ? "Já existe um convite pendente para este e-mail."
+        : "Este e-mail já possui um usuário cadastrado.",
+      code: isPending ? "invite_pending" : "user_exists",
+    }, 409);
+  }
 
   const { data: invitation, error: inviteError } =
     await auth.adminClient.auth.admin.inviteUserByEmail(email, {
@@ -384,7 +392,7 @@ async function updateUser(
     actor_user_id: auth.user.id,
     target_user_id: userId,
     action: "user_updated",
-    details: { access_role: role, status, team_keys: teamKeys },
+    details: { display_name: displayName, access_role: role, status, team_keys: teamKeys },
   });
   return json({ user: { ...updated, role_label: roleLabel(role), team_keys: teamKeys } });
 }
