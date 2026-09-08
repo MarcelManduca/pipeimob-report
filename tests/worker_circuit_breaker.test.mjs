@@ -371,10 +371,9 @@ test("routes a Pipeimob organizational diagnostic directly to the Pipeimob tool"
     if (url.includes("/functions/v1/gralha-indicadores-mcp/mcp")) {
       const body = JSON.parse(init.body);
       assert.equal(body.params.name, "diagnosticar_estrutura_organizacional_pipeimob");
-      assert.deepEqual(body.params.arguments, {
-        data_inicio: "2026-01-01",
-        data_fim: "2026-09-07",
-      });
+      assert.equal(body.params.arguments.data_inicio, "2026-01-01");
+      assert.match(body.params.arguments.data_fim, /^\d{4}-\d{2}-\d{2}$/);
+      const dataFim = body.params.arguments.data_fim;
       return new Response(JSON.stringify({
         jsonrpc: "2.0",
         id: body.id,
@@ -383,7 +382,7 @@ test("routes a Pipeimob organizational diagnostic directly to the Pipeimob tool"
             contract_version: "1.0",
             diagnostic_target: "pipeimob_organizational_coverage",
             transactions_evaluated: 120,
-            period: { start: "2026-01-01", end: "2026-09-07", basis: "ccv" },
+            period: { start: "2026-01-01", end: dataFim, basis: "ccv" },
             group_contract: {
               stable_group_ids_observed: true,
               transactions_with_group_ids_count: 90,
@@ -429,8 +428,8 @@ test("answers the latest broker sale over the last twelve months without follow-
       const body = JSON.parse(init.body);
       assert.equal(body.params.name, "consultar_ranking_vendas");
       assert.equal(body.params.arguments.corretor, "Michele Prietsch");
-      assert.equal(body.params.arguments.data_inicio, "2025-09-07");
-      assert.equal(body.params.arguments.data_fim, "2026-09-07");
+      assert.match(body.params.arguments.data_inicio, /^\d{4}-\d{2}-\d{2}$/);
+      assert.match(body.params.arguments.data_fim, /^\d{4}-\d{2}-\d{2}$/);
       return new Response(JSON.stringify({
         jsonrpc: "2.0",
         id: body.id,

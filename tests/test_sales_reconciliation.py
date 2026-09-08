@@ -533,3 +533,191 @@ def test_ranking_can_order_by_vgv():
 
     assert result["ranking"][0]["commercial_broker"] == "Maior VGV"
     assert result["ranking"][0]["position"] == 1
+
+
+def test_build_funnel_payload_non_auditable_gain_dates_behavior():
+    from services.sales_reconciliation import build_funnel_payload
+
+    rec_data = {
+        "summary": {
+            "official_sales": 2,
+            "official_vgv": "600000.00",
+            "matched": 1,
+            "pipeimob_without_vista_gain": 1,
+            "vista_without_pipeimob_contract": 1,
+            "api_team_resolved": 0,
+            "api_team_unresolved": 2,
+        },
+        "items": [
+            # 1. Matched with null gain date
+            {
+                "status": "CONCILIADO",
+                "pipeimob_transaction_id": "p-1",
+                "vista_deal_id": "v-1",
+                "vista_gain_date": None,
+            },
+            # 2. Vista without CCV with null gain date
+            {
+                "status": "VISTA_SEM_CONTRATO_PIPEIMOB",
+                "pipeimob_transaction_id": None,
+                "vista_deal_id": "v-2",
+                "vista_gain_date": None,
+            },
+            # 3. Pipeimob without Vista (must NOT increase non-auditable count)
+            {
+                "status": "PIPEIMOB_SEM_GANHO_VISTA",
+                "pipeimob_transaction_id": "p-2",
+                "vista_deal_id": None,
+                "vista_gain_date": None,
+            },
+            # 4. Duplicate entry for v-1 (must NOT double-count)
+            {
+                "status": "CONCILIADO",
+                "pipeimob_transaction_id": "p-1-dup",
+                "vista_deal_id": "v-1",
+                "vista_gain_date": None,
+            },
+            # 5. Matched with valid audit date
+            {
+                "status": "CONCILIADO",
+                "pipeimob_transaction_id": "p-3",
+                "vista_deal_id": "v-3",
+                "vista_gain_date": "2026-08-15",
+            },
+        ],
+    }
+
+    payload = build_funnel_payload(
+        start_date="2026-08-01",
+        end_date="2026-08-31",
+        official_transactions=[{"id": "p-1"}, {"id": "p-2"}],
+        official_vgv="600000.00",
+        official_vgc="24000.00",
+        vista_funnel_data=None,
+        reconciliation_data=rec_data,
+    )
+
+    rec = payload["reconciliation"]
+    # Distinct non-auditable deals: only v-1 and v-2
+    assert rec["non_auditable_gain_dates_count"] == 2
+    assert rec["unresolved_gain_dates"] == 2
+    assert rec["official_sales_count"] == 2
+    assert rec["matched_count"] == 1
+    assert rec["vista_without_ccv_count"] == 1
+    assert rec["ccv_without_vista_count"] == 1
+    assert rec["divergence_flag"] is True
+
+
+def test_build_funnel_payload_vgc_summation_without_fixed_rate():
+    from services.sales_reconciliation import build_funnel_payload
+
+    # Synthetic transactions with varying commission percentages:
+    # Tx1: 100k @ 3% = 3k
+    # Tx2: 500k @ 6% = 30k
+    # Tx3: 200k @ 4.5% = 9k
+    # Sum: VGV = 800k, VGC = 42k (effective rate = 5.25%, not 5.0% or 4.0%)
+    transactions = [
+        {"transacao_unique_id_pipeimob": "tx-1", "valor_contrato": 100000, "total_comissao": 3000},
+        {"transacao_unique_id_pipeimob": "tx-2", "valor_contrato": 500000, "total_comissao": 30000},
+        {"transacao_unique_id_pipeimob": "tx-3", "valor_contrato": 200000, "total_comissao": 9000},
+    ]
+
+    payload = build_funnel_payload(
+        start_date="2026-08-01",
+        end_date="2026-08-31",
+        official_transactions=transactions,
+        official_vgv=None,
+        official_vgc=None,
+        vista_funnel_data=None,
+        reconciliation_data=None,
+    )
+
+    assert payload["official_vgv"] == "800000.00"
+    assert payload["official_vgc"] == "42000.00"
+    assert payload["official_vgc_details"]["amount"] == "42000.00"
+    assert payload["official_vgc_details"]["source_field"] == "total_comissao"
+    assert payload["official_vgc_details"]["availability"] == "available"
+    assert payload["official_vgc_details"]["transactions_total"] == 3
+    assert payload["official_vgc_details"]["transactions_with_commission"] == 3
+    assert payload["official_vgc_details"]["transactions_missing_commission"] == 0
+    # Ensure it did not apply 5.0% (which would be 40000.00) or 4.0% (which would be 32000.00)
+    assert payload["official_vgc"] != "40000.00"
+    assert payload["official_vgc"] != "32000.00"
+
+
+def test_decimal_precision_immunity_to_float_binary_errors():
+    """Prove Decimal avoids binary floating point summation errors (e.g. 100.05 + 200.05 + 300.05)."""
+    from decimal import Decimal
+    from services.sales_reconciliation import build_funnel_payload, _parse_decimal
+
+    # Python float summation produces: 100.05 + 200.05 + 300.05 == 600.1500000000001
+    float_sum = 100.05 + 200.05 + 300.05
+    assert float_sum != 600.15  # Shows standard float imprecision
+
+    transactions = [
+        {"transacao_unique_id_pipeimob": "tx-f1", "valor_contrato": "100.05", "total_comissao": "5.05"},
+        {"transacao_unique_id_pipeimob": "tx-f2", "valor_contrato": "200.05", "total_comissao": "10.05"},
+        {"transacao_unique_id_pipeimob": "tx-f3", "valor_contrato": "300.05", "total_comissao": "15.05"},
+    ]
+
+    payload = build_funnel_payload(
+        start_date="2026-08-01",
+        end_date="2026-08-31",
+        official_transactions=transactions,
+        official_vgv=None,
+        official_vgc=None,
+    )
+
+    # Exact Decimal sum: 600.15 and 30.15
+    assert payload["official_vgv"] == "600.15"
+    assert payload["official_vgc"] == "30.15"
+    assert payload["official_vgc_details"]["amount"] == "30.15"
+
+
+def test_vgc_completeness_states_available_partial_unavailable():
+    """Validate full, partial, and unavailable VGC contract states and zero-presumption behavior."""
+    from services.sales_reconciliation import build_funnel_payload
+
+    # Scenario 1: Partial commission availability (2 of 3 contracts have commission)
+    partial_txs = [
+        {"transacao_unique_id_pipeimob": "tx-p1", "valor_contrato": 100000, "total_comissao": 5000},
+        {"transacao_unique_id_pipeimob": "tx-p2", "valor_contrato": 200000, "total_comissao": 10000},
+        {"transacao_unique_id_pipeimob": "tx-p3", "valor_contrato": 300000, "total_comissao": None},  # Missing
+    ]
+    partial_payload = build_funnel_payload(
+        start_date="2026-08-01",
+        end_date="2026-08-31",
+        official_transactions=partial_txs,
+        official_vgv=None,
+        official_vgc=None,
+    )
+    p_det = partial_payload["official_vgc_details"]
+    assert p_det["availability"] == "partial"
+    assert p_det["amount"] == "15000.00"  # Sum of only observed commissions
+    assert p_det["transactions_total"] == 3
+    assert p_det["transactions_with_commission"] == 2
+    assert p_det["transactions_missing_commission"] == 1
+    assert "2 de 3" in p_det["reason"]
+    # Ensure missing contract was NOT inferred (if inferred at 5%, sum would be 30000)
+    assert p_det["amount"] != "30000.00"
+
+    # Scenario 2: Unavailable commission (0 of 3 contracts have commission)
+    unavail_txs = [
+        {"transacao_unique_id_pipeimob": "tx-u1", "valor_contrato": 100000, "total_comissao": None},
+        {"transacao_unique_id_pipeimob": "tx-u2", "valor_contrato": 200000, "total_comissao": None},
+    ]
+    unavail_payload = build_funnel_payload(
+        start_date="2026-08-01",
+        end_date="2026-08-31",
+        official_transactions=unavail_txs,
+        official_vgv=None,
+        official_vgc=None,
+    )
+    u_det = unavail_payload["official_vgc_details"]
+    assert u_det["availability"] == "unavailable"
+    assert u_det["amount"] is None
+    assert u_det["transactions_total"] == 2
+    assert u_det["transactions_with_commission"] == 0
+    assert u_det["transactions_missing_commission"] == 2
+    assert u_det["reason"] is not None
+

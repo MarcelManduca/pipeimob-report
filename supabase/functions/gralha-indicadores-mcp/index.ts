@@ -2142,6 +2142,7 @@ async function callCsoDashboard(
         managers: upstream.managers,
         origins: upstream.origins,
         timeline: upstream.timeline,
+        funnel: upstream.funnel ?? (nestedData as Record<string, unknown>)?.funnel ?? null,
       }
       : null;
   if (!data || typeof data !== "object") {
@@ -2158,6 +2159,7 @@ async function callCsoDashboard(
       period: { start, end, basis: "ccv" },
       generated_at: upstream.generated_at ?? new Date().toISOString(),
       data,
+      funnel: upstream.funnel ?? (data as Record<string, unknown>).funnel ?? null,
       unavailable_metrics: [
         "official_team_and_branch_directory",
         "adjusted_vgv_business_rule",
