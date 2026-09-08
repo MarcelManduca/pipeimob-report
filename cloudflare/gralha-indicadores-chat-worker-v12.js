@@ -5,6 +5,8 @@ const ADMIN_URL =
 const DEFAULT_OPENAI_MODEL = "gpt-5-mini";
 const OPENAI_TIMEOUT_MS = 25_000;
 const ADMIN_TIMEOUT_MS = 35_000;
+const RECONCILIATION_BACKEND_URL = "https://pipeimob-report.onrender.com";
+const RECONCILIATION_TIMEOUT_MS = 55_000;
 const SOURCE_AVAILABILITY_CACHE_MS = 15_000;
 let sourceAvailabilityCache = { expiresAt: 0, value: null };
 
@@ -358,6 +360,188 @@ async function csoDashboardApi(request) {
     return json({ error: value.detail || "Não foi possível carregar o painel executivo." }, status);
   }
   return json(value);
+}
+
+async function reconciliationSalesApi(request, env, url) {
+  const token = bearer(request);
+  if (!token) return json({ error: "Sua sessão expirou. Entre novamente." }, 401);
+
+  const auth = await authenticatedUser(request, env);
+  if (!auth) return json({ error: "Sua sessão expirou. Entre novamente." }, 401);
+
+  let isExecutive = false;
+  try {
+    const profileRes = await rest(
+      env,
+      auth.accessToken,
+      `profiles?select=access_role,status&id=eq.${auth.id}`,
+    );
+    if (profileRes.ok) {
+      const rows = await profileRes.json().catch(() => []);
+      const p = rows[0];
+      if (
+        p?.status === "active" &&
+        ["ceo", "cso", "cmo"].includes(String(p?.access_role || "").toLowerCase())
+      ) {
+        isExecutive = true;
+      }
+    }
+  } catch {}
+
+  if (!isExecutive) {
+    try {
+      const adminMeUrl =
+        (env.SUPABASE_URL
+          ? supabaseUrl(env, "/functions/v1/gralha-portal-admin")
+          : ADMIN_URL) + "/me";
+      const headers = {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      };
+      if (env.SUPABASE_PUBLISHABLE_KEY) {
+        headers.apikey = env.SUPABASE_PUBLISHABLE_KEY;
+      }
+      const meRes = await fetch(adminMeUrl, {
+        method: "GET",
+        headers,
+        signal: AbortSignal.timeout(ADMIN_TIMEOUT_MS),
+      });
+      if (meRes.ok) {
+        const meData = await meRes.json().catch(() => null);
+        const role = String(meData?.profile?.access_role || "").toLowerCase();
+        if (
+          meData?.profile?.has_global_access === true ||
+          ["ceo", "cso", "cmo"].includes(role)
+        ) {
+          isExecutive = true;
+        }
+      }
+    } catch {}
+  }
+
+  if (!isExecutive) {
+    return json(
+      { error: "Acesso exclusivo para cargos executivos (CEO, CSO e CMO)." },
+      403,
+    );
+  }
+
+  const ALLOWED_PARAMS = new Set([
+    "data_inicio_ccv",
+    "data_fim_ccv",
+    "date_tolerance_days",
+    "refresh",
+  ]);
+  for (const key of url.searchParams.keys()) {
+    if (!ALLOWED_PARAMS.has(key)) {
+      return json({ error: `Parâmetro não permitido: ${key}` }, 400);
+    }
+  }
+
+  const start = url.searchParams.get("data_inicio_ccv");
+  const end = url.searchParams.get("data_fim_ccv");
+  if (!start || !end) {
+    return json(
+      { error: "Parâmetros data_inicio_ccv e data_fim_ccv são obrigatórios." },
+      400,
+    );
+  }
+
+  const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+  if (!dateRegex.test(start) || !dateRegex.test(end)) {
+    return json(
+      { error: "As datas devem estar no formato YYYY-MM-DD." },
+      400,
+    );
+  }
+
+  const startParsed = Date.parse(`${start}T00:00:00Z`);
+  const endParsed = Date.parse(`${end}T00:00:00Z`);
+  if (!Number.isFinite(startParsed) || !Number.isFinite(endParsed)) {
+    return json({ error: "Data inválida." }, 400);
+  }
+  if (startParsed > endParsed) {
+    return json(
+      { error: "A data inicial não pode ser posterior à data final." },
+      400,
+    );
+  }
+
+  const toleranceParam = url.searchParams.get("date_tolerance_days");
+  let tolerance;
+  if (toleranceParam !== null) {
+    if (!/^\d+$/.test(toleranceParam)) {
+      return json(
+        {
+          error:
+            "date_tolerance_days deve ser um número inteiro entre 0 e 31.",
+        },
+        400,
+      );
+    }
+    tolerance = parseInt(toleranceParam, 10);
+    if (tolerance < 0 || tolerance > 31) {
+      return json(
+        { error: "date_tolerance_days deve estar entre 0 e 31." },
+        400,
+      );
+    }
+  }
+
+  const refreshParam = url.searchParams.get("refresh");
+  let refresh;
+  if (refreshParam !== null) {
+    if (refreshParam !== "true" && refreshParam !== "false") {
+      return json({ error: "refresh deve ser 'true' ou 'false'." }, 400);
+    }
+    refresh = refreshParam === "true";
+  }
+
+  const backendUrl =
+    (env.RECONCILIATION_BACKEND_URL || RECONCILIATION_BACKEND_URL).replace(
+      /\/+$/,
+      "",
+    );
+  const targetUrl = new URL(`${backendUrl}/api/reconciliation/sales`);
+  targetUrl.searchParams.set("data_inicio_ccv", start);
+  targetUrl.searchParams.set("data_fim_ccv", end);
+  if (tolerance !== undefined) {
+    targetUrl.searchParams.set("date_tolerance_days", String(tolerance));
+  }
+  if (refresh !== undefined) {
+    targetUrl.searchParams.set("refresh", String(refresh));
+  }
+
+  try {
+    const upstream = await fetch(targetUrl.toString(), {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/json",
+      },
+      signal: AbortSignal.timeout(RECONCILIATION_TIMEOUT_MS),
+    });
+
+    const payload = await upstream.json().catch(() => null);
+    if (!payload) {
+      return json(
+        { error: "Serviço de reconciliação retornou uma resposta inválida." },
+        upstream.status || 502,
+      );
+    }
+    if (!upstream.ok) {
+      if (upstream.status === 401) {
+        return json({ error: "Sua sessão expirou. Entre novamente." }, 401);
+      }
+      return json(payload, upstream.status);
+    }
+    return json(payload, upstream.status);
+  } catch {
+    return json(
+      { error: "Serviço de reconciliação indisponível temporariamente." },
+      503,
+    );
+  }
 }
 
 function outputText(payload) {
@@ -1869,6 +2053,11 @@ export default {
         return adminApi(request, env, url);
       if (request.method === "GET" && url.pathname === "/api/cso-dashboard")
         return csoDashboardApi(request);
+      if (
+        request.method === "GET" &&
+        url.pathname === "/api/reconciliation/sales"
+      )
+        return reconciliationSalesApi(request, env, url);
       return json({ error: "Rota não encontrada." }, 404);
     } catch (error) {
       console.error("worker_error", {
