@@ -767,27 +767,70 @@ def build_funnel_payload(
             "notes": "Dados de reconciliação de vendas não consultados ou indisponíveis para o período.",
         }
 
-    vgv_str = str(official_vgv or "0.00")
-    if official_vgc is not None and str(official_vgc).strip() not in ("", "None"):
-        vgc_str = str(official_vgc)
-        vgc_details = {
-            "amount": vgc_str,
-            "currency": "BRL",
-            "source": "pipeimob",
-            "source_field": "total_comissao",
-            "availability": "available",
-            "reason": None,
-        }
-    else:
+    # Safe Decimal conversion and exact quantization for official VGV
+    vgv_decimal = _parse_decimal(official_vgv) if official_vgv is not None else None
+    if vgv_decimal is None and official_transactions:
+        vgv_decimal = sum(
+            (_parse_decimal(tx.get("valor_contrato")) or Decimal("0.00") for tx in official_transactions),
+            Decimal("0.00"),
+        )
+    vgv_str = str(vgv_decimal.quantize(Decimal("0.01"))) if vgv_decimal is not None else "0.00"
+
+    # Exact VGC calculation and completeness tracking
+    tx_total = len(official_transactions)
+    comm_sum = Decimal("0.00")
+    tx_with_comm = 0
+    tx_missing_comm = 0
+
+    for tx in official_transactions:
+        val = tx.get("total_comissao")
+        dec = _parse_decimal(val) if val is not None else None
+        if dec is not None:
+            comm_sum += dec
+            tx_with_comm += 1
+        else:
+            tx_missing_comm += 1
+
+    if tx_total == 0:
+        vgc_avail = "unavailable"
+        vgc_amount = None
         vgc_str = "0.00"
-        vgc_details = {
-            "amount": None,
-            "currency": "BRL",
-            "source": "pipeimob",
-            "source_field": "total_comissao",
-            "availability": "unavailable",
-            "reason": "Comissão oficial (total_comissao) não informada na API Pipeimob para as transações do período.",
-        }
+        vgc_reason = "Nenhuma transação oficial no período."
+    elif tx_with_comm == tx_total and tx_total > 0:
+        vgc_avail = "available"
+        vgc_amount = str(comm_sum.quantize(Decimal("0.01")))
+        vgc_str = vgc_amount
+        vgc_reason = None
+    elif tx_with_comm > 0:
+        vgc_avail = "partial"
+        vgc_amount = str(comm_sum.quantize(Decimal("0.01")))
+        vgc_str = vgc_amount
+        vgc_reason = f"Comissão oficial informada para {tx_with_comm} de {tx_total} contratos ({tx_missing_comm} ausentes)."
+    else:
+        # tx_with_comm == 0: check if official_vgc was explicitly passed
+        dec_explicit = _parse_decimal(official_vgc) if official_vgc is not None else None
+        if dec_explicit is not None and dec_explicit > Decimal("0.00"):
+            vgc_avail = "available"
+            vgc_amount = str(dec_explicit.quantize(Decimal("0.01")))
+            vgc_str = vgc_amount
+            vgc_reason = None
+        else:
+            vgc_avail = "unavailable"
+            vgc_amount = None
+            vgc_str = "0.00"
+            vgc_reason = "Comissão oficial (total_comissao) não informada na API Pipeimob para as transações do período."
+
+    vgc_details = {
+        "amount": vgc_amount,
+        "currency": "BRL",
+        "source": "pipeimob",
+        "source_field": "total_comissao",
+        "availability": vgc_avail,
+        "transactions_total": tx_total,
+        "transactions_with_commission": tx_with_comm,
+        "transactions_missing_commission": tx_missing_comm,
+        "reason": vgc_reason,
+    }
 
     return {
         "methodology": "mixed",

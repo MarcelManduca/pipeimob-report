@@ -588,3 +588,17 @@ test("UI & Behavioral: Scenario A renders compact homologation state and Scenari
   assert.ok(html.includes("Relação entre etapas no período"), "Relation explanation tooltip for >100% must be present");
 });
 
+test("Contract & UI: VGC completeness provenance renders available, partial badge, and unavailable states", async () => {
+  const worker = await loadWorker();
+  const htmlRes = await worker.default.fetch(
+    new Request("https://gralha-indicadores-chat.workers.dev/"),
+    env,
+  );
+  assert.equal(htmlRes.status, 200);
+  const html = await htmlRes.text();
+
+  // Check that partial and unavailable handling exists in client script
+  assert.ok(html.includes("vgcDet.availability===\"unavailable\"||vgcDet.amount===null"), "Worker must handle unavailable VGC without showing R$ 0,00");
+  assert.ok(html.includes("Parcial ("), "Worker must display partial VGC badge with contract counts");
+});
+

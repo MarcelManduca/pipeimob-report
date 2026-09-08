@@ -3799,11 +3799,14 @@ class FunnelReconciliationSummary(BaseModel):
     notes: Optional[str] = None
 
 class FunnelFinancialMetric(BaseModel):
-    amount: Optional[str] = "0.00"
+    amount: Optional[str] = None
     currency: str = "BRL"
     source: str = "pipeimob"
     source_field: str = "total_comissao"
     availability: str = "available"
+    transactions_total: int = 0
+    transactions_with_commission: int = 0
+    transactions_missing_commission: int = 0
     reason: Optional[str] = None
 
 class FunnelSourceItem(BaseModel):

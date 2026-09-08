@@ -621,25 +621,103 @@ def test_build_funnel_payload_vgc_summation_without_fixed_rate():
         {"transacao_unique_id_pipeimob": "tx-2", "valor_contrato": 500000, "total_comissao": 30000},
         {"transacao_unique_id_pipeimob": "tx-3", "valor_contrato": 200000, "total_comissao": 9000},
     ]
-    total_vgv = sum(tx["valor_contrato"] for tx in transactions)
-    total_vgc = sum(tx["total_comissao"] for tx in transactions)
 
     payload = build_funnel_payload(
         start_date="2026-08-01",
         end_date="2026-08-31",
         official_transactions=transactions,
-        official_vgv=str(total_vgv),
-        official_vgc=str(total_vgc),
+        official_vgv=None,
+        official_vgc=None,
         vista_funnel_data=None,
         reconciliation_data=None,
     )
 
-    assert payload["official_vgv"] == "800000"
-    assert payload["official_vgc"] == "42000"
-    assert payload["official_vgc_details"]["amount"] == "42000"
+    assert payload["official_vgv"] == "800000.00"
+    assert payload["official_vgc"] == "42000.00"
+    assert payload["official_vgc_details"]["amount"] == "42000.00"
     assert payload["official_vgc_details"]["source_field"] == "total_comissao"
     assert payload["official_vgc_details"]["availability"] == "available"
-    # Ensure it did not apply 5.0% (which would be 40000) or 4.0% (which would be 32000)
-    assert payload["official_vgc"] != "40000"
-    assert payload["official_vgc"] != "32000"
+    assert payload["official_vgc_details"]["transactions_total"] == 3
+    assert payload["official_vgc_details"]["transactions_with_commission"] == 3
+    assert payload["official_vgc_details"]["transactions_missing_commission"] == 0
+    # Ensure it did not apply 5.0% (which would be 40000.00) or 4.0% (which would be 32000.00)
+    assert payload["official_vgc"] != "40000.00"
+    assert payload["official_vgc"] != "32000.00"
+
+
+def test_decimal_precision_immunity_to_float_binary_errors():
+    """Prove Decimal avoids binary floating point summation errors (e.g. 100.05 + 200.05 + 300.05)."""
+    from decimal import Decimal
+    from services.sales_reconciliation import build_funnel_payload, _parse_decimal
+
+    # Python float summation produces: 100.05 + 200.05 + 300.05 == 600.1500000000001
+    float_sum = 100.05 + 200.05 + 300.05
+    assert float_sum != 600.15  # Shows standard float imprecision
+
+    transactions = [
+        {"transacao_unique_id_pipeimob": "tx-f1", "valor_contrato": "100.05", "total_comissao": "5.05"},
+        {"transacao_unique_id_pipeimob": "tx-f2", "valor_contrato": "200.05", "total_comissao": "10.05"},
+        {"transacao_unique_id_pipeimob": "tx-f3", "valor_contrato": "300.05", "total_comissao": "15.05"},
+    ]
+
+    payload = build_funnel_payload(
+        start_date="2026-08-01",
+        end_date="2026-08-31",
+        official_transactions=transactions,
+        official_vgv=None,
+        official_vgc=None,
+    )
+
+    # Exact Decimal sum: 600.15 and 30.15
+    assert payload["official_vgv"] == "600.15"
+    assert payload["official_vgc"] == "30.15"
+    assert payload["official_vgc_details"]["amount"] == "30.15"
+
+
+def test_vgc_completeness_states_available_partial_unavailable():
+    """Validate full, partial, and unavailable VGC contract states and zero-presumption behavior."""
+    from services.sales_reconciliation import build_funnel_payload
+
+    # Scenario 1: Partial commission availability (2 of 3 contracts have commission)
+    partial_txs = [
+        {"transacao_unique_id_pipeimob": "tx-p1", "valor_contrato": 100000, "total_comissao": 5000},
+        {"transacao_unique_id_pipeimob": "tx-p2", "valor_contrato": 200000, "total_comissao": 10000},
+        {"transacao_unique_id_pipeimob": "tx-p3", "valor_contrato": 300000, "total_comissao": None},  # Missing
+    ]
+    partial_payload = build_funnel_payload(
+        start_date="2026-08-01",
+        end_date="2026-08-31",
+        official_transactions=partial_txs,
+        official_vgv=None,
+        official_vgc=None,
+    )
+    p_det = partial_payload["official_vgc_details"]
+    assert p_det["availability"] == "partial"
+    assert p_det["amount"] == "15000.00"  # Sum of only observed commissions
+    assert p_det["transactions_total"] == 3
+    assert p_det["transactions_with_commission"] == 2
+    assert p_det["transactions_missing_commission"] == 1
+    assert "2 de 3" in p_det["reason"]
+    # Ensure missing contract was NOT inferred (if inferred at 5%, sum would be 30000)
+    assert p_det["amount"] != "30000.00"
+
+    # Scenario 2: Unavailable commission (0 of 3 contracts have commission)
+    unavail_txs = [
+        {"transacao_unique_id_pipeimob": "tx-u1", "valor_contrato": 100000, "total_comissao": None},
+        {"transacao_unique_id_pipeimob": "tx-u2", "valor_contrato": 200000, "total_comissao": None},
+    ]
+    unavail_payload = build_funnel_payload(
+        start_date="2026-08-01",
+        end_date="2026-08-31",
+        official_transactions=unavail_txs,
+        official_vgv=None,
+        official_vgc=None,
+    )
+    u_det = unavail_payload["official_vgc_details"]
+    assert u_det["availability"] == "unavailable"
+    assert u_det["amount"] is None
+    assert u_det["transactions_total"] == 2
+    assert u_det["transactions_with_commission"] == 0
+    assert u_det["transactions_missing_commission"] == 2
+    assert u_det["reason"] is not None
 
