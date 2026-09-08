@@ -697,39 +697,96 @@ def build_funnel_payload(
     if reconciliation_data:
         rec_summary = reconciliation_data.get("summary") or {}
         rec_items = reconciliation_data.get("items") or []
+        official_sales_rec = int(rec_summary.get("official_sales", len(official_transactions)))
+        official_vgv_rec = str(rec_summary.get("official_vgv") or official_vgv or "0.00")
         v_matched = int(rec_summary.get("matched", 0))
         v_without_ccv = int(rec_summary.get("vista_without_pipeimob_contract", 0))
-        vista_gains = v_matched + v_without_ccv
-        official_sales_rec = int(rec_summary.get("official_sales", len(official_transactions)))
         ccv_without_vista_gain = int(rec_summary.get("pipeimob_without_vista_gain", 0))
+        
+        distinct_vista_deals = set(
+            item["vista_deal_id"] for item in rec_items if item.get("vista_deal_id")
+        )
+        vista_gains = len(distinct_vista_deals) if distinct_vista_deals else (v_matched + v_without_ccv)
+        
         unresolved_dates = sum(
             1
             for item in rec_items
             if item.get("vista_deal_id") and not item.get("vista_gain_date")
         )
-        unresolved_teams = int(rec_summary.get("api_team_unresolved", len(official_transactions)))
+        api_team_unresolved = int(rec_summary.get("api_team_unresolved", len(official_transactions)))
+        api_team_resolved = int(rec_summary.get("api_team_resolved", 0))
+        divergence_flag = (v_without_ccv > 0) or (ccv_without_vista_gain > 0)
+        
         reconciliation = {
-            "vista_gains": vista_gains,
+            "official_sales_count": official_sales_rec,
             "official_sales": official_sales_rec,
+            "official_vgv": official_vgv_rec,
+            "matched_count": v_matched,
+            "matched": v_matched,
+            "vista_gain_count": vista_gains,
+            "vista_gains": vista_gains,
+            "vista_without_ccv_count": v_without_ccv,
             "vista_without_ccv": v_without_ccv,
+            "ccv_without_vista_count": ccv_without_vista_gain,
             "ccv_without_vista_gain": ccv_without_vista_gain,
+            "non_auditable_gain_dates_count": unresolved_dates,
             "unresolved_gain_dates": unresolved_dates,
-            "unresolved_teams": unresolved_teams,
+            "unresolved_teams_count": api_team_unresolved,
+            "unresolved_teams": api_team_unresolved,
+            "api_team_resolved": api_team_resolved,
+            "divergence_flag": divergence_flag,
             "availability": "available",
+            "notes": (
+                f"{v_without_ccv} ganho(s) declarado(s) no CRM sem contrato oficial no período; "
+                f"{ccv_without_vista_gain} contrato(s) oficial(is) sem ganho CRM correspondente; "
+                f"{unresolved_dates} data(s) de ganho não auditável(is) (DataFinal nulo); "
+                f"{api_team_unresolved} venda(s) com equipe não resolvida."
+            ),
         }
     else:
         reconciliation = {
-            "vista_gains": 0,
+            "official_sales_count": len(official_transactions),
             "official_sales": len(official_transactions),
+            "official_vgv": str(official_vgv or "0.00"),
+            "matched_count": 0,
+            "matched": 0,
+            "vista_gain_count": 0,
+            "vista_gains": 0,
+            "vista_without_ccv_count": 0,
             "vista_without_ccv": 0,
+            "ccv_without_vista_count": 0,
             "ccv_without_vista_gain": 0,
+            "non_auditable_gain_dates_count": 0,
             "unresolved_gain_dates": 0,
+            "unresolved_teams_count": len(official_transactions),
             "unresolved_teams": len(official_transactions),
+            "api_team_resolved": 0,
+            "divergence_flag": False,
             "availability": "unavailable",
+            "notes": "Dados de reconciliação de vendas não consultados ou indisponíveis para o período.",
         }
 
     vgv_str = str(official_vgv or "0.00")
-    vgc_str = str(official_vgc or "0.00")
+    if official_vgc is not None and str(official_vgc).strip() not in ("", "None"):
+        vgc_str = str(official_vgc)
+        vgc_details = {
+            "amount": vgc_str,
+            "currency": "BRL",
+            "source": "pipeimob",
+            "source_field": "total_comissao",
+            "availability": "available",
+            "reason": None,
+        }
+    else:
+        vgc_str = "0.00"
+        vgc_details = {
+            "amount": None,
+            "currency": "BRL",
+            "source": "pipeimob",
+            "source_field": "total_comissao",
+            "availability": "unavailable",
+            "reason": "Comissão oficial (total_comissao) não informada na API Pipeimob para as transações do período.",
+        }
 
     return {
         "methodology": "mixed",
@@ -745,14 +802,32 @@ def build_funnel_payload(
         "relations": relations,
         "official_vgv": vgv_str,
         "official_vgc": vgc_str,
+        "official_vgc_details": vgc_details,
         "reconciliation": reconciliation,
+        "team_scope": {
+            "team_filter_enabled": False,
+            "api_team_resolved": reconciliation.get("api_team_resolved", 0),
+            "reason": "Atribuição estruturada de equipe pendente de padronização cadastral na API (api_team_resolved = 0). Exibindo consolidação corporativa.",
+        },
         "warnings": [
             "As etapas intermediárias representam a fotografia de atividade e snapshot do Vista CRM, enquanto as Vendas oficializadas decorrem exclusivamente de CCVs formalizados no Pipeimob.",
             "Filtro por equipe temporariamente desabilitado até a resolução formal dos mapeamentos de grupos organizacionais.",
         ],
         "sources": [
-            {"name": "pipeimob", "label": "Pipeimob API v2", "role": "official_contracts"},
-            {"name": "vista", "label": "Vista CRM", "role": "commercial_pipeline"},
+            {
+                "name": "pipeimob",
+                "label": "Pipeimob API v2",
+                "role": "official_contracts",
+                "status": "connected",
+                "description": "Base oficial de contratos assinados (CCV), VGV e comissões faturadas.",
+            },
+            {
+                "name": "vista",
+                "label": "Vista CRM",
+                "role": "commercial_pipeline",
+                "status": "partial" if has_vista else "unavailable",
+                "description": "Funil de atendimento e registros operacionais de fechamento.",
+            },
         ],
     }
 

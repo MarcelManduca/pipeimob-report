@@ -45,12 +45,14 @@ class FakeVistaOrganizationClient:
 @pytest.fixture(autouse=True)
 def clear_vista_org_coverage_cache():
     main.vista_org_coverage_cache.clear()
+    app.dependency_overrides.clear()
     yield
     main.vista_org_coverage_cache.clear()
+    app.dependency_overrides.clear()
 
 
 def test_org_coverage_endpoint_requires_auth():
-    client = TestClient(app)
+    client = TestClient(app, raise_server_exceptions=False)
     response = client.get("/api/vista/diagnostics/organizational-coverage")
     assert response.status_code in (401, 403)
 

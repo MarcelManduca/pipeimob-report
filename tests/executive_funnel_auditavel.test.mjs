@@ -55,8 +55,8 @@ function mockSyntheticFunnel(overrides = {}) {
       {
         key: "opportunities",
         label: "Oportunidades",
-        count: 22,
-        movement_count: 22,
+        count: 50,
+        movement_count: 50,
         metric_type: "unique_clients",
         source: "vista",
         date_basis: "opportunity_creation_date",
@@ -66,8 +66,8 @@ function mockSyntheticFunnel(overrides = {}) {
       {
         key: "visits",
         label: "Visitas",
-        count: 29,
-        movement_count: 39,
+        count: 30,
+        movement_count: 35,
         metric_type: "unique_clients",
         source: "vista",
         date_basis: "current_stage_snapshot",
@@ -77,8 +77,8 @@ function mockSyntheticFunnel(overrides = {}) {
       {
         key: "proposals",
         label: "Propostas",
-        count: 6,
-        movement_count: 7,
+        count: 15,
+        movement_count: 18,
         metric_type: "unique_clients",
         source: "vista",
         date_basis: "current_stage_snapshot",
@@ -88,8 +88,8 @@ function mockSyntheticFunnel(overrides = {}) {
       {
         key: "commercial_closings",
         label: "Fechamentos comerciais",
-        count: 6,
-        movement_count: 10,
+        count: 12,
+        movement_count: 14,
         metric_type: "unique_clients",
         source: "vista",
         date_basis: "current_stage_snapshot",
@@ -99,8 +99,8 @@ function mockSyntheticFunnel(overrides = {}) {
       {
         key: "official_sales",
         label: "Vendas oficializadas",
-        count: 4,
-        movement_count: 4,
+        count: 10,
+        movement_count: 10,
         metric_type: "contracts",
         source: "pipeimob",
         date_basis: "ccv_signature_date",
@@ -112,50 +112,75 @@ function mockSyntheticFunnel(overrides = {}) {
       {
         from_stage: "opportunities",
         to_stage: "visits",
-        ratio_percentage: 131.8,
+        ratio_percentage: 60.0,
         availability: "available",
         reason: null,
       },
       {
         from_stage: "visits",
         to_stage: "proposals",
-        ratio_percentage: 20.7,
+        ratio_percentage: 50.0,
         availability: "available",
         reason: null,
       },
       {
         from_stage: "proposals",
         to_stage: "commercial_closings",
-        ratio_percentage: 100.0,
+        ratio_percentage: 80.0,
         availability: "available",
         reason: null,
       },
       {
         from_stage: "commercial_closings",
         to_stage: "official_sales",
-        ratio_percentage: 66.7,
+        ratio_percentage: 83.3,
         availability: "available",
         reason: null,
       },
     ],
-    official_vgv: "2881004.00",
-    official_vgc: "144050.20",
-    reconciliation: {
-      vista_gains: 5,
-      official_sales: 4,
-      vista_without_ccv: 1,
-      ccv_without_vista_gain: 0,
-      unresolved_gain_dates: 1,
-      unresolved_teams: 4,
+    official_vgv: "10000000.00",
+    official_vgc: "500000.00",
+    official_vgc_details: {
+      amount: "500000.00",
+      currency: "BRL",
+      source: "pipeimob",
+      source_field: "total_comissao",
       availability: "available",
+      reason: null,
+    },
+    reconciliation: {
+      official_sales_count: 10,
+      official_sales: 10,
+      official_vgv: "10000000.00",
+      matched_count: 9,
+      matched: 9,
+      vista_gain_count: 10,
+      vista_gains: 10,
+      vista_without_ccv_count: 1,
+      vista_without_ccv: 1,
+      ccv_without_vista_count: 1,
+      ccv_without_vista_gain: 1,
+      non_auditable_gain_dates_count: 1,
+      unresolved_gain_dates: 1,
+      unresolved_teams_count: 10,
+      unresolved_teams: 10,
+      api_team_resolved: 0,
+      divergence_flag: true,
+      availability: "available",
+      notes: "1 ganho declarado no CRM sem contrato oficial no período; 1 contrato oficial sem ganho CRM correspondente.",
+    },
+    team_scope: {
+      team_filter_enabled: false,
+      api_team_resolved: 0,
+      reason: "Atribuição estruturada de equipe pendente de padronização cadastral na API (api_team_resolved = 0). Exibindo consolidação corporativa.",
     },
     warnings: [
       "As etapas intermediárias representam a fotografia de atividade e snapshot do Vista CRM, enquanto as Vendas oficializadas decorrem exclusivamente de CCVs formalizados no Pipeimob.",
       "Filtro por equipe temporariamente desabilitado até a resolução formal dos mapeamentos de grupos organizacionais.",
     ],
     sources: [
-      { name: "pipeimob", label: "Pipeimob API v2", role: "official_contracts" },
-      { name: "vista", label: "Vista CRM", role: "commercial_pipeline" },
+      { name: "pipeimob", label: "Pipeimob API v2", role: "official_contracts", status: "connected" },
+      { name: "vista", label: "Vista CRM", role: "commercial_pipeline", status: "partial" },
     ],
     ...overrides,
   };
@@ -181,9 +206,9 @@ test("Contract: /api/cso-dashboard exposes the structured funnel payload with di
               period: { start: "2026-08-01", end: "2026-08-31", basis: "ccv" },
               data: {
                 summary: {
-                  total_sales: 2881004,
-                  total_commissions: 144050,
-                  transaction_count: 4,
+                  total_sales: 10000000,
+                  total_commissions: 500000,
+                  transaction_count: 10,
                   avg_commission_rate: 5.0,
                 },
                 managers: [],
@@ -219,10 +244,14 @@ test("Contract: /api/cso-dashboard exposes the structured funnel payload with di
     assert.equal(funnel.stages[5].key, "official_sales");
     assert.equal(funnel.stages[5].source, "pipeimob");
     assert.equal(funnel.stages[5].date_basis, "ccv_signature_date");
-    assert.equal(funnel.stages[5].count, 4);
-    assert.equal(funnel.reconciliation.vista_gains, 5);
-    assert.equal(funnel.reconciliation.official_sales, 4);
-    assert.equal(funnel.reconciliation.vista_without_ccv, 1);
+    assert.equal(funnel.stages[5].count, 10);
+    assert.equal(funnel.reconciliation.official_sales_count, 10);
+    assert.equal(funnel.reconciliation.matched_count, 9);
+    assert.equal(funnel.reconciliation.vista_gain_count, 10);
+    assert.equal(funnel.reconciliation.vista_without_ccv_count, 1);
+    assert.equal(funnel.reconciliation.ccv_without_vista_count, 1);
+    assert.equal(funnel.team_scope.team_filter_enabled, false);
+    assert.equal(funnel.sources[1].status, "partial");
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -434,4 +463,108 @@ test("UI & Security: HTML rendering properly escapes special characters in funne
   assert.ok(html.includes("cso-funnel-card"), "Funnel CSS styles must be present in portal HTML");
   assert.ok(html.includes("cso-recon-grid"), "Reconciliation CSS styles must be present in portal HTML");
   assert.ok(html.includes("cso-badge-warning"), "Warning badge CSS must be present in portal HTML");
+});
+
+test("Behavioral: Global corporate summary mapping and VGC unavailable fallback", async () => {
+  const originalFetch = globalThis.fetch;
+  const mockGlobalFunnel = mockSyntheticFunnel({
+    official_vgv: "45000000.00",
+    official_vgc: "0.00",
+    official_vgc_details: {
+      amount: null,
+      currency: "BRL",
+      source: "pipeimob",
+      source_field: "total_comissao",
+      availability: "unavailable",
+      reason: "Comissão oficial não informada nas transações do período.",
+    },
+    reconciliation: {
+      official_sales_count: 40,
+      official_sales: 40,
+      official_vgv: "45000000.00",
+      matched_count: 38,
+      matched: 38,
+      vista_gain_count: 41,
+      vista_gains: 41,
+      vista_without_ccv_count: 3,
+      vista_without_ccv: 3,
+      ccv_without_vista_count: 2,
+      ccv_without_vista_gain: 2,
+      non_auditable_gain_dates_count: 4,
+      unresolved_gain_dates: 4,
+      unresolved_teams_count: 40,
+      unresolved_teams: 40,
+      api_team_resolved: 0,
+      divergence_flag: true,
+      availability: "available",
+      notes: "3 ganhos declarados no CRM sem CCV oficial; 2 contratos CCV sem ganho no CRM; 4 datas não auditáveis; 40 vendas com equipe pendente de padronização.",
+    },
+    team_scope: {
+      team_filter_enabled: false,
+      api_team_resolved: 0,
+      reason: "Atribuição estruturada de equipe pendente de padronização cadastral na API (api_team_resolved = 0). Exibindo consolidação corporativa.",
+    },
+    sources: [
+      { name: "pipeimob", label: "Pipeimob API v2", role: "official_contracts", status: "connected" },
+      { name: "vista", label: "Vista CRM", role: "commercial_pipeline", status: "partial" },
+    ],
+  });
+
+  globalThis.fetch = async (input, init) => {
+    const body = JSON.parse(init?.body || "{}");
+    return new Response(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: body.id || "1",
+        result: {
+          structuredContent: {
+            data: {
+              summary: { total_sales: 45000000, total_commissions: 0, transaction_count: 40, avg_commission_rate: 0 },
+              managers: [],
+              origins: [],
+              timeline: [],
+              funnel: mockGlobalFunnel,
+            },
+            funnel: mockGlobalFunnel,
+          },
+        },
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  };
+
+  try {
+    const worker = await loadWorker();
+    const res = await worker.default.fetch(
+      authRequest("/api/cso-dashboard?data_inicio=2026-08-01&data_fim=2026-08-31"),
+      env,
+    );
+    assert.equal(res.status, 200);
+    const payload = await res.json();
+    const funnel = payload.data.funnel || payload.funnel;
+
+    // 1. Global View (no team filter applied)
+    assert.equal(funnel.team_scope.team_filter_enabled, false);
+    assert.equal(funnel.team_scope.api_team_resolved, 0);
+
+    // 2. Summary mappings
+    assert.equal(funnel.reconciliation.official_sales_count, 40);
+    assert.equal(funnel.reconciliation.matched_count, 38);
+    assert.equal(funnel.reconciliation.vista_without_ccv_count, 3);
+    assert.equal(funnel.reconciliation.ccv_without_vista_count, 2);
+    assert.equal(funnel.reconciliation.non_auditable_gain_dates_count, 4);
+    assert.equal(funnel.reconciliation.unresolved_teams_count, 40);
+    assert.equal(funnel.reconciliation.divergence_flag, true);
+
+    // 3. VGC provenance and availability
+    assert.equal(funnel.official_vgc_details.availability, "unavailable");
+    assert.equal(funnel.official_vgc_details.amount, null);
+    assert.equal(funnel.official_vgc_details.source_field, "total_comissao");
+
+    // 4. Source statuses
+    assert.equal(funnel.sources[0].status, "connected");
+    assert.equal(funnel.sources[1].status, "partial");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

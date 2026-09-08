@@ -8,7 +8,7 @@ import ssl
 import time
 import re
 from datetime import datetime, date, timezone, timedelta
-from typing import List, Literal, Optional, Union, Any
+from typing import List, Literal, Optional, Union, Any, Dict
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 from fastapi import FastAPI, Header, Query, HTTPException, Response, Request, Depends, File, UploadFile
@@ -419,8 +419,9 @@ async def dataset_warming_exception_handler(request: Request, exc: DatasetWarmin
         }
     )
 
-class AuthException(Exception):
+class AuthException(HTTPException):
     def __init__(self, status_code: int, detail: str, error_code: str):
+        super().__init__(status_code=status_code, detail=detail)
         self.status_code = status_code
         self.detail = detail
         self.error_code = error_code
@@ -3777,18 +3778,40 @@ class FunnelRelationItem(BaseModel):
     reason: Optional[str] = None
 
 class FunnelReconciliationSummary(BaseModel):
-    vista_gains: int = 0
+    official_sales_count: int = 0
     official_sales: int = 0
+    official_vgv: Optional[str] = "0.00"
+    matched_count: int = 0
+    matched: int = 0
+    vista_gain_count: int = 0
+    vista_gains: int = 0
+    vista_without_ccv_count: int = 0
     vista_without_ccv: int = 0
+    ccv_without_vista_count: int = 0
     ccv_without_vista_gain: int = 0
+    non_auditable_gain_dates_count: int = 0
     unresolved_gain_dates: int = 0
+    unresolved_teams_count: int = 0
     unresolved_teams: int = 0
+    api_team_resolved: int = 0
+    divergence_flag: bool = False
     availability: str = "available"
+    notes: Optional[str] = None
+
+class FunnelFinancialMetric(BaseModel):
+    amount: Optional[str] = "0.00"
+    currency: str = "BRL"
+    source: str = "pipeimob"
+    source_field: str = "total_comissao"
+    availability: str = "available"
+    reason: Optional[str] = None
 
 class FunnelSourceItem(BaseModel):
     name: str
     label: str
     role: str
+    status: str = "connected"
+    description: Optional[str] = None
 
 class FunnelPeriod(BaseModel):
     start: str
@@ -3806,7 +3829,9 @@ class FunnelPayload(BaseModel):
     relations: List[FunnelRelationItem] = Field(default_factory=list)
     official_vgv: str = "0.00"
     official_vgc: str = "0.00"
+    official_vgc_details: Optional[FunnelFinancialMetric] = None
     reconciliation: FunnelReconciliationSummary
+    team_scope: Optional[Dict[str, Any]] = None
     warnings: List[str] = Field(default_factory=list)
     sources: List[FunnelSourceItem] = Field(default_factory=list)
 
@@ -4034,21 +4059,6 @@ async def dataset_warming_exception_handler(request: Request, exc: DatasetWarmin
         }
     )
 
-class AuthException(Exception):
-    def __init__(self, status_code: int, detail: str, error_code: str):
-        self.status_code = status_code
-        self.detail = detail
-        self.error_code = error_code
-
-@app.exception_handler(AuthException)
-async def auth_exception_handler(request: Request, exc: AuthException):
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={
-            "detail": exc.detail,
-            "error_code": exc.error_code
-        }
-    )
 
 # CORS Configuration
 allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "")

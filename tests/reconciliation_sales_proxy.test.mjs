@@ -89,8 +89,8 @@ test("Behavioral: CMO active session forwards valid request to Render and return
           return new Response(
             JSON.stringify({
               contract_version: "1.1",
-              summary: { official_sales: 4, matched: 4, official_vgv: "2881004.00" },
-              items: [{ status: "CONCILIADO", property_code: "44555" }],
+              summary: { official_sales: 10, matched: 10, official_vgv: "1000000.00" },
+              items: [{ status: "CONCILIADO", property_code: "TEST-PROP-001" }],
             }),
             { status: 200, headers: { "Content-Type": "application/json" } },
           );
@@ -112,7 +112,7 @@ test("Behavioral: CMO active session forwards valid request to Render and return
 
     const body = await res.json();
     assert.equal(body.contract_version, "1.1");
-    assert.equal(body.summary.official_sales, 4);
+    assert.equal(body.summary.official_sales, 10);
 
     // Confirm URL, parameters, and token forwarding
     assert.ok(forwardedUrl.includes("https://pipeimob-report.onrender.com/api/reconciliation/sales"));
