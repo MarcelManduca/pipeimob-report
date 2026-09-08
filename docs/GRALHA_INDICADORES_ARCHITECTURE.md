@@ -177,7 +177,7 @@ O Gralha Indicadores é uma plataforma interna corporativa e restrita à gestão
 2. **Minimização de dados enviados ao LLM:** O modelo de IA recebe unicamente os dados estritamente necessários para interpretar e responder à pergunta autorizada.
 3. **Higienização de código, testes e logs:** É estritamente proibido incluir dados pessoais reais (PII) no repositório Git, commits, fixtures ou suítes de teste automatizados (utilizar exclusivamente dados sintéticos e mascarados). Documentos e telefones nunca são registrados em logs de produção.
 4. **Governança da Matriz Oficial de Conferência:**
-   - A planilha oficial (`VENDAS GRALHA IMÓVEIS 2025.xlsx` / `PROCESSOS DE VENDAS 2026`) é classificada como **matriz oficial de auditoria, conferência e homologação dos resultados da Gralha**, e **não como fonte viva** do portal.
+   - A planilha oficial (`VENDAS GRALHA IMÓVEIS 2025.xlsx`) é classificada como **matriz oficial de auditoria, conferência e homologação dos resultados da Gralha**, e **não como fonte viva** do portal.
    - **Responsável pela atualização da matriz:** Fernanda Silva (Analista Administrativa).
    - **Responsável pela conferência e validação oficial:** Marco Roennau (CSO).
    - O portal conecta-se exclusivamente às APIs automatizadas oficiais (Pipeimob e Vista), utilizando a matriz para homologação periódica de fechamentos mensais.
