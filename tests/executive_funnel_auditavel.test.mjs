@@ -602,3 +602,94 @@ test("Contract & UI: VGC completeness provenance renders available, partial badg
   assert.ok(html.includes("Parcial ("), "Worker must display partial VGC badge with contract counts");
 });
 
+// ---------------------------------------------------------------------------
+// Behavioral Tests: Phase 2, 4, 5 - Progressive Async Loading & Normalization
+// ---------------------------------------------------------------------------
+
+test("Contract: normalizeReconciliationSummary handles available, zero, and unavailable payloads faithfully", async () => {
+  const worker = await loadWorker();
+  const { normalizeReconciliationSummary } = worker;
+
+  // 1. Available with all metrics and formula validation (vista_gains = matched + vista_without_ccv)
+  const normAvailable = normalizeReconciliationSummary({
+    summary: {
+      official_sales: 310,
+      matched: 300,
+      vista_without_pipeimob_contract: 10,
+      pipeimob_without_vista_gain: 10,
+      non_auditable_gain_dates_count: 5,
+      unresolved_teams_count: 310,
+    },
+    notes: ["Auditoria padrão"],
+  });
+  assert.equal(normAvailable.availability, "available");
+  assert.equal(normAvailable.official_sales, 310);
+  assert.equal(normAvailable.matched, 300);
+  assert.equal(normAvailable.vista_without_ccv, 10);
+  assert.equal(normAvailable.ccv_without_vista, 10);
+  assert.equal(normAvailable.vista_gains, 310); // 300 matched + 10 vista_without_ccv
+  assert.equal(normAvailable.non_auditable_gain_dates, 5);
+  assert.equal(normAvailable.unresolved_teams, 310);
+  assert.deepEqual(normAvailable.notes, ["Auditoria padrão"]);
+
+  // 2. Legitimate 0 from HTTP 200 must be preserved as 0 and NEVER converted to null or unavailable
+  const normZero = normalizeReconciliationSummary({
+    summary: {
+      official_sales: 0,
+      matched: 0,
+      vista_without_pipeimob_contract: 0,
+      pipeimob_without_vista_gain: 0,
+      non_auditable_gain_dates_count: 0,
+      unresolved_teams_count: 0,
+    },
+  });
+  assert.equal(normZero.availability, "available");
+  assert.equal(normZero.official_sales, 0);
+  assert.equal(normZero.matched, 0);
+  assert.equal(normZero.vista_gains, 0);
+  assert.equal(normZero.vista_without_ccv, 0);
+  assert.equal(normZero.ccv_without_vista, 0);
+  assert.equal(normZero.non_auditable_gain_dates, 0);
+  assert.equal(normZero.unresolved_teams, 0);
+
+  // 3. Unavailable / error state returns null counts and distinct availability
+  const normUnavailable = normalizeReconciliationSummary({
+    availability: "unavailable",
+    notes: ["Serviço indisponível"],
+  });
+  assert.equal(normUnavailable.availability, "unavailable");
+  assert.equal(normUnavailable.official_sales, null);
+  assert.equal(normUnavailable.matched, null);
+  assert.equal(normUnavailable.vista_gains, null);
+  assert.equal(normUnavailable.vista_without_ccv, null);
+  assert.equal(normUnavailable.ccv_without_vista, null);
+  assert.deepEqual(normUnavailable.notes, ["Serviço indisponível"]);
+
+  // 4. Null / non-object input returns safe unavailable contract
+  const normNull = normalizeReconciliationSummary(null);
+  assert.equal(normNull.availability, "unavailable");
+  assert.equal(normNull.official_sales, null);
+});
+
+test("UI & Security: Dashboard HTML contains progressive loading markup, aria-live, and retry controls", async () => {
+  const worker = await loadWorker();
+  const htmlRes = await worker.default.fetch(
+    new Request("https://gralha-indicadores-chat.workers.dev/"),
+    env,
+  );
+  assert.equal(htmlRes.status, 200);
+  const html = await htmlRes.text();
+
+  // Loading & accessibility tokens
+  assert.ok(html.includes("cso-recon-loading"), "CSS class for loading indicator must be present");
+  assert.ok(html.includes("cso-spinner"), "CSS class for loading spinner must be present");
+  assert.ok(html.includes("cso-skeleton-text"), "CSS class for skeleton loading text must be present");
+  assert.ok(html.includes('aria-live="polite"'), "Accessible aria-live region must be present for reconciliation updates");
+  assert.ok(html.includes("cso-recon-retry"), "Retry button ID must be present in client script");
+  assert.ok(html.includes("Tentar novamente"), "Retry button label must be present in client script");
+  assert.ok(html.includes("Reconciliação indisponível"), "Discrete failure notice must be present");
+  assert.ok(html.includes("fetchReconciliationAsync"), "Async reconciliation fetcher must be present");
+  assert.ok(html.includes("AbortController"), "AbortController must be present to cancel in-flight queries");
+});
+
+
