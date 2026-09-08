@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-09-07 — Formalização da Política de Governança de Dados, RBAC e Matriz de Conferência
+
+- Documenta formalmente a matriz de acesso hierárquico top-down (`CEO`, `CSO`, `CMO` com acesso global; `Diretor de loja` e `Gerente de equipe` restritos ao escopo em `user_team_access`).
+- Explicita a permissão para processamento e consulta de dados cadastrais e operacionais dentro do escopo autorizado para fins de gestão interna.
+- Reforça os requisitos de segurança e privacidade: filtragem de escopo no backend (anti-IDOR), minimização de dados enviados ao LLM, proibição de dados pessoais reais (PII) em código/testes/logs e fail-closed por padrão.
+- Registra o papel de governança da planilha (`VENDAS GRALHA IMÓVEIS 2025.xlsx`) como matriz oficial de auditoria, conferência e homologação, sob atualização de Fernanda Silva e validação oficial de Marco Roennau (CSO), sem atuação como fonte viva do portal.
+
 ## 2026-09-06 — Diagnóstico organizacional disponível no portal
 
 - Adiciona ao MCP a ferramenta administrativa `diagnosticar_estrutura_organizacional_vista`, conectada ao contrato agregado `1.0` do Render.
