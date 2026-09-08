@@ -156,18 +156,33 @@ flowchart TD
 6. Transferências fecham o vínculo anterior e abrem outro.
 7. Correções de venda criam uma nova versão.
 
-## Matriz de acesso
+## Matriz de acesso e política de governança de dados
 
-| Cargo | Escopo de indicadores | Gestão de usuários |
-|---|---|---|
-| CEO | Geral | Sim |
-| CSO | Geral | Sim |
-| CMO | Geral | Sim |
-| Diretor de loja | Uma ou mais equipes selecionadas | Não |
-| Gerente de equipe | Exatamente uma equipe | Não |
+O Gralha Indicadores é uma plataforma interna corporativa e restrita à gestão da Gralha Imóveis. Informações operacionais e cadastrais (nomes de clientes, corretores, telefones, documentos, dados de imóveis e transações) podem ser processadas, consultadas e apresentadas quando forem necessárias à operação comercial e estiverem estritamente dentro do escopo autorizado do usuário autenticado.
 
-O escopo é aplicado no MCP. Ocultar controles na interface não é segurança. As
-políticas RLS impedem que um usuário leia ou altere conversas de outro.
+### Hierarquia de acesso (Top-Down)
+
+| Cargo (`access_role`) | Escopo autorizado | Gestão de usuários | Comportamento de autorização |
+|---|---|---|---|
+| **CEO** | Global (Todas as lojas e equipes) | Sim | Acesso irrestrito a indicadores e auditoria global |
+| **CSO** | Global (Todas as lojas e equipes) | Sim | Acesso irrestrito a indicadores e auditoria global |
+| **CMO** | Global (Todas as lojas e equipes) | Sim | Acesso irrestrito a indicadores e auditoria global |
+| **Diretor de loja** (`store_director`) | Lojas/equipes autorizadas | Não | Restrito às equipes vinculadas em `user_team_access` |
+| **Gerente de equipe** (`team_manager`) | Própria equipe | Não | Restrito à única equipe vinculada em `user_team_access` |
+| **Sem perfil / Inativo** | Acesso negado | Não | Rejeição imediata (*fail-closed*: 401/403) |
+
+### Requisitos mandatórios de segurança e privacidade
+
+1. **Filtragem de escopo no backend (Anti-IDOR):** O backend (`gralha-indicadores-mcp` e Edge Functions) valida o perfil autenticado antes de consultar e retornar qualquer dado. Parâmetros de filtro enviados pelo cliente (`equipe`, `loja`, `corretor`) nunca são aceitos sem validação cruzada contra `user_team_access`.
+2. **Minimização de dados enviados ao LLM:** O modelo de IA recebe unicamente os dados estritamente necessários para interpretar e responder à pergunta autorizada.
+3. **Higienização de código, testes e logs:** É estritamente proibido incluir dados pessoais reais (PII) no repositório Git, commits, fixtures ou suítes de teste automatizados (utilizar exclusivamente dados sintéticos e mascarados). Documentos e telefones nunca são registrados em logs de produção.
+4. **Governança da Matriz Oficial de Conferência:**
+   - A planilha oficial (`VENDAS GRALHA IMÓVEIS 2025.xlsx` / `PROCESSOS DE VENDAS 2026`) é classificada como **matriz oficial de auditoria, conferência e homologação dos resultados da Gralha**, e **não como fonte viva** do portal.
+   - **Responsável pela atualização da matriz:** Fernanda Silva (Analista Administrativa).
+   - **Responsável pela conferência e validação oficial:** Marco Roennau (CSO).
+   - O portal conecta-se exclusivamente às APIs automatizadas oficiais (Pipeimob e Vista), utilizando a matriz para homologação periódica de fechamentos mensais.
+
+O escopo é aplicado no MCP e no backend. Ocultar controles na interface não é segurança. As políticas RLS impedem que um usuário leia ou altere conversas de outro.
 
 ## Modelo de dados
 
