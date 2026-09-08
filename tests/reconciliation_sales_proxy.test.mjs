@@ -511,3 +511,169 @@ test("Behavioral: Upstream errors (401, 422, 500, non-JSON, timeout) are safely 
     globalThis.fetch = originalFetch;
   }
 });
+
+// ---------------------------------------------------------------------------
+// 6. Behavioral Tests: Payload Minimization (view=summary)
+// ---------------------------------------------------------------------------
+
+test("Behavioral: view=summary removes items and keeps only summary metadata", async () => {
+  const originalFetch = globalThis.fetch;
+  let forwardedUrl = null;
+
+  try {
+    globalThis.fetch = createMockFetch([
+      {
+        matches: (url) => url.includes("/auth/v1/user"),
+        handle: () =>
+          new Response(JSON.stringify({ id: "user-ceo-1", email: "ceo@gralha.com.br" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+      },
+      {
+        matches: (url) => url.includes("/rest/v1/profiles"),
+        handle: () =>
+          new Response(JSON.stringify([{ access_role: "ceo", status: "active" }]), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+      },
+      {
+        matches: (url) => url.includes("/api/reconciliation/sales"),
+        handle: (url) => {
+          forwardedUrl = url;
+          return new Response(
+            JSON.stringify({
+              contract_version: "1.1",
+              availability: "available",
+              summary: {
+                official_sales: 310,
+                matched: 300,
+                vista_without_pipeimob_contract: 15,
+                pipeimob_without_vista_gain: 10,
+                non_auditable_gain_dates_count: 5,
+                unresolved_teams_count: 310,
+              },
+              items: [
+                { id: "item-1", property_code: "PROP-001" },
+                { id: "item-2", property_code: "PROP-002" },
+              ],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        },
+      },
+    ]);
+
+    const req = new Request(
+      "https://gralha-indicadores-chat.marcelmanduca-b05.workers.dev/api/reconciliation/sales?data_inicio_ccv=2026-01-01&data_fim_ccv=2026-09-08&date_tolerance_days=7&refresh=false&view=summary",
+      { method: "GET", headers: { Authorization: "Bearer test-jwt-ceo-token" } },
+    );
+
+    const res = await worker.fetch(req, MOCK_ENV);
+    assert.equal(res.status, 200);
+    const body = await res.json();
+
+    // Summary metadata is preserved
+    assert.equal(body.contract_version, "1.1");
+    assert.equal(body.availability, "available");
+    assert.equal(body.summary.official_sales, 310);
+    assert.equal(body.summary.matched, 300);
+
+    // Items array MUST be stripped
+    assert.equal(body.items, undefined, "items array must NOT be present when view=summary");
+
+    // Worker consumes view and does NOT forward it to Render backend
+    assert.ok(forwardedUrl, "Request must be forwarded");
+    assert.doesNotMatch(forwardedUrl, /view=summary/, "Worker must not forward view parameter to upstream");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Behavioral: Omitting view preserves items for full audit", async () => {
+  const originalFetch = globalThis.fetch;
+
+  try {
+    globalThis.fetch = createMockFetch([
+      {
+        matches: (url) => url.includes("/auth/v1/user"),
+        handle: () =>
+          new Response(JSON.stringify({ id: "user-cso-1", email: "cso@gralha.com.br" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+      },
+      {
+        matches: (url) => url.includes("/rest/v1/profiles"),
+        handle: () =>
+          new Response(JSON.stringify([{ access_role: "cso", status: "active" }]), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+      },
+      {
+        matches: (url) => url.includes("/api/reconciliation/sales"),
+        handle: () =>
+          new Response(
+            JSON.stringify({
+              contract_version: "1.1",
+              summary: { official_sales: 310 },
+              items: [{ id: "item-1", property_code: "PROP-001" }],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+      },
+    ]);
+
+    const req = new Request(
+      "https://gralha-indicadores-chat.marcelmanduca-b05.workers.dev/api/reconciliation/sales?data_inicio_ccv=2026-01-01&data_fim_ccv=2026-09-08",
+      { method: "GET", headers: { Authorization: "Bearer test-jwt-cso-token" } },
+    );
+
+    const res = await worker.fetch(req, MOCK_ENV);
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.ok(Array.isArray(body.items), "items array must be present when view is omitted");
+    assert.equal(body.items.length, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Behavioral: Invalid view parameter returns 400 Bad Request", async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = createMockFetch([
+      {
+        matches: (url) => url.includes("/auth/v1/user"),
+        handle: () =>
+          new Response(JSON.stringify({ id: "user-ceo-1", email: "ceo@gralha.com.br" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+      },
+      {
+        matches: (url) => url.includes("/rest/v1/profiles"),
+        handle: () =>
+          new Response(JSON.stringify([{ access_role: "ceo", status: "active" }]), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+      },
+    ]);
+
+    const req = new Request(
+      "https://gralha-indicadores-chat.marcelmanduca-b05.workers.dev/api/reconciliation/sales?data_inicio_ccv=2026-01-01&data_fim_ccv=2026-09-08&view=full_details",
+      { method: "GET", headers: { Authorization: "Bearer test-jwt-ceo-token" } },
+    );
+
+    const res = await worker.fetch(req, MOCK_ENV);
+    assert.equal(res.status, 400);
+    const body = await res.json();
+    assert.equal(body.error, "view deve ser 'summary' ou omitido.");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
