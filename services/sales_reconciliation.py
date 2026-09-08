@@ -584,3 +584,175 @@ def _assert_unique(rows: Sequence[Dict[str, Any]], field: str) -> None:
     duplicates = sorted(value for value, count in Counter(values).items() if count > 1)
     if duplicates:
         raise ValueError(f"Duplicate source identifiers in {field}")
+
+
+def build_funnel_payload(
+    start_date: str,
+    end_date: str,
+    official_transactions: Sequence[Dict[str, Any]],
+    official_vgv: Any,
+    official_vgc: Any,
+    vista_funnel_data: Optional[Dict[str, Any]] = None,
+    reconciliation_data: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Build the structured commercial funnel payload for the executive dashboard."""
+    vf = vista_funnel_data or {}
+    has_vista = bool(vf.get("available", False))
+
+    stages = [
+        {
+            "key": "leads",
+            "label": "Captações / Leads",
+            "count": None,
+            "movement_count": None,
+            "metric_type": "unique_clients",
+            "source": "vista",
+            "date_basis": "lead_creation_date",
+            "availability": "unavailable",
+            "reason": (
+                "Endpoint dedicado de eventos de captação não mapeado no contrato atual do CRM."
+            ),
+        },
+        {
+            "key": "opportunities",
+            "label": "Oportunidades",
+            "count": vf.get("opportunities_count") if has_vista else None,
+            "movement_count": vf.get("opportunities_movement_count") if has_vista else None,
+            "metric_type": "unique_clients",
+            "source": "vista",
+            "date_basis": "opportunity_creation_date",
+            "availability": "available" if has_vista and vf.get("opportunities_count") is not None else "unavailable",
+            "reason": None if has_vista and vf.get("opportunities_count") is not None else "Dados de oportunidades do Vista CRM indisponíveis no período.",
+        },
+        {
+            "key": "visits",
+            "label": "Visitas",
+            "count": vf.get("visits_count") if has_vista else None,
+            "movement_count": vf.get("visits_movement_count") if has_vista else None,
+            "metric_type": "unique_clients",
+            "source": "vista",
+            "date_basis": "current_stage_snapshot",
+            "availability": "partial" if has_vista and vf.get("visits_count") is not None else "unavailable",
+            "reason": "Snapshot da etapa atual de visita no CRM." if has_vista and vf.get("visits_count") is not None else "Dados de visitas do Vista CRM indisponíveis no período.",
+        },
+        {
+            "key": "proposals",
+            "label": "Propostas",
+            "count": vf.get("proposals_count") if has_vista else None,
+            "movement_count": vf.get("proposals_movement_count") if has_vista else None,
+            "metric_type": "unique_clients",
+            "source": "vista",
+            "date_basis": "current_stage_snapshot",
+            "availability": "partial" if has_vista and vf.get("proposals_count") is not None else "unavailable",
+            "reason": "Snapshot da etapa atual de proposta no CRM." if has_vista and vf.get("proposals_count") is not None else "Dados de propostas do Vista CRM indisponíveis no período.",
+        },
+        {
+            "key": "commercial_closings",
+            "label": "Fechamentos comerciais",
+            "count": vf.get("closings_count") if has_vista else None,
+            "movement_count": vf.get("closings_movement_count") if has_vista else None,
+            "metric_type": "unique_clients",
+            "source": "vista",
+            "date_basis": "current_stage_snapshot",
+            "availability": "partial" if has_vista and vf.get("closings_count") is not None else "unavailable",
+            "reason": "Negócios em fase de fechamento comercial/minuta." if has_vista and vf.get("closings_count") is not None else "Dados de fechamentos do Vista CRM indisponíveis no período.",
+        },
+        {
+            "key": "official_sales",
+            "label": "Vendas oficializadas",
+            "count": len(official_transactions),
+            "movement_count": len(official_transactions),
+            "metric_type": "contracts",
+            "source": "pipeimob",
+            "date_basis": "ccv_signature_date",
+            "availability": "available",
+            "reason": None,
+        },
+    ]
+
+    relations = []
+    for i in range(len(stages) - 1):
+        from_st = stages[i]
+        to_st = stages[i + 1]
+        if from_st.get("count") is not None and to_st.get("count") is not None:
+            c_from = from_st["count"]
+            c_to = to_st["count"]
+            ratio = round((c_to / c_from) * 100, 1) if c_from > 0 else 0.0
+            relations.append({
+                "from_stage": from_st["key"],
+                "to_stage": to_st["key"],
+                "ratio_percentage": ratio,
+                "availability": "available",
+                "reason": None,
+            })
+        else:
+            relations.append({
+                "from_stage": from_st["key"],
+                "to_stage": to_st["key"],
+                "ratio_percentage": None,
+                "availability": "unavailable",
+                "reason": "Etapa anterior ou seguinte indisponível para cálculo de relação.",
+            })
+
+    if reconciliation_data:
+        rec_summary = reconciliation_data.get("summary") or {}
+        rec_items = reconciliation_data.get("items") or []
+        v_matched = int(rec_summary.get("matched", 0))
+        v_without_ccv = int(rec_summary.get("vista_without_pipeimob_contract", 0))
+        vista_gains = v_matched + v_without_ccv
+        official_sales_rec = int(rec_summary.get("official_sales", len(official_transactions)))
+        ccv_without_vista_gain = int(rec_summary.get("pipeimob_without_vista_gain", 0))
+        unresolved_dates = sum(
+            1
+            for item in rec_items
+            if item.get("vista_deal_id") and not item.get("vista_gain_date")
+        )
+        unresolved_teams = int(rec_summary.get("api_team_unresolved", len(official_transactions)))
+        reconciliation = {
+            "vista_gains": vista_gains,
+            "official_sales": official_sales_rec,
+            "vista_without_ccv": v_without_ccv,
+            "ccv_without_vista_gain": ccv_without_vista_gain,
+            "unresolved_gain_dates": unresolved_dates,
+            "unresolved_teams": unresolved_teams,
+            "availability": "available",
+        }
+    else:
+        reconciliation = {
+            "vista_gains": 0,
+            "official_sales": len(official_transactions),
+            "vista_without_ccv": 0,
+            "ccv_without_vista_gain": 0,
+            "unresolved_gain_dates": 0,
+            "unresolved_teams": len(official_transactions),
+            "availability": "unavailable",
+        }
+
+    vgv_str = str(official_vgv or "0.00")
+    vgc_str = str(official_vgc or "0.00")
+
+    return {
+        "methodology": "mixed",
+        "period": {
+            "start": start_date,
+            "end": end_date,
+        },
+        "date_bases": {
+            "vista": "deal_creation_or_current_stage",
+            "pipeimob": "ccv_signature_date",
+        },
+        "stages": stages,
+        "relations": relations,
+        "official_vgv": vgv_str,
+        "official_vgc": vgc_str,
+        "reconciliation": reconciliation,
+        "warnings": [
+            "As etapas intermediárias representam a fotografia de atividade e snapshot do Vista CRM, enquanto as Vendas oficializadas decorrem exclusivamente de CCVs formalizados no Pipeimob.",
+            "Filtro por equipe temporariamente desabilitado até a resolução formal dos mapeamentos de grupos organizacionais.",
+        ],
+        "sources": [
+            {"name": "pipeimob", "label": "Pipeimob API v2", "role": "official_contracts"},
+            {"name": "vista", "label": "Vista CRM", "role": "commercial_pipeline"},
+        ],
+    }
+

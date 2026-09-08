@@ -17,3 +17,6 @@ tmp/
 /scratch/*.csv
 /reports/import_once_*/
 /backups/import_once_*/
+.wrangler/
+supabase/.temp/
+

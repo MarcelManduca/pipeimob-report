@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 from services.sales_reconciliation import (
+    build_funnel_payload,
     pipeimob_official_sale_date,
     rank_commercial_sales,
     reconcile_sales,
@@ -3757,6 +3758,58 @@ class DataQualityPayload(BaseModel):
     summary: DataQualitySummary
     teams: DataQualityTeams
 
+class FunnelStageItem(BaseModel):
+    key: str
+    label: str
+    count: Optional[int] = None
+    movement_count: Optional[int] = None
+    metric_type: str = "unique_clients"
+    source: str
+    date_basis: str
+    availability: str = "available"
+    reason: Optional[str] = None
+
+class FunnelRelationItem(BaseModel):
+    from_stage: str
+    to_stage: str
+    ratio_percentage: Optional[float] = None
+    availability: str = "available"
+    reason: Optional[str] = None
+
+class FunnelReconciliationSummary(BaseModel):
+    vista_gains: int = 0
+    official_sales: int = 0
+    vista_without_ccv: int = 0
+    ccv_without_vista_gain: int = 0
+    unresolved_gain_dates: int = 0
+    unresolved_teams: int = 0
+    availability: str = "available"
+
+class FunnelSourceItem(BaseModel):
+    name: str
+    label: str
+    role: str
+
+class FunnelPeriod(BaseModel):
+    start: str
+    end: str
+
+class FunnelDateBases(BaseModel):
+    vista: Optional[str] = "deal_creation_or_current_stage"
+    pipeimob: str = "ccv_signature_date"
+
+class FunnelPayload(BaseModel):
+    methodology: str = "mixed"
+    period: FunnelPeriod
+    date_bases: FunnelDateBases
+    stages: List[FunnelStageItem]
+    relations: List[FunnelRelationItem] = Field(default_factory=list)
+    official_vgv: str = "0.00"
+    official_vgc: str = "0.00"
+    reconciliation: FunnelReconciliationSummary
+    warnings: List[str] = Field(default_factory=list)
+    sources: List[FunnelSourceItem] = Field(default_factory=list)
+
 class DashboardFullResponse(BaseModel):
     data_mode: str
     source: str
@@ -3782,6 +3835,7 @@ class DashboardFullResponse(BaseModel):
     commission_financials: Optional[CommissionFinancials] = None
     debug_metrics: Optional[dict] = None
     data_quality: Optional[DataQualityPayload] = None
+    funnel: Optional[FunnelPayload] = None
 
 # Helper to format and add X-Data-Mode response headers
 def get_metadata_wrapper(data_mode: str, source: str):
@@ -5172,6 +5226,18 @@ async def get_dashboard_full(
         "granularity": granularity
     }
     filters_applied = {k: v for k, v in filters_map.items() if v is not None}
+    funnel_start_str = data_inicio_ccv or data_inicio_criacao or (start_dt.isoformat() if start_dt else "")
+    funnel_end_str = data_fim_ccv or data_fim_criacao or (end_dt.isoformat() if end_dt else "")
+    funnel_dict = build_funnel_payload(
+        start_date=funnel_start_str,
+        end_date=funnel_end_str,
+        official_transactions=filtered,
+        official_vgv=aggregates["summary"].get("total_sales", 0),
+        official_vgc=aggregates["summary"].get("total_commissions", 0),
+        vista_funnel_data=None,
+        reconciliation_data=None,
+    )
+    funnel_obj = FunnelPayload(**funnel_dict)
 
     return DashboardFullResponse(
         data_mode=mode,
@@ -5197,7 +5263,8 @@ async def get_dashboard_full(
         filters_applied=filters_applied,
         commission_financials=CommissionFinancials(**aggregates["commission_financials"]),
         debug_metrics=debug_metrics,
-        data_quality=DataQualityPayload(**aggregates["data_quality"]) if aggregates.get("data_quality") is not None else None
+        data_quality=DataQualityPayload(**aggregates["data_quality"]) if aggregates.get("data_quality") is not None else None,
+        funnel=funnel_obj
     )
 
 

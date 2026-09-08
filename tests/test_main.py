@@ -3011,8 +3011,9 @@ def test_dashboard_caching_and_single_flight_scenarios(monkeypatch):
 
     patcher = patch("main.fetch_all_pipeimob_transactions", return_value=(MOCK_TRANSACTIONS, 1))
     patcher.start()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     try:
-        loop = asyncio.get_event_loop()
 
         # 1. miss
         res1 = loop.run_until_complete(load_transactions_dataset(
@@ -3081,8 +3082,9 @@ def test_single_flight_concurrent_deduplication(monkeypatch):
 
     patcher = patch("main.fetch_all_pipeimob_transactions", return_value=(MOCK_TRANSACTIONS, 1))
     patcher.start()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     try:
-        loop = asyncio.get_event_loop()
 
         async def task_wrapper():
             return await load_transactions_dataset(
@@ -3105,7 +3107,8 @@ def test_single_flight_diagnostics_scenarios():
     import pytest
     from main import AsyncSingleFlightRegistry
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
 
     # 1. Owner succeeding
     async def owner_succeeds():
