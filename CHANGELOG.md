@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-09-07 — Proxy autenticado de reconciliação de vendas Vista × Pipeimob
+
+- Adiciona a rota same-origin `GET /api/reconciliation/sales` no Cloudflare Worker para encaminhamento seguro ao backend de produção (`https://pipeimob-report.onrender.com/api/reconciliation/sales`).
+- Valida a sessão Supabase do usuário e impõe RBAC estrito e fail-closed com acesso exclusivo para cargos executivos (`CEO`, `CSO` e `CMO`).
+- Aplica validação rigorosa de parâmetros de consulta (`data_inicio_ccv`, `data_fim_ccv`, `date_tolerance_days`, `refresh`) e rejeita parâmetros desconhecidos.
+- Encaminha requisições com timeout de 55 segundos e tratamento seguro de falhas, sem expor tokens, chaves internas ou detalhes de infraestrutura.
+- Adiciona suíte de testes automatizados com cobertura completa para 401, 403, 400, timeout upstream e isolamento de segredos.
+
 ## 2026-09-06 — Diagnóstico organizacional disponível no portal
 
 - Adiciona ao MCP a ferramenta administrativa `diagnosticar_estrutura_organizacional_vista`, conectada ao contrato agregado `1.0` do Render.
