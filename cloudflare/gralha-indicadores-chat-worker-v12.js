@@ -362,6 +362,15 @@ async function csoDashboardApi(request) {
   return json(value);
 }
 
+function isValidCalendarDate(value) {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
+  const parsed = Date.parse(`${value}T00:00:00Z`);
+  if (!Number.isFinite(parsed)) return false;
+  return new Date(parsed).toISOString().slice(0, 10) === value;
+}
+
 async function reconciliationSalesApi(request, env, url) {
   const token = bearer(request);
   if (!token) return json({ error: "Sua sessão expirou. Entre novamente." }, 401);
@@ -408,10 +417,11 @@ async function reconciliationSalesApi(request, env, url) {
       });
       if (meRes.ok) {
         const meData = await meRes.json().catch(() => null);
-        const role = String(meData?.profile?.access_role || "").toLowerCase();
+        const p = meData?.profile;
+        const role = String(p?.access_role || "").toLowerCase();
         if (
-          meData?.profile?.has_global_access === true ||
-          ["ceo", "cso", "cmo"].includes(role)
+          p?.status === "active" &&
+          (p?.has_global_access === true || ["ceo", "cso", "cmo"].includes(role))
         ) {
           isExecutive = true;
         }
@@ -447,19 +457,15 @@ async function reconciliationSalesApi(request, env, url) {
     );
   }
 
-  const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
-  if (!dateRegex.test(start) || !dateRegex.test(end)) {
+  if (!isValidCalendarDate(start) || !isValidCalendarDate(end)) {
     return json(
-      { error: "As datas devem estar no formato YYYY-MM-DD." },
+      { error: "As datas devem estar no formato YYYY-MM-DD e representar datas válidas de calendário." },
       400,
     );
   }
 
   const startParsed = Date.parse(`${start}T00:00:00Z`);
   const endParsed = Date.parse(`${end}T00:00:00Z`);
-  if (!Number.isFinite(startParsed) || !Number.isFinite(endParsed)) {
-    return json({ error: "Data inválida." }, 400);
-  }
   if (startParsed > endParsed) {
     return json(
       { error: "A data inicial não pode ser posterior à data final." },
@@ -497,11 +503,11 @@ async function reconciliationSalesApi(request, env, url) {
     refresh = refreshParam === "true";
   }
 
-  const backendUrl =
-    (env.RECONCILIATION_BACKEND_URL || RECONCILIATION_BACKEND_URL).replace(
-      /\/+$/,
-      "",
-    );
+  const backendUrl = (
+    env.RECONCILIATION_BACKEND_URL ||
+    env.MCP_PIPEIMOB_BACKEND_URL ||
+    RECONCILIATION_BACKEND_URL
+  ).replace(/\/+$/, "");
   const targetUrl = new URL(`${backendUrl}/api/reconciliation/sales`);
   targetUrl.searchParams.set("data_inicio_ccv", start);
   targetUrl.searchParams.set("data_fim_ccv", end);
@@ -522,13 +528,24 @@ async function reconciliationSalesApi(request, env, url) {
       signal: AbortSignal.timeout(RECONCILIATION_TIMEOUT_MS),
     });
 
-    const payload = await upstream.json().catch(() => null);
-    if (!payload) {
+    const rawBody = await upstream.text().catch(() => null);
+    if (rawBody === null) {
       return json(
-        { error: "Serviço de reconciliação retornou uma resposta inválida." },
-        upstream.status || 502,
+        { error: "Serviço de reconciliação não retornou dados." },
+        upstream.status >= 400 ? upstream.status : 502,
       );
     }
+
+    let payload;
+    try {
+      payload = JSON.parse(rawBody);
+    } catch {
+      return json(
+        { error: "Serviço de reconciliação retornou uma resposta não-JSON ou inválida." },
+        upstream.status >= 400 ? upstream.status : 502,
+      );
+    }
+
     if (!upstream.ok) {
       if (upstream.status === 401) {
         return json({ error: "Sua sessão expirou. Entre novamente." }, 401);
@@ -2053,11 +2070,12 @@ export default {
         return adminApi(request, env, url);
       if (request.method === "GET" && url.pathname === "/api/cso-dashboard")
         return csoDashboardApi(request);
-      if (
-        request.method === "GET" &&
-        url.pathname === "/api/reconciliation/sales"
-      )
+      if (url.pathname === "/api/reconciliation/sales") {
+        if (request.method !== "GET") {
+          return json({ error: "Método não permitido." }, 405);
+        }
         return reconciliationSalesApi(request, env, url);
+      }
       return json({ error: "Rota não encontrada." }, 404);
     } catch (error) {
       console.error("worker_error", {
