@@ -533,3 +533,113 @@ def test_ranking_can_order_by_vgv():
 
     assert result["ranking"][0]["commercial_broker"] == "Maior VGV"
     assert result["ranking"][0]["position"] == 1
+
+
+def test_build_funnel_payload_non_auditable_gain_dates_behavior():
+    from services.sales_reconciliation import build_funnel_payload
+
+    rec_data = {
+        "summary": {
+            "official_sales": 2,
+            "official_vgv": "600000.00",
+            "matched": 1,
+            "pipeimob_without_vista_gain": 1,
+            "vista_without_pipeimob_contract": 1,
+            "api_team_resolved": 0,
+            "api_team_unresolved": 2,
+        },
+        "items": [
+            # 1. Matched with null gain date
+            {
+                "status": "CONCILIADO",
+                "pipeimob_transaction_id": "p-1",
+                "vista_deal_id": "v-1",
+                "vista_gain_date": None,
+            },
+            # 2. Vista without CCV with null gain date
+            {
+                "status": "VISTA_SEM_CONTRATO_PIPEIMOB",
+                "pipeimob_transaction_id": None,
+                "vista_deal_id": "v-2",
+                "vista_gain_date": None,
+            },
+            # 3. Pipeimob without Vista (must NOT increase non-auditable count)
+            {
+                "status": "PIPEIMOB_SEM_GANHO_VISTA",
+                "pipeimob_transaction_id": "p-2",
+                "vista_deal_id": None,
+                "vista_gain_date": None,
+            },
+            # 4. Duplicate entry for v-1 (must NOT double-count)
+            {
+                "status": "CONCILIADO",
+                "pipeimob_transaction_id": "p-1-dup",
+                "vista_deal_id": "v-1",
+                "vista_gain_date": None,
+            },
+            # 5. Matched with valid audit date
+            {
+                "status": "CONCILIADO",
+                "pipeimob_transaction_id": "p-3",
+                "vista_deal_id": "v-3",
+                "vista_gain_date": "2026-08-15",
+            },
+        ],
+    }
+
+    payload = build_funnel_payload(
+        start_date="2026-08-01",
+        end_date="2026-08-31",
+        official_transactions=[{"id": "p-1"}, {"id": "p-2"}],
+        official_vgv="600000.00",
+        official_vgc="24000.00",
+        vista_funnel_data=None,
+        reconciliation_data=rec_data,
+    )
+
+    rec = payload["reconciliation"]
+    # Distinct non-auditable deals: only v-1 and v-2
+    assert rec["non_auditable_gain_dates_count"] == 2
+    assert rec["unresolved_gain_dates"] == 2
+    assert rec["official_sales_count"] == 2
+    assert rec["matched_count"] == 1
+    assert rec["vista_without_ccv_count"] == 1
+    assert rec["ccv_without_vista_count"] == 1
+    assert rec["divergence_flag"] is True
+
+
+def test_build_funnel_payload_vgc_summation_without_fixed_rate():
+    from services.sales_reconciliation import build_funnel_payload
+
+    # Synthetic transactions with varying commission percentages:
+    # Tx1: 100k @ 3% = 3k
+    # Tx2: 500k @ 6% = 30k
+    # Tx3: 200k @ 4.5% = 9k
+    # Sum: VGV = 800k, VGC = 42k (effective rate = 5.25%, not 5.0% or 4.0%)
+    transactions = [
+        {"transacao_unique_id_pipeimob": "tx-1", "valor_contrato": 100000, "total_comissao": 3000},
+        {"transacao_unique_id_pipeimob": "tx-2", "valor_contrato": 500000, "total_comissao": 30000},
+        {"transacao_unique_id_pipeimob": "tx-3", "valor_contrato": 200000, "total_comissao": 9000},
+    ]
+    total_vgv = sum(tx["valor_contrato"] for tx in transactions)
+    total_vgc = sum(tx["total_comissao"] for tx in transactions)
+
+    payload = build_funnel_payload(
+        start_date="2026-08-01",
+        end_date="2026-08-31",
+        official_transactions=transactions,
+        official_vgv=str(total_vgv),
+        official_vgc=str(total_vgc),
+        vista_funnel_data=None,
+        reconciliation_data=None,
+    )
+
+    assert payload["official_vgv"] == "800000"
+    assert payload["official_vgc"] == "42000"
+    assert payload["official_vgc_details"]["amount"] == "42000"
+    assert payload["official_vgc_details"]["source_field"] == "total_comissao"
+    assert payload["official_vgc_details"]["availability"] == "available"
+    # Ensure it did not apply 5.0% (which would be 40000) or 4.0% (which would be 32000)
+    assert payload["official_vgc"] != "40000"
+    assert payload["official_vgc"] != "32000"
+

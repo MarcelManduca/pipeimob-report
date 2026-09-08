@@ -568,3 +568,23 @@ test("Behavioral: Global corporate summary mapping and VGC unavailable fallback"
     globalThis.fetch = originalFetch;
   }
 });
+
+test("UI & Behavioral: Scenario A renders compact homologation state and Scenario B renders full pipeline", async () => {
+  const worker = await loadWorker();
+  const htmlRes = await worker.default.fetch(
+    new Request("https://gralha-indicadores-chat.workers.dev/"),
+    env,
+  );
+  assert.equal(htmlRes.status, 200);
+  const html = await htmlRes.text();
+
+  // Scenario A tokens
+  assert.ok(html.includes("cso-funnel-homologation"), "Homologation CSS class must be present");
+  assert.ok(html.includes("cso-homologation-badge"), "Homologation badge CSS class must be present");
+  assert.ok(html.includes("Etapas Vista em homologação"), "Homologation text must be present in client script");
+  assert.ok(html.includes("cso-official-highlight"), "Official sales highlight container must be present");
+
+  // Scenario B tokens
+  assert.ok(html.includes("Relação entre etapas no período"), "Relation explanation tooltip for >100% must be present");
+});
+

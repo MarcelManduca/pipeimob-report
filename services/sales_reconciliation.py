@@ -708,11 +708,12 @@ def build_funnel_payload(
         )
         vista_gains = len(distinct_vista_deals) if distinct_vista_deals else (v_matched + v_without_ccv)
         
-        unresolved_dates = sum(
-            1
+        non_auditable_deals = set(
+            item["vista_deal_id"]
             for item in rec_items
             if item.get("vista_deal_id") and not item.get("vista_gain_date")
         )
+        unresolved_dates = len(non_auditable_deals)
         api_team_unresolved = int(rec_summary.get("api_team_unresolved", len(official_transactions)))
         api_team_resolved = int(rec_summary.get("api_team_resolved", 0))
         divergence_flag = (v_without_ccv > 0) or (ccv_without_vista_gain > 0)
