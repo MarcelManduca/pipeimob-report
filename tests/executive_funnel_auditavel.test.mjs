@@ -614,7 +614,15 @@ test("Contract: normalizeReconciliationSummary handles available, zero, and unav
   const normAvailable = normalizeReconciliationSummary({
     summary: {
       official_sales: 310,
-      matched: 300,
+      total_linked_unique: 300,
+      fully_audited_match: 300,
+      value_matched_date_unresolved: 0,
+      value_mismatch_date_unresolved: 0,
+      value_only_mismatches: 0,
+      date_only_mismatches: 0,
+      value_and_date_mismatches: 0,
+      linked_with_unresolved_gain_date: 0,
+      confirmed_divergent_linked_unique: 0,
       vista_without_pipeimob_contract: 10,
       pipeimob_without_vista_gain: 10,
       non_auditable_gain_dates_count: 5,
@@ -623,7 +631,10 @@ test("Contract: normalizeReconciliationSummary handles available, zero, and unav
     notes: ["Auditoria padrão"],
   });
   assert.equal(normAvailable.availability, "available");
+  assert.equal(normAvailable.audit_partition_availability, "available");
   assert.equal(normAvailable.official_sales, 310);
+  assert.equal(normAvailable.total_linked_unique, 300);
+  assert.equal(normAvailable.fully_audited_match, 300);
   assert.equal(normAvailable.matched, 300);
   assert.equal(normAvailable.vista_without_ccv, 10);
   assert.equal(normAvailable.ccv_without_vista, 10);
@@ -636,7 +647,15 @@ test("Contract: normalizeReconciliationSummary handles available, zero, and unav
   const normZero = normalizeReconciliationSummary({
     summary: {
       official_sales: 0,
-      matched: 0,
+      total_linked_unique: 0,
+      fully_audited_match: 0,
+      value_matched_date_unresolved: 0,
+      value_mismatch_date_unresolved: 0,
+      value_only_mismatches: 0,
+      date_only_mismatches: 0,
+      value_and_date_mismatches: 0,
+      linked_with_unresolved_gain_date: 0,
+      confirmed_divergent_linked_unique: 0,
       vista_without_pipeimob_contract: 0,
       pipeimob_without_vista_gain: 0,
       non_auditable_gain_dates_count: 0,
@@ -644,7 +663,10 @@ test("Contract: normalizeReconciliationSummary handles available, zero, and unav
     },
   });
   assert.equal(normZero.availability, "available");
+  assert.equal(normZero.audit_partition_availability, "available");
   assert.equal(normZero.official_sales, 0);
+  assert.equal(normZero.total_linked_unique, 0);
+  assert.equal(normZero.fully_audited_match, 0);
   assert.equal(normZero.matched, 0);
   assert.equal(normZero.vista_gains, 0);
   assert.equal(normZero.vista_without_ccv, 0);

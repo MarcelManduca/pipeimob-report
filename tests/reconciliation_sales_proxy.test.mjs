@@ -677,3 +677,83 @@ test("Behavioral: Invalid view parameter returns 400 Bad Request", async () => {
   }
 });
 
+test("Behavioral: Canonical queries for YTD vs August forward distinct date ranges with refresh and tolerance", async () => {
+  const originalFetch = globalThis.fetch;
+  const forwardedUrls = [];
+
+  try {
+    globalThis.fetch = createMockFetch([
+      {
+        matches: (url) => url.includes("/auth/v1/user"),
+        handle: () =>
+          new Response(JSON.stringify({ id: "user-ceo-1", email: "ceo@gralha.com.br" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+      },
+      {
+        matches: (url) => url.includes("/rest/v1/profiles"),
+        handle: () =>
+          new Response(JSON.stringify([{ access_role: "ceo", status: "active" }]), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+      },
+      {
+        matches: (url) => url.includes("/api/reconciliation/sales"),
+        handle: (url) => {
+          forwardedUrls.push(url);
+          const isAug = url.includes("data_inicio_ccv=2026-08-01");
+          return new Response(
+            JSON.stringify({
+              contract_version: "1.1",
+              summary: {
+                official_sales: isAug ? 42 : 310,
+                total_vista_gains: isAug ? 45 : 320,
+                total_linked_unique: isAug ? 40 : 297,
+              },
+              items: [],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        },
+      },
+    ]);
+
+    // 1. YTD query (01/01 to 09/09)
+    const reqYtd = new Request(
+      "https://gralha-indicadores-chat.marcelmanduca-b05.workers.dev/api/reconciliation/sales?data_inicio_ccv=2026-01-01&data_fim_ccv=2026-09-09&date_tolerance_days=7&refresh=true&view=summary",
+      { method: "GET", headers: { Authorization: "Bearer test-jwt-ceo-token" } },
+    );
+    const resYtd = await worker.fetch(reqYtd, MOCK_ENV);
+    assert.equal(resYtd.status, 200);
+    const bodyYtd = await resYtd.json();
+    assert.equal(bodyYtd.summary.official_sales, 310);
+
+    // 2. August query (01/08 to 31/08)
+    const reqAug = new Request(
+      "https://gralha-indicadores-chat.marcelmanduca-b05.workers.dev/api/reconciliation/sales?data_inicio_ccv=2026-08-01&data_fim_ccv=2026-08-31&date_tolerance_days=7&refresh=true&view=summary",
+      { method: "GET", headers: { Authorization: "Bearer test-jwt-ceo-token" } },
+    );
+    const resAug = await worker.fetch(reqAug, MOCK_ENV);
+    assert.equal(resAug.status, 200);
+    const bodyAug = await resAug.json();
+    assert.equal(bodyAug.summary.official_sales, 42);
+
+    // Assert forwarded parameters
+    assert.equal(forwardedUrls.length, 2);
+    assert.match(forwardedUrls[0], /data_inicio_ccv=2026-01-01&data_fim_ccv=2026-09-09/);
+    assert.match(forwardedUrls[0], /refresh=true/);
+    assert.match(forwardedUrls[0], /date_tolerance_days=7/);
+    assert.doesNotMatch(forwardedUrls[0], /view=/);
+
+    assert.match(forwardedUrls[1], /data_inicio_ccv=2026-08-01&data_fim_ccv=2026-08-31/);
+    assert.match(forwardedUrls[1], /refresh=true/);
+    assert.match(forwardedUrls[1], /date_tolerance_days=7/);
+    assert.doesNotMatch(forwardedUrls[1], /view=/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+

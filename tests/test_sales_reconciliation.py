@@ -265,14 +265,17 @@ def test_unique_property_match_enriches_broker_when_vista_omits_date_and_value()
         ],
     )
 
-    assert result["summary"]["matched"] == 1
+    assert result["summary"]["matched"] == 0
+    assert result["summary"]["linked_with_unresolved_gain_date"] == 1
+    assert result["summary"]["total_linked_unique"] == 1
     assert result["summary"]["no_automatic_link"] == 0
     assert result["summary"]["vista_without_pipeimob_contract"] == 0
-    assert result["items"][0]["status"] == "CONCILIADO"
+    assert result["items"][0]["status"] == "VINCULADO_COM_DATA_GANHO_NAO_RESOLVIDA"
     assert result["items"][0]["commercial_broker"] == "Corretor Comercial"
     assert result["items"][0]["official_sale_date"] == "2026-08-10"
     assert result["items"][0]["official_value"] == "100000"
     assert result["items"][0]["vista_gain_date"] is None
+    assert result["items"][0]["delay_days"] is None
     assert result["items"][0]["vista_value"] is None
 
 
@@ -723,10 +726,17 @@ def test_vgc_completeness_states_available_partial_unavailable():
 
 
 def test_reconciliation_exact_mathematical_partition_and_discrepancy_proof():
-    """Verify that all 310 official sales and 327 Vista gains form exact mathematical identities.
+    """Verify that all 310 official sales and 320 Vista gains form exact mathematical identities.
 
-    Proves why the dashboard previously displayed 306 (276 + 30) instead of 327 (297 + 30)
-    due to omitting the 21 linked deals with value (18) and date (3) divergences.
+    Partitions:
+    - 276 strictly matched deals (same property, auditable date within tolerance, same value)
+    - 13 value-only mismatches (same property, different value)
+    - 8 linked deals with unresolved gain date (same property, same value, DataFinal is null)
+    - 13 CCV without Vista gain (unlinked Pipeimob contracts)
+    - 23 Vista gains without CCV contract (unlinked Vista deals)
+    Total official sales = 310 (276 + 13 + 8 + 13)
+    Total linked unique = 297 (276 + 13 + 8)
+    Total Vista gains = 320 (297 + 23)
     """
     pipe_txs = []
     # 276 strictly matched deals (same property, date within 7 days, same value)
@@ -738,8 +748,8 @@ def test_reconciliation_exact_mathematical_partition_and_discrepancy_proof():
             "valor_contrato": "500000.00",
         })
 
-    # 18 value mismatches (same property, date match, different value)
-    for i in range(1, 19):
+    # 13 value mismatches (same property, different value)
+    for i in range(1, 14):
         pipe_txs.append({
             "transacao_unique_id_pipeimob": f"tx-val-{i}",
             "codigo_imovel": f"PROP-VAL-{i}",
@@ -747,11 +757,11 @@ def test_reconciliation_exact_mathematical_partition_and_discrepancy_proof():
             "valor_contrato": "500000.00",
         })
 
-    # 3 date mismatches (same property, delay > 7 days, same value)
-    for i in range(1, 4):
+    # 8 linked deals with unresolved gain date (DataFinal is null in Vista CRM, same value)
+    for i in range(1, 9):
         pipe_txs.append({
-            "transacao_unique_id_pipeimob": f"tx-date-{i}",
-            "codigo_imovel": f"PROP-DATE-{i}",
+            "transacao_unique_id_pipeimob": f"tx-unresolved-{i}",
+            "codigo_imovel": f"PROP-UNRESOLVED-{i}",
             "data_assinatura_ccv": "2026-05-01",
             "valor_contrato": "500000.00",
         })
@@ -768,7 +778,7 @@ def test_reconciliation_exact_mathematical_partition_and_discrepancy_proof():
     assert len(pipe_txs) == 310
 
     vista_gains = []
-    # 276 matching Vista gains
+    # 276 matching Vista gains (with valid auditable gain_date)
     for i in range(1, 277):
         vista_gains.append({
             "deal_id": f"deal-match-{i}",
@@ -778,8 +788,8 @@ def test_reconciliation_exact_mathematical_partition_and_discrepancy_proof():
             "commercial_broker_name": "Corretor Conciliado",
         })
 
-    # 18 value mismatch Vista gains (different value, e.g. 550,000)
-    for i in range(1, 19):
+    # 13 value mismatch Vista gains (different value, e.g. 550,000)
+    for i in range(1, 14):
         vista_gains.append({
             "deal_id": f"deal-val-{i}",
             "property_code": f"PROP-VAL-{i}",
@@ -788,18 +798,18 @@ def test_reconciliation_exact_mathematical_partition_and_discrepancy_proof():
             "commercial_broker_name": "Corretor Valor",
         })
 
-    # 3 date mismatch Vista gains (e.g. gain_date 2026-05-25, 24 days later)
-    for i in range(1, 4):
+    # 8 linked Vista gains with NULL DataFinal (gain_date is None)
+    for i in range(1, 9):
         vista_gains.append({
-            "deal_id": f"deal-date-{i}",
-            "property_code": f"PROP-DATE-{i}",
-            "gain_date": "2026-05-25",
+            "deal_id": f"deal-unresolved-{i}",
+            "property_code": f"PROP-UNRESOLVED-{i}",
+            "gain_date": None,  # DataFinal is null in Vista CRM
             "deal_value": "500000.00",
-            "commercial_broker_name": "Corretor Data",
+            "commercial_broker_name": "Corretor Unresolved Date",
         })
 
-    # 30 Vista gains without CCV contract
-    for i in range(1, 31):
+    # 23 Vista gains without CCV contract
+    for i in range(1, 24):
         vista_gains.append({
             "deal_id": f"deal-noccv-{i}",
             "property_code": f"PROP-NOCCV-{i}",
@@ -808,7 +818,7 @@ def test_reconciliation_exact_mathematical_partition_and_discrepancy_proof():
             "commercial_broker_name": "Corretor Sem CCV",
         })
 
-    assert len(vista_gains) == 327
+    assert len(vista_gains) == 320
 
     res = reconcile_sales(pipe_txs, vista_gains, date_tolerance_days=7)
     s = res["summary"]
@@ -816,43 +826,67 @@ def test_reconciliation_exact_mathematical_partition_and_discrepancy_proof():
     # 1. Total Official Sales = 310
     assert s["official_sales"] == 310
 
-    # 2. Total Linked Transactions = 297 (276 strictly matched + 18 value-only + 3 date-only + 0 both)
+    # 2. Total Linked Transactions = 297 (276 strictly matched + 13 value-only + 0 date-only + 8 unresolved date)
     assert s["total_linked"] == 297
     assert s["total_linked_unique"] == 297
     assert s["matched"] == 276
     assert s["strictly_matched"] == 276
-    assert s["divergent_matches"] == 21
-    assert s["divergent_linked_unique"] == 21
-    assert s["value_mismatches"] == 18
-    assert s["value_only_mismatches"] == 18
-    assert s["date_mismatches"] == 3
-    assert s["date_only_mismatches"] == 3
+    assert s["divergent_matches"] == 13
+    assert s["divergent_linked_unique"] == 13
+    assert s["confirmed_divergent_linked_unique"] == 13
+    assert s["value_mismatches"] == 13
+    assert s["value_only_mismatches"] == 13
+    assert s["date_mismatches"] == 0
+    assert s["date_only_mismatches"] == 0
     assert s["value_and_date_mismatches"] == 0
-    assert s["value_only_mismatches"] + s["date_only_mismatches"] + s["value_and_date_mismatches"] == s["divergent_linked_unique"]
+    assert s["linked_with_unresolved_gain_date"] == 8
+    assert (
+        s["value_only_mismatches"]
+        + s["date_only_mismatches"]
+        + s["value_and_date_mismatches"]
+        == s["confirmed_divergent_linked_unique"]
+    )
 
     # 3. Unlinked categories
     assert s["pipeimob_without_vista_gain"] == 13
-    assert s["vista_without_pipeimob_contract"] == 30
-    assert s["total_vista_gains"] == 327
-    assert s["vista_gains"] == 327
+    assert s["vista_without_pipeimob_contract"] == 23
+    assert s["total_vista_gains"] == 320
+    assert s["vista_gains"] == 320
+    assert s["non_auditable_gain_dates"] == 8
     assert s["gain_period_basis"] == "DataFinal_only_if_present_else_unresolved"
     assert "UltimaAtualizacao" in s["limitation_note"]
 
     # 4. Rigorous Mathematical Identities
-    # Identity A: official_sales = strictly_matched + divergent_linked_unique + pipeimob_without_vista_gain
-    assert s["strictly_matched"] + s["divergent_linked_unique"] + s["pipeimob_without_vista_gain"] == s["official_sales"]
+    # Identity A: official_sales = strictly_matched + value_only + date_only + both + unresolved_date + pipeimob_without_vista_gain
+    assert (
+        s["strictly_matched"]
+        + s["value_only_mismatches"]
+        + s["date_only_mismatches"]
+        + s["value_and_date_mismatches"]
+        + s["linked_with_unresolved_gain_date"]
+        + s["pipeimob_without_vista_gain"]
+        == s["official_sales"]
+    )
+    assert s["strictly_matched"] + s["confirmed_divergent_linked_unique"] + s["linked_with_unresolved_gain_date"] + s["pipeimob_without_vista_gain"] == s["official_sales"]
     assert s["total_linked_unique"] + s["pipeimob_without_vista_gain"] == s["official_sales"]
+    assert 276 + 13 + 8 + 13 == 310
     assert 297 + 13 == 310
 
     # Identity B: total_vista_gains = total_linked + vista_without_pipeimob_contract
-    assert s["matched"] + s["divergent_matches"] + s["vista_without_pipeimob_contract"] == s["total_vista_gains"]
-    assert s["total_linked"] + s["vista_without_pipeimob_contract"] == s["total_vista_gains"]
-    assert 297 + 30 == 327
+    assert s["total_linked_unique"] + s["vista_without_pipeimob_contract"] == s["total_vista_gains"]
+    assert 297 + 23 == 320
 
-    # Identity C: The 306 discrepancy explanation
-    # Old frontend formula: matched (276) + vista_without_ccv (30) = 306 (missing 21 divergent deals)
-    assert s["matched"] + s["vista_without_pipeimob_contract"] == 306
-    assert (s["matched"] + s["vista_without_pipeimob_contract"]) + s["divergent_matches"] == 327
+    # Items audit: verify that the 8 unresolved items have null delay_days and no DATE_MISMATCH issue
+    unresolved_items = [
+        item for item in res["items"]
+        if item.get("property_code", "").startswith("PROP-UNRESOLVED-")
+    ]
+    assert len(unresolved_items) == 8
+    for item in unresolved_items:
+        assert item["vista_gain_date"] is None
+        assert item["delay_days"] is None
+        assert "DIVERGENCIA_DATA" not in item["issues"]
+        assert "VINCULADO_COM_DATA_GANHO_NAO_RESOLVIDA" in item["issues"]
 
 
 def test_reconciliation_prohibits_ultima_atualizacao_as_gain_date():
@@ -982,6 +1016,147 @@ def test_reconciliation_simultaneous_value_and_date_mismatch_no_double_counting(
     # Mathematical identities
     assert s["strictly_matched"] + s["divergent_linked_unique"] + s["pipeimob_without_vista_gain"] == s["official_sales"]
     assert s["total_linked_unique"] + s["vista_without_pipeimob_contract"] == s["total_vista_gains"]
+
+
+def test_reconciliation_null_datafinal_rules_and_delay_days():
+    """Verify that null DataFinal in Vista produces delay_days=None, never produces DATE_MISMATCH, and uses linked_with_unresolved_gain_date."""
+    pipe_txs = [
+        # Deal with matching property and value, but Vista has DataFinal=null
+        {
+            "transacao_unique_id_pipeimob": "tx-null-df",
+            "codigo_imovel": "PROP-NULL-DF",
+            "data_assinatura_ccv": "2026-05-10",
+            "valor_contrato": "750000.00",
+        },
+        # Deal with matching property and value, and Vista has valid DataFinal outside tolerance
+        {
+            "transacao_unique_id_pipeimob": "tx-valid-df-mismatch",
+            "codigo_imovel": "PROP-VALID-DF",
+            "data_assinatura_ccv": "2026-05-10",
+            "valor_contrato": "800000.00",
+        },
+    ]
+
+    vista_gains = [
+        # Deal with null DataFinal
+        {
+            "deal_id": "deal-null-df",
+            "property_code": "PROP-NULL-DF",
+            "gain_date": None,  # DataFinal=null
+            "deal_value": "750000.00",
+        },
+        # Deal with valid DataFinal 30 days after CCV (delay_days = 30 > 7)
+        {
+            "deal_id": "deal-valid-df",
+            "property_code": "PROP-VALID-DF",
+            "gain_date": "2026-06-09",  # DataFinal is valid
+            "deal_value": "800000.00",
+        },
+    ]
+
+    res = reconcile_sales(pipe_txs, vista_gains, date_tolerance_days=7)
+    s = res["summary"]
+    items = {item["pipeimob_transaction_id"]: item for item in res["items"]}
+
+    # Deal 1: null DataFinal
+    item1 = items["tx-null-df"]
+    assert item1["vista_gain_date"] is None
+    assert item1["delay_days"] is None
+    assert "DIVERGENCIA_DATA" not in item1["issues"]
+    assert "VINCULADO_COM_DATA_GANHO_NAO_RESOLVIDA" in item1["issues"]
+    assert item1["status"] == "VINCULADO_COM_DATA_GANHO_NAO_RESOLVIDA"
+
+    # Deal 2: valid DataFinal outside tolerance
+    item2 = items["tx-valid-df-mismatch"]
+    assert item2["vista_gain_date"] == "2026-06-09"
+    assert item2["delay_days"] == 30
+    assert "DIVERGENCIA_DATA" in item2["issues"]
+    assert item2["status"] == "DIVERGENCIA_DATA"
+
+    assert s["confirmed_divergent_linked_unique"] == 1
+    assert s["divergent_linked_unique"] == 1
+    assert s["total_linked_unique"] == 2
+    assert s["non_auditable_gain_dates"] == 1
+
+
+def test_reconciliation_all_null_datafinal_partitions():
+    """Verify that when 100% of Vista gains have DataFinal=null, fully_audited_match is 0 and all linked are unresolved date."""
+    pipe_txs = []
+    # 284 value-matched deals with null DataFinal in Vista
+    for i in range(1, 285):
+        pipe_txs.append({
+            "transacao_unique_id_pipeimob": f"tx-valmatch-{i}",
+            "codigo_imovel": f"PROP-VALMATCH-{i}",
+            "data_assinatura_ccv": "2026-05-10",
+            "valor_contrato": "500000.00",
+        })
+    # 13 value-mismatch deals with null DataFinal in Vista
+    for i in range(1, 14):
+        pipe_txs.append({
+            "transacao_unique_id_pipeimob": f"tx-valmismatch-{i}",
+            "codigo_imovel": f"PROP-VALMISMATCH-{i}",
+            "data_assinatura_ccv": "2026-05-15",
+            "valor_contrato": "500000.00",
+        })
+    # 13 CCV without Vista gain
+    for i in range(1, 14):
+        pipe_txs.append({
+            "transacao_unique_id_pipeimob": f"tx-unlinked-pipe-{i}",
+            "codigo_imovel": f"PROP-UNLINKED-PIPE-{i}",
+            "data_assinatura_ccv": "2026-05-20",
+            "valor_contrato": "500000.00",
+        })
+    assert len(pipe_txs) == 310
+
+    vista_gains = []
+    # 284 linked gains (value matched, gain_date is None)
+    for i in range(1, 285):
+        vista_gains.append({
+            "deal_id": f"deal-valmatch-{i}",
+            "property_code": f"PROP-VALMATCH-{i}",
+            "gain_date": None,
+            "deal_value": "500000.00",
+            "commercial_broker_name": "Corretor A",
+        })
+    # 13 linked gains (value mismatch, gain_date is None)
+    for i in range(1, 14):
+        vista_gains.append({
+            "deal_id": f"deal-valmismatch-{i}",
+            "property_code": f"PROP-VALMISMATCH-{i}",
+            "gain_date": None,
+            "deal_value": "550000.00",
+            "commercial_broker_name": "Corretor B",
+        })
+    # 23 unlinked Vista gains (gain_date is None)
+    for i in range(1, 24):
+        vista_gains.append({
+            "deal_id": f"deal-unlinked-vista-{i}",
+            "property_code": f"PROP-UNLINKED-VISTA-{i}",
+            "gain_date": None,
+            "deal_value": "600000.00",
+            "commercial_broker_name": "Corretor C",
+        })
+    assert len(vista_gains) == 320
+
+    res = reconcile_sales(pipe_txs, vista_gains, date_tolerance_days=7)
+    s = res["summary"]
+
+    assert s["official_sales"] == 310
+    assert s["total_linked_unique"] == 297
+    assert s["fully_audited_match"] == 0
+    assert s["strictly_matched"] == 0
+    assert s["date_only_mismatches"] == 0
+    assert s["value_and_date_mismatches"] == 0
+    assert s["value_matched_date_unresolved"] == 284
+    assert s["value_mismatch_date_unresolved"] == 13
+    assert s["pipeimob_without_vista_gain"] == 13
+    assert s["vista_without_pipeimob_contract"] == 23
+    assert s["total_vista_gains"] == 320
+    assert s["non_auditable_gain_dates"] == 320
+    assert s["value_matched_date_unresolved"] + s["value_mismatch_date_unresolved"] + s["pipeimob_without_vista_gain"] == 310
+    assert s["total_linked_unique"] + s["vista_without_pipeimob_contract"] == 320
+
+
 
 
 
