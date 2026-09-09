@@ -253,22 +253,17 @@ def reconcile_sales(
         if item.get("vista_gain_date") is None
         and VALUE_MISMATCH in item.get("issues", [])
     )
-    divergent_linked_unique = (
-        value_only_count
-        + date_only_count
-        + value_and_date_count
-        + value_matched_date_unresolved
-        + value_mismatch_date_unresolved
-    ) - (fully_audited_match if fully_audited_match == 0 else 0)
-    # Total linked is strictly the sum of all mutually exclusive linked partitions
+    confirmed_value_mismatches = value_only_count + value_mismatch_date_unresolved
+    confirmed_date_mismatches = date_only_count
+    confirmed_value_and_date_mismatches = value_and_date_count
+    confirmed_divergent_linked_unique = (
+        confirmed_value_mismatches
+        + confirmed_date_mismatches
+        + confirmed_value_and_date_mismatches
+    )
     total_linked_unique = len(linked_items)
-    # If all linked items have unresolved dates, divergent_linked_unique is all non-fully-audited
-    divergent_linked_count = (
-        value_only_count
-        + date_only_count
-        + value_and_date_count
-        + value_matched_date_unresolved
-        + value_mismatch_date_unresolved
+    linked_with_unresolved_gain_date = (
+        value_matched_date_unresolved + value_mismatch_date_unresolved
     )
 
     total_vista_gains = len(gains)
@@ -288,16 +283,20 @@ def reconcile_sales(
             "fully_audited_match": fully_audited_match,
             "matched": fully_audited_match,
             "strictly_matched": fully_audited_match,
-            "divergent_matches": divergent_linked_count,
-            "divergent_linked_unique": divergent_linked_count,
+            "confirmed_divergent_linked_unique": confirmed_divergent_linked_unique,
+            "divergent_matches": confirmed_divergent_linked_unique,
+            "divergent_linked_unique": confirmed_divergent_linked_unique,
             "value_matched_date_unresolved": value_matched_date_unresolved,
             "value_mismatch_date_unresolved": value_mismatch_date_unresolved,
-            "value_mismatches": value_only_count + value_mismatch_date_unresolved,
+            "confirmed_value_mismatches": confirmed_value_mismatches,
+            "confirmed_date_mismatches": confirmed_date_mismatches,
+            "confirmed_value_and_date_mismatches": confirmed_value_and_date_mismatches,
+            "value_mismatches": confirmed_value_mismatches,
             "value_only_mismatches": value_only_count,
-            "date_mismatches": date_only_count,
-            "date_only_mismatches": date_only_count,
-            "value_and_date_mismatches": value_and_date_count,
-            "linked_with_unresolved_gain_date": value_matched_date_unresolved + value_mismatch_date_unresolved,
+            "date_mismatches": confirmed_date_mismatches,
+            "date_only_mismatches": confirmed_date_mismatches,
+            "value_and_date_mismatches": confirmed_value_and_date_mismatches,
+            "linked_with_unresolved_gain_date": linked_with_unresolved_gain_date,
             "pipeimob_without_vista_gain": status_counts[PIPE_WITHOUT_GAIN],
             "ccv_without_vista_gain": status_counts[PIPE_WITHOUT_GAIN],
             "vista_without_pipeimob_contract": status_counts[VISTA_WITHOUT_CONTRACT],

@@ -2228,6 +2228,7 @@ const HTML = `<!doctype html>
       const vistaGains=typeof s.total_vista_gains==="number"?s.total_vista_gains:(typeof s.total_vista_gains_count==="number"?s.total_vista_gains_count:(typeof s.vista_gains==="number"?s.vista_gains:(typeof s.vista_gain_count==="number"?s.vista_gain_count:(totalLinked+vistaWithoutCcv))));
       const nonAuditable=typeof s.non_auditable_gain_dates==="number"?s.non_auditable_gain_dates:(typeof s.unresolved_gain_dates==="number"?s.unresolved_gain_dates:(typeof s.non_auditable_gain_dates_count==="number"?s.non_auditable_gain_dates_count:0));
       const unresolvedTeams=typeof s.unresolved_teams==="number"?s.unresolved_teams:(typeof s.unresolved_teams_count==="number"?s.unresolved_teams_count:0);
+      const confirmedDivergent = typeof s.confirmed_divergent_linked_unique==="number"?s.confirmed_divergent_linked_unique:(typeof s.divergent_matches==="number" && s.divergent_matches <= totalLinked - valueMatchedDateUnresolved ? s.divergent_matches : (valueOnlyMismatches+valueMismatchDateUnresolved+dateOnlyMismatches+valueAndDateMismatches));
       return{
         availability:"available",
         official_sales:officialSales,
@@ -2236,10 +2237,14 @@ const HTML = `<!doctype html>
         fully_audited_match:matched,
         matched:matched,
         strictly_matched:matched,
-        divergent_matches:divergentMatches,
-        divergent_linked_unique:divergentMatches,
+        confirmed_divergent_linked_unique:confirmedDivergent,
+        divergent_matches:confirmedDivergent,
+        divergent_linked_unique:confirmedDivergent,
         value_matched_date_unresolved:valueMatchedDateUnresolved,
         value_mismatch_date_unresolved:valueMismatchDateUnresolved,
+        confirmed_value_mismatches:valueOnlyMismatches+valueMismatchDateUnresolved,
+        confirmed_date_mismatches:dateOnlyMismatches,
+        confirmed_value_and_date_mismatches:valueAndDateMismatches,
         value_mismatches:valueOnlyMismatches+valueMismatchDateUnresolved,
         value_only_mismatches:valueOnlyMismatches,
         date_mismatches:dateOnlyMismatches,
@@ -2269,24 +2274,17 @@ const HTML = `<!doctype html>
       }
       const d=state.data,hasGainDiff=(d.vista_without_ccv||0)>0,hasCcvDiff=(d.ccv_without_vista||0)>0;
       let badges="";
-      if((d.total_linked||0)>0||(d.divergent_matches||0)>0){
-        const divText=[];
-        if((d.value_only_mismatches||0)>0)divText.push(number(d.value_only_mismatches)+' divergência de valor');
-        if((d.value_mismatch_date_unresolved||0)>0)divText.push(number(d.value_mismatch_date_unresolved)+' divergência de valor (data não auditável)');
-        if((d.date_only_mismatches||d.date_mismatches||0)>0)divText.push(number(d.date_only_mismatches||d.date_mismatches)+' divergência de data');
-        if((d.value_and_date_mismatches||0)>0)divText.push(number(d.value_and_date_mismatches)+' divergência de valor e data');
-        if((d.value_matched_date_unresolved||0)>0 && (d.strictly_matched||0)===0){
-          divText.push(number(d.value_matched_date_unresolved)+' valor conciliado com data não auditável');
-        } else if((d.linked_with_unresolved_gain_date||0)>0 && (d.strictly_matched||0)>0){
-          divText.push(number(d.linked_with_unresolved_gain_date)+' data de ganho não auditável');
-        }
-        const divSuffix=divText.length>0?' ('+divText.join(', ')+')':'';
-        const concCount = (d.strictly_matched||0) > 0 ? (number(d.strictly_matched)+' plenamente auditados') : (number(d.value_matched_date_unresolved||d.total_linked)+' com valor igual');
-        badges+='<div class="cso-badge-neutral" style="margin-top:6px;width:100%;justify-content:center;font-size:11px;background:#eef0f8;color:var(--forest);padding:4px 8px;border-radius:6px;display:flex;align-items:center;" title="Identidade: '+number(d.official_sales)+' oficializadas = '+number(d.total_linked)+' vinculados + '+number(d.ccv_without_vista)+' sem ganho | '+number(d.vista_gains)+' ganhos = '+number(d.total_linked)+' vinculados + '+number(d.vista_without_ccv)+' sem CCV">✓ '+number(d.total_linked)+' vinculados: '+concCount+divSuffix+'</div>'
+      if((d.total_linked||0)>0){
+        const confirmedDiv = d.confirmed_divergent_linked_unique || (d.value_mismatch_date_unresolved||0);
+        const concCount = (d.strictly_matched||0) > 0 ? (number(d.strictly_matched)+' totalmente auditados') : (number(d.value_matched_date_unresolved||(d.total_linked - confirmedDiv))+' com valor conciliado');
+        const divText = confirmedDiv > 0 ? ' ('+number(confirmedDiv)+' com divergência de valor)' : '';
+        badges+='<div class="cso-badge-neutral" style="margin-top:6px;width:100%;justify-content:center;font-size:11px;background:#eef0f8;color:var(--forest);padding:4px 8px;border-radius:6px;display:flex;align-items:center;" title="Identidade: '+number(d.official_sales)+' oficializadas = '+number(d.total_linked)+' vinculados + '+number(d.ccv_without_vista)+' sem ganho | '+number(d.vista_gains)+' ganhos = '+number(d.total_linked)+' vinculados + '+number(d.vista_without_ccv)+' sem CCV">✓ '+number(d.total_linked)+' vinculados: '+concCount+divText+'</div>'
       }
-      if((d.non_auditable_gain_dates||0)>0){badges+='<div class="cso-badge-warning" style="margin-top:4px;width:100%;justify-content:center;text-align:center;">⚠ '+number(d.non_auditable_gain_dates)+' ganhos retornados pelo filtro de período do Vista não possuem DataFinal preenchida; a data individual de ganho não é auditável.</div>'}
+      if((d.non_auditable_gain_dates||0)>0){
+        badges+='<div class="cso-badge-warning" style="margin-top:4px;width:100%;justify-content:center;text-align:center;">ℹ '+number(d.total_linked||d.non_auditable_gain_dates)+' negócios vinculados entre Vista e Pipeimob. Em todos eles, a validação temporal permanece indisponível porque o Vista não retornou DataFinal.'+((d.value_mismatch_date_unresolved||d.confirmed_divergent_linked_unique||0)>0?' Entre os vínculos, '+number(d.value_mismatch_date_unresolved||d.confirmed_divergent_linked_unique)+' apresentam divergência comprovada de valor.':'')+'</div>'
+      }
       if((d.unresolved_teams||0)>0){badges+='<div class="cso-badge-warning" style="margin-top:4px;width:100%;justify-content:center;">ℹ '+number(d.unresolved_teams)+' vendas com equipe pendente de mapeamento</div>'}
-      return '<div class="cso-recon-head">Reconciliação Comercial</div><div class="cso-recon-grid"><article class="cso-recon-card" title="Total de ganhos avaliados no CRM ('+number(d.total_linked||d.matched)+' vinculados + '+number(d.vista_without_ccv)+' sem CCV)"><span>Ganhos Vista</span><strong>'+number(d.vista_gains)+'</strong></article><article class="cso-recon-card" title="Vendas formalizadas com contrato CCV assinado ('+number(d.total_linked||d.matched)+' vinculados + '+number(d.ccv_without_vista)+' sem ganho)"><span>Vendas Oficializadas</span><strong>'+number(d.official_sales)+'</strong></article><article class="cso-recon-card'+(hasGainDiff?' warning':'')+'"><span>Vista sem CCV</span><strong>'+number(d.vista_without_ccv)+'</strong>'+(hasGainDiff?'<span class="cso-badge-warning">Divergência</span>':'')+'</article><article class="cso-recon-card'+(hasCcvDiff?' warning':'')+'"><span>CCV sem Ganho Vista</span><strong>'+number(d.ccv_without_vista)+'</strong>'+(hasCcvDiff?'<span class="cso-badge-warning">Divergência</span>':'')+'</article></div>'+badges
+      return '<div class="cso-recon-head">Reconciliação Comercial</div><div class="cso-recon-grid"><article class="cso-recon-card" title="Total de ganhos avaliados no CRM ('+number(d.total_linked||d.matched)+' vinculados + '+number(d.vista_without_ccv)+' sem CCV)"><span>Ganhos Vista</span><strong>'+number(d.vista_gains)+'</strong></article><article class="cso-recon-card" title="Vendas formalizadas com contrato CCV assinado ('+number(d.total_linked||d.matched)+' vinculados + '+number(d.ccv_without_vista)+' sem ganho)"><span>Vendas Oficializadas</span><strong>'+number(d.official_sales)+'</strong></article><article class="cso-recon-card'+(hasGainDiff?' warning':'')+'"><span>Vista sem CCV</span><strong>'+number(d.vista_without_ccv)+'</strong>'+(hasGainDiff?'<span class="cso-badge-warning">Divergência Operacional</span>':'')+'</article><article class="cso-recon-card'+(hasCcvDiff?' warning':'')+'"><span>CCV sem Ganho Vista</span><strong>'+number(d.ccv_without_vista)+'</strong>'+(hasCcvDiff?'<span class="cso-badge-warning">Divergência Operacional</span>':'')+'</article></div>'+badges
     }
     function renderFunnelStagesInner(state,officialCount){
       if(!state||state.status==="loading"){
@@ -2535,11 +2533,13 @@ export function normalizeReconciliationSummary(payload) {
     };
   }
   const s = payload.summary || payload;
-  const matched = typeof s.strictly_matched === "number"
-    ? s.strictly_matched
-    : (typeof s.strictly_matched_count === "number"
-        ? s.strictly_matched_count
-        : (typeof s.matched === "number" ? s.matched : (typeof s.matched_count === "number" ? s.matched_count : 0)));
+  const matched = typeof s.fully_audited_match === "number"
+    ? s.fully_audited_match
+    : (typeof s.strictly_matched === "number"
+        ? s.strictly_matched
+        : (typeof s.strictly_matched_count === "number"
+            ? s.strictly_matched_count
+            : (typeof s.matched === "number" ? s.matched : (typeof s.matched_count === "number" ? s.matched_count : 0))));
   const valueOnlyMismatches = typeof s.value_only_mismatches === "number"
     ? s.value_only_mismatches
     : (typeof s.value_mismatches === "number"
@@ -2551,14 +2551,20 @@ export function normalizeReconciliationSummary(payload) {
         ? s.date_mismatches
         : (typeof s.date_mismatches_count === "number" ? s.date_mismatches_count : 0));
   const valueAndDateMismatches = typeof s.value_and_date_mismatches === "number" ? s.value_and_date_mismatches : 0;
+  const valueMatchedDateUnresolved = typeof s.value_matched_date_unresolved === "number"
+    ? s.value_matched_date_unresolved
+    : (typeof s.linked_with_unresolved_gain_date === "number" ? s.linked_with_unresolved_gain_date : 0);
+  const valueMismatchDateUnresolved = typeof s.value_mismatch_date_unresolved === "number"
+    ? s.value_mismatch_date_unresolved
+    : 0;
   const linkedUnresolvedGainDate = typeof s.linked_with_unresolved_gain_date === "number"
     ? s.linked_with_unresolved_gain_date
-    : (typeof s.linked_with_unresolved_gain_date_count === "number" ? s.linked_with_unresolved_gain_date_count : 0);
+    : (valueMatchedDateUnresolved + valueMismatchDateUnresolved);
   const divergentMatches = typeof s.divergent_linked_unique === "number"
     ? s.divergent_linked_unique
     : (typeof s.divergent_matches === "number"
         ? s.divergent_matches
-        : (typeof s.divergent_matches_count === "number" ? s.divergent_matches_count : (valueOnlyMismatches + dateOnlyMismatches + valueAndDateMismatches + linkedUnresolvedGainDate)));
+        : (typeof s.divergent_matches_count === "number" ? s.divergent_matches_count : (valueOnlyMismatches + dateOnlyMismatches + valueAndDateMismatches + valueMatchedDateUnresolved + valueMismatchDateUnresolved)));
   const totalLinked = typeof s.total_linked_unique === "number"
     ? s.total_linked_unique
     : (typeof s.total_linked === "number"
@@ -2598,17 +2604,27 @@ export function normalizeReconciliationSummary(payload) {
   const unresolvedTeams = typeof s.unresolved_teams === "number"
     ? s.unresolved_teams
     : (typeof s.unresolved_teams_count === "number" ? s.unresolved_teams_count : 0);
+  const confirmedDivergent = typeof s.confirmed_divergent_linked_unique === "number"
+    ? s.confirmed_divergent_linked_unique
+    : (typeof s.divergent_matches === "number" && s.divergent_matches <= totalLinked - valueMatchedDateUnresolved ? s.divergent_matches : (valueOnlyMismatches + valueMismatchDateUnresolved + dateOnlyMismatches + valueAndDateMismatches));
 
   return {
     availability: "available",
     official_sales: officialSales,
     total_linked: totalLinked,
     total_linked_unique: totalLinked,
+    fully_audited_match: matched,
     matched: matched,
     strictly_matched: matched,
-    divergent_matches: divergentMatches,
-    divergent_linked_unique: divergentMatches,
-    value_mismatches: valueOnlyMismatches,
+    confirmed_divergent_linked_unique: confirmedDivergent,
+    divergent_matches: confirmedDivergent,
+    divergent_linked_unique: confirmedDivergent,
+    value_matched_date_unresolved: valueMatchedDateUnresolved,
+    value_mismatch_date_unresolved: valueMismatchDateUnresolved,
+    confirmed_value_mismatches: valueOnlyMismatches + valueMismatchDateUnresolved,
+    confirmed_date_mismatches: dateOnlyMismatches,
+    confirmed_value_and_date_mismatches: valueAndDateMismatches,
+    value_mismatches: valueOnlyMismatches + valueMismatchDateUnresolved,
     value_only_mismatches: valueOnlyMismatches,
     date_mismatches: dateOnlyMismatches,
     date_only_mismatches: dateOnlyMismatches,

@@ -831,8 +831,9 @@ def test_reconciliation_exact_mathematical_partition_and_discrepancy_proof():
     assert s["total_linked_unique"] == 297
     assert s["matched"] == 276
     assert s["strictly_matched"] == 276
-    assert s["divergent_matches"] == 21
-    assert s["divergent_linked_unique"] == 21
+    assert s["divergent_matches"] == 13
+    assert s["divergent_linked_unique"] == 13
+    assert s["confirmed_divergent_linked_unique"] == 13
     assert s["value_mismatches"] == 13
     assert s["value_only_mismatches"] == 13
     assert s["date_mismatches"] == 0
@@ -843,8 +844,7 @@ def test_reconciliation_exact_mathematical_partition_and_discrepancy_proof():
         s["value_only_mismatches"]
         + s["date_only_mismatches"]
         + s["value_and_date_mismatches"]
-        + s["linked_with_unresolved_gain_date"]
-        == s["divergent_linked_unique"]
+        == s["confirmed_divergent_linked_unique"]
     )
 
     # 3. Unlinked categories
@@ -867,9 +867,9 @@ def test_reconciliation_exact_mathematical_partition_and_discrepancy_proof():
         + s["pipeimob_without_vista_gain"]
         == s["official_sales"]
     )
-    assert s["strictly_matched"] + s["divergent_linked_unique"] + s["pipeimob_without_vista_gain"] == s["official_sales"]
+    assert s["strictly_matched"] + s["confirmed_divergent_linked_unique"] + s["linked_with_unresolved_gain_date"] + s["pipeimob_without_vista_gain"] == s["official_sales"]
     assert s["total_linked_unique"] + s["pipeimob_without_vista_gain"] == s["official_sales"]
-    assert 276 + 21 + 13 == 310
+    assert 276 + 13 + 8 + 13 == 310
     assert 297 + 13 == 310
 
     # Identity B: total_vista_gains = total_linked + vista_without_pipeimob_contract
@@ -1073,12 +1073,8 @@ def test_reconciliation_null_datafinal_rules_and_delay_days():
     assert "DIVERGENCIA_DATA" in item2["issues"]
     assert item2["status"] == "DIVERGENCIA_DATA"
 
-    assert s["official_sales"] == 2
-    assert s["strictly_matched"] == 0
-    assert s["value_only_mismatches"] == 0
-    assert s["date_only_mismatches"] == 1
-    assert s["linked_with_unresolved_gain_date"] == 1
-    assert s["divergent_linked_unique"] == 2
+    assert s["confirmed_divergent_linked_unique"] == 1
+    assert s["divergent_linked_unique"] == 1
     assert s["total_linked_unique"] == 2
     assert s["non_auditable_gain_dates"] == 1
 

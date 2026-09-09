@@ -339,9 +339,8 @@ test("8b. Deduplicação de divergências: registro com divergência simultânea
 // 9. Categorias residuais explícitas
 // ---------------------------------------------------------------------------
 test("9. Categorias residuais explícitas estão presentes no payload e na interface", () => {
-  assert.match(workerSource, /divergência de valor/i);
-  assert.match(workerSource, /divergência de data/i);
-  assert.match(workerSource, /data de fechamento não auditável|data de ganho não auditável|data individual de ganho não é auditável/i);
+  assert.match(workerSource, /divergência (comprovada )?de valor/i);
+  assert.match(workerSource, /validação temporal permanece indisponível|data de fechamento não auditável|data de ganho não auditável|data individual de ganho não é auditável/i);
   assert.match(workerSource, /value_mismatches|divergent_matches/);
 });
 
@@ -589,16 +588,20 @@ test("19. Resiliência: recarregamento ou retry não acumula etapas duplicadas",
 // ---------------------------------------------------------------------------
 // 20. Identidade matemática com linked_with_unresolved_gain_date (os 8 CCVs) e mensagem DataFinal nulo
 // ---------------------------------------------------------------------------
-test("20. Identidade matemática: 310 CCVs = 276 strictly matched + 13 value + 0 date + 8 unresolved date + 13 unlinked (total 297 linked)", () => {
+test("20. Identidade matemática: 310 CCVs = 284 value matched (unresolved date) + 13 value mismatch + 13 unlinked (total 297 linked)", () => {
   const payload = {
     summary: {
       official_sales: 310,
-      strictly_matched: 276,
-      value_only_mismatches: 13,
-      date_only_mismatches: 0,
-      value_and_date_mismatches: 0,
-      linked_with_unresolved_gain_date: 8,
-      divergent_linked_unique: 21,
+      fully_audited_match: 0,
+      strictly_matched: 0,
+      value_matched_date_unresolved: 284,
+      value_mismatch_date_unresolved: 13,
+      confirmed_value_mismatches: 13,
+      confirmed_date_mismatches: 0,
+      confirmed_value_and_date_mismatches: 0,
+      confirmed_divergent_linked_unique: 13,
+      divergent_linked_unique: 13,
+      linked_with_unresolved_gain_date: 297,
       total_linked_unique: 297,
       pipeimob_without_vista_gain: 13,
       vista_without_pipeimob_contract: 23,
@@ -609,32 +612,34 @@ test("20. Identidade matemática: 310 CCVs = 276 strictly matched + 13 value + 0
 
   const norm = normalizeReconciliationSummary(payload);
   assert.equal(norm.official_sales, 310);
-  assert.equal(norm.strictly_matched, 276);
-  assert.equal(norm.value_only_mismatches, 13);
-  assert.equal(norm.date_only_mismatches, 0);
-  assert.equal(norm.value_and_date_mismatches, 0);
-  assert.equal(norm.linked_with_unresolved_gain_date, 8);
-  assert.equal(norm.divergent_linked_unique, 21);
+  assert.equal(norm.fully_audited_match, 0);
+  assert.equal(norm.strictly_matched, 0);
+  assert.equal(norm.value_matched_date_unresolved, 284);
+  assert.equal(norm.value_mismatch_date_unresolved, 13);
+  assert.equal(norm.confirmed_divergent_linked_unique, 13);
+  assert.equal(norm.divergent_linked_unique, 13);
+  assert.equal(norm.linked_with_unresolved_gain_date, 297);
   assert.equal(norm.total_linked_unique, 297);
   assert.equal(norm.pipeimob_without_vista_gain, 13);
   assert.equal(norm.total_vista_gains, 320);
   assert.equal(norm.non_auditable_gain_dates, 320);
 
-  // Identidade 1: official_sales = strictly_matched + value_only + date_only + both + unresolved_date + pipeimob_without_vista_gain
-  assert.equal(
-    norm.strictly_matched + norm.value_only_mismatches + norm.date_only_mismatches + norm.value_and_date_mismatches + norm.linked_with_unresolved_gain_date + norm.pipeimob_without_vista_gain,
-    norm.official_sales
-  );
-  assert.equal(norm.strictly_matched + norm.divergent_linked_unique + norm.pipeimob_without_vista_gain, 310);
-  assert.equal(norm.total_linked_unique + norm.pipeimob_without_vista_gain, 310);
+  // Identidade 1: official_sales = total_linked_unique + pipeimob_without_vista_gain
+  assert.equal(norm.total_linked_unique + norm.pipeimob_without_vista_gain, norm.official_sales);
+  assert.equal(297 + 13, 310);
 
   // Identidade 2: total_vista_gains = total_linked_unique + vista_without_pipeimob_contract
-  assert.equal(norm.total_linked_unique + norm.vista_without_pipeimob_contract, 320);
+  assert.equal(norm.total_linked_unique + norm.vista_without_pipeimob_contract, norm.total_vista_gains);
+  assert.equal(297 + 23, 320);
+
+  // Identidade 3: total_linked_unique = value_matched_date_unresolved + value_mismatch_date_unresolved + fully_audited_match
+  assert.equal(norm.value_matched_date_unresolved + norm.value_mismatch_date_unresolved + norm.fully_audited_match, norm.total_linked_unique);
+  assert.equal(284 + 13 + 0, 297);
 
   // Mensagem aprimorada para DataFinal nulo
   assert.match(
     workerSource,
-    /ganhos retornados pelo filtro de período do Vista não possuem DataFinal preenchida; a data individual de ganho não é auditável/
+    /a validação temporal permanece indisponível porque o Vista não retornou DataFinal/
   );
 });
 
