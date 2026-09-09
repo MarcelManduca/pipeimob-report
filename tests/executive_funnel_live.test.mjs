@@ -252,13 +252,20 @@ test("8. Identidades matemáticas da reconciliação: official_sales (310) = str
       pipeimob_sales_count: 310,
       matched_count: 276,
       strictly_matched_count: 276,
+      fully_audited_match: 276,
+      value_matched_date_unresolved: 0,
+      value_mismatch_date_unresolved: 18,
+      linked_with_unresolved_gain_date: 0,
       divergent_matches_count: 21,
       divergent_linked_unique: 21,
+      confirmed_divergent_linked_unique: 21,
       value_mismatches_count: 18,
       value_only_mismatches: 18,
       date_mismatches_count: 3,
       date_only_mismatches: 3,
+      confirmed_date_mismatches: 3,
       value_and_date_mismatches: 0,
+      confirmed_value_and_date_mismatches: 0,
       pipeimob_without_vista_gain_count: 13,
       vista_without_pipeimob_contract_count: 30,
       total_linked_count: 297,
@@ -275,6 +282,7 @@ test("8. Identidades matemáticas da reconciliação: official_sales (310) = str
   assert.equal(norm.official_sales, 310);
   assert.equal(norm.strictly_matched, 276);
   assert.equal(norm.matched, 276);
+  assert.equal(norm.fully_audited_match, 276);
   assert.equal(norm.divergent_matches, 21);
   assert.equal(norm.divergent_linked_unique, 21);
   assert.equal(norm.value_mismatches, 18);
@@ -309,12 +317,18 @@ test("8b. Deduplicação de divergências: registro com divergência simultânea
   const rawPayload = {
     summary: {
       official_sales: 5,
-      strictly_matched: 1,
+      total_linked_unique: 4,
+      fully_audited_match: 1,
+      value_matched_date_unresolved: 0,
+      value_mismatch_date_unresolved: 1,
+      linked_with_unresolved_gain_date: 0,
       value_only_mismatches: 1,
       date_only_mismatches: 1,
+      confirmed_date_mismatches: 1,
       value_and_date_mismatches: 1,
+      confirmed_value_and_date_mismatches: 1,
+      confirmed_divergent_linked_unique: 3,
       divergent_linked_unique: 3, // 1 val + 1 date + 1 both
-      total_linked_unique: 4,
       pipeimob_without_vista_gain: 1,
       vista_without_pipeimob_contract: 1,
       total_vista_gains: 5,
@@ -340,7 +354,7 @@ test("8b. Deduplicação de divergências: registro com divergência simultânea
 // ---------------------------------------------------------------------------
 test("9. Categorias residuais explícitas estão presentes no payload e na interface", () => {
   assert.match(workerSource, /divergência (comprovada )?de valor/i);
-  assert.match(workerSource, /validação temporal permanece indisponível|data de fechamento não auditável|data de ganho não auditável|data individual de ganho não é auditável/i);
+  assert.match(workerSource, /validação temporal indisponível|data de fechamento não auditável|data de ganho não auditável|data individual de ganho não é auditável/i);
   assert.match(workerSource, /value_mismatches|divergent_matches/);
 });
 
@@ -636,21 +650,23 @@ test("20. Identidade matemática: 310 CCVs = 284 value matched (unresolved date)
   assert.equal(norm.value_matched_date_unresolved + norm.value_mismatch_date_unresolved + norm.fully_audited_match, norm.total_linked_unique);
   assert.equal(284 + 13 + 0, 297);
 
-  // Mensagem aprimorada para DataFinal nulo
+  // Mensagem aprimorada para validação temporal e auditabilidade
   assert.match(
     workerSource,
-    /a validação temporal permanece indisponível porque o Vista não retornou DataFinal/
+    /Todos os vínculos estão com validação temporal indisponível/
+  );
+  assert.match(
+    workerSource,
+    /Detalhamento de auditabilidade aguardando atualização do backend/
   );
 });
 
 // 21. Alerta de DataFinal nula não utiliza total_vista_gains como fallback incorreto
 // ---------------------------------------------------------------------------
 test("21. Alerta de auditoria: utiliza estritamente non_auditable_gain_dates / unresolved_gain_dates e nunca total_vista_gains como fallback", () => {
-  // Payload com 0 non_auditable_gain_dates e 320 total_vista_gains
   const payloadZeroAuditable = {
     summary: {
       official_sales: 310,
-      strictly_matched: 276,
       total_linked_unique: 297,
       total_vista_gains: 320,
       non_auditable_gain_dates: 0,
@@ -661,11 +677,9 @@ test("21. Alerta de auditoria: utiliza estritamente non_auditable_gain_dates / u
   const normZero = normalizeReconciliationSummary(payloadZeroAuditable);
   assert.equal(normZero.non_auditable_gain_dates, 0);
 
-  // Payload sem campo de non_auditable_gain_dates deve ser 0 (nunca 320!)
   const payloadMissing = {
     summary: {
       official_sales: 310,
-      strictly_matched: 276,
       total_linked_unique: 297,
       total_vista_gains: 320,
     }
@@ -681,12 +695,13 @@ test("22. Regra de data: DataFinal ausente/inválida gera linked_with_unresolved
   const norm = normalizeReconciliationSummary({
     summary: {
       official_sales: 2,
-      strictly_matched: 0,
-      value_only_mismatches: 0,
-      date_only_mismatches: 1, // 1 deal with valid date > 7 days
-      linked_with_unresolved_gain_date: 1, // 1 deal with null DataFinal
-      divergent_linked_unique: 2,
       total_linked_unique: 2,
+      fully_audited_match: 0,
+      value_matched_date_unresolved: 0,
+      value_mismatch_date_unresolved: 0,
+      date_only_mismatches: 1, // 1 deal with valid date > 7 days
+      confirmed_date_mismatches: 1,
+      linked_with_unresolved_gain_date: 1, // 1 deal with null DataFinal
       pipeimob_without_vista_gain: 0,
       vista_without_pipeimob_contract: 0,
       total_vista_gains: 2,
@@ -695,10 +710,157 @@ test("22. Regra de data: DataFinal ausente/inválida gera linked_with_unresolved
   });
 
   assert.equal(norm.date_only_mismatches, 1);
+  assert.equal(norm.confirmed_date_mismatches, 1);
   assert.equal(norm.linked_with_unresolved_gain_date, 1);
   assert.equal(norm.total_linked_unique, 2);
-  assert.equal(norm.strictly_matched + norm.date_only_mismatches + norm.linked_with_unresolved_gain_date, 2);
+  assert.equal(norm.audit_partition_availability, "inconsistent"); // 0 + 0 + 0 + 1 + 0 = 1 != 2
 });
+
+// 23. Payload legado com strictly_matched=276 e DataFinal não auditável
+// ---------------------------------------------------------------------------
+test("23. Payload legado: strictly_matched=276 não aparece como 'totalmente auditados' e ativa requires_backend_v1_1", () => {
+  const legacyPayload = {
+    summary: {
+      official_sales: 310,
+      strictly_matched: 276,
+      matched: 276,
+      divergent_matches: 21,
+      total_linked_unique: 297,
+      total_vista_gains: 320,
+      vista_without_pipeimob_contract: 23,
+      pipeimob_without_vista_gain: 13,
+      non_auditable_gain_dates: 320,
+    }
+  };
+
+  const norm = normalizeReconciliationSummary(legacyPayload);
+  assert.equal(norm.total_linked_unique, 297);
+  assert.equal(norm.fully_audited_match, null, "fully_audited_match MUST be null on legacy payload");
+  assert.equal(norm.strictly_matched, null, "strictly_matched MUST NOT be treated as fully audited");
+  assert.equal(norm.value_matched_date_unresolved, null, "value_matched_date_unresolved MUST NOT be derived on legacy");
+  assert.equal(norm.value_mismatch_date_unresolved, null, "value_mismatch_date_unresolved MUST NOT be derived on legacy");
+  assert.equal(norm.linked_with_unresolved_gain_date, null, "linked_with_unresolved_gain_date MUST NOT be derived on legacy");
+  assert.equal(norm.audit_partition_availability, "requires_backend_v1_1");
+});
+
+// 24. Payload nativo integralmente não auditável
+// ---------------------------------------------------------------------------
+test("24. Payload nativo: integralmente não auditável (fully_audited_match=0, linked_with_unresolved_gain_date=total_linked_unique)", () => {
+  const nativePayload = {
+    summary: {
+      official_sales: 310,
+      total_linked_unique: 297,
+      fully_audited_match: 0,
+      value_matched_date_unresolved: 284,
+      value_mismatch_date_unresolved: 13,
+      linked_with_unresolved_gain_date: 297,
+      confirmed_value_mismatches: 13,
+      confirmed_date_mismatches: 0,
+      confirmed_value_and_date_mismatches: 0,
+      confirmed_divergent_linked_unique: 13,
+      pipeimob_without_vista_gain: 13,
+      vista_without_pipeimob_contract: 23,
+      total_vista_gains: 320,
+      non_auditable_gain_dates: 320,
+    }
+  };
+
+  const norm = normalizeReconciliationSummary(nativePayload);
+  assert.equal(norm.audit_partition_availability, "available");
+  assert.equal(norm.fully_audited_match, 0);
+  assert.equal(norm.value_matched_date_unresolved, 284);
+  assert.equal(norm.value_mismatch_date_unresolved, 13);
+  assert.equal(norm.linked_with_unresolved_gain_date, 297);
+  assert.equal(norm.confirmed_divergent_linked_unique, 13);
+  // Closure: 0 + 284 + 13 + 0 + 0 = 297
+  assert.equal(norm.fully_audited_match + norm.value_matched_date_unresolved + norm.value_mismatch_date_unresolved + norm.confirmed_date_mismatches + norm.confirmed_value_and_date_mismatches, norm.total_linked_unique);
+});
+
+// 25. Payload nativo parcialmente auditável
+// ---------------------------------------------------------------------------
+test("25. Payload nativo: parcialmente auditável com mensagem proporcional de datas", () => {
+  const partialPayload = {
+    summary: {
+      official_sales: 100,
+      total_linked_unique: 90,
+      fully_audited_match: 40,
+      value_matched_date_unresolved: 30,
+      value_mismatch_date_unresolved: 10,
+      confirmed_date_mismatches: 10,
+      confirmed_value_and_date_mismatches: 0,
+      confirmed_divergent_linked_unique: 20,
+      linked_with_unresolved_gain_date: 40, // 40 de 90 vínculos com data não auditável
+      pipeimob_without_vista_gain: 10,
+      vista_without_pipeimob_contract: 5,
+      total_vista_gains: 95,
+      non_auditable_gain_dates: 40,
+    }
+  };
+
+  const norm = normalizeReconciliationSummary(partialPayload);
+  assert.equal(norm.audit_partition_availability, "available");
+  assert.equal(norm.fully_audited_match, 40);
+  assert.equal(norm.linked_with_unresolved_gain_date, 40);
+  assert.equal(norm.total_linked_unique, 90);
+  // Closure: 40 + 30 + 10 + 10 + 0 = 90
+  assert.equal(norm.fully_audited_match + norm.value_matched_date_unresolved + norm.value_mismatch_date_unresolved + norm.confirmed_date_mismatches + norm.confirmed_value_and_date_mismatches, 90);
+});
+
+// 26. Payload nativo com zero divergências e preservação segura de 0 sem fallback
+// ---------------------------------------------------------------------------
+test("26. Payload nativo: zero divergências preserva estritamente 0 e não substitui por fallback", () => {
+  const zeroDivPayload = {
+    summary: {
+      official_sales: 50,
+      total_linked_unique: 50,
+      fully_audited_match: 50,
+      value_matched_date_unresolved: 0,
+      value_mismatch_date_unresolved: 0,
+      confirmed_value_mismatches: 0,
+      confirmed_date_mismatches: 0,
+      confirmed_value_and_date_mismatches: 0,
+      confirmed_divergent_linked_unique: 0,
+      linked_with_unresolved_gain_date: 0,
+      pipeimob_without_vista_gain: 0,
+      vista_without_pipeimob_contract: 0,
+      total_vista_gains: 50,
+      non_auditable_gain_dates: 0,
+    }
+  };
+
+  const norm = normalizeReconciliationSummary(zeroDivPayload);
+  assert.equal(norm.audit_partition_availability, "available");
+  assert.equal(norm.fully_audited_match, 50);
+  assert.equal(norm.confirmed_divergent_linked_unique, 0);
+  assert.equal(norm.value_matched_date_unresolved, 0);
+  assert.equal(norm.value_mismatch_date_unresolved, 0);
+  assert.equal(norm.linked_with_unresolved_gain_date, 0);
+});
+
+// 27. Partição matemática inconsistente
+// ---------------------------------------------------------------------------
+test("27. Partição inconsistente: detecta que a soma dos subconjuntos difere de total_linked_unique", () => {
+  const inconsistentPayload = {
+    summary: {
+      official_sales: 100,
+      total_linked_unique: 100,
+      fully_audited_match: 20,
+      value_matched_date_unresolved: 30,
+      value_mismatch_date_unresolved: 10,
+      confirmed_date_mismatches: 0,
+      confirmed_value_and_date_mismatches: 0,
+      linked_with_unresolved_gain_date: 40,
+      // 20 + 30 + 10 = 60 !== 100 (inconsistente!)
+      pipeimob_without_vista_gain: 0,
+      vista_without_pipeimob_contract: 0,
+      total_vista_gains: 100,
+    }
+  };
+
+  const norm = normalizeReconciliationSummary(inconsistentPayload);
+  assert.equal(norm.audit_partition_availability, "inconsistent");
+});
+
 
 
 
