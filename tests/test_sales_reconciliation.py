@@ -1083,5 +1083,84 @@ def test_reconciliation_null_datafinal_rules_and_delay_days():
     assert s["non_auditable_gain_dates"] == 1
 
 
+def test_reconciliation_all_null_datafinal_partitions():
+    """Verify that when 100% of Vista gains have DataFinal=null, fully_audited_match is 0 and all linked are unresolved date."""
+    pipe_txs = []
+    # 284 value-matched deals with null DataFinal in Vista
+    for i in range(1, 285):
+        pipe_txs.append({
+            "transacao_unique_id_pipeimob": f"tx-valmatch-{i}",
+            "codigo_imovel": f"PROP-VALMATCH-{i}",
+            "data_assinatura_ccv": "2026-05-10",
+            "valor_contrato": "500000.00",
+        })
+    # 13 value-mismatch deals with null DataFinal in Vista
+    for i in range(1, 14):
+        pipe_txs.append({
+            "transacao_unique_id_pipeimob": f"tx-valmismatch-{i}",
+            "codigo_imovel": f"PROP-VALMISMATCH-{i}",
+            "data_assinatura_ccv": "2026-05-15",
+            "valor_contrato": "500000.00",
+        })
+    # 13 CCV without Vista gain
+    for i in range(1, 14):
+        pipe_txs.append({
+            "transacao_unique_id_pipeimob": f"tx-unlinked-pipe-{i}",
+            "codigo_imovel": f"PROP-UNLINKED-PIPE-{i}",
+            "data_assinatura_ccv": "2026-05-20",
+            "valor_contrato": "500000.00",
+        })
+    assert len(pipe_txs) == 310
+
+    vista_gains = []
+    # 284 linked gains (value matched, gain_date is None)
+    for i in range(1, 285):
+        vista_gains.append({
+            "deal_id": f"deal-valmatch-{i}",
+            "property_code": f"PROP-VALMATCH-{i}",
+            "gain_date": None,
+            "deal_value": "500000.00",
+            "commercial_broker_name": "Corretor A",
+        })
+    # 13 linked gains (value mismatch, gain_date is None)
+    for i in range(1, 14):
+        vista_gains.append({
+            "deal_id": f"deal-valmismatch-{i}",
+            "property_code": f"PROP-VALMISMATCH-{i}",
+            "gain_date": None,
+            "deal_value": "550000.00",
+            "commercial_broker_name": "Corretor B",
+        })
+    # 23 unlinked Vista gains (gain_date is None)
+    for i in range(1, 24):
+        vista_gains.append({
+            "deal_id": f"deal-unlinked-vista-{i}",
+            "property_code": f"PROP-UNLINKED-VISTA-{i}",
+            "gain_date": None,
+            "deal_value": "600000.00",
+            "commercial_broker_name": "Corretor C",
+        })
+    assert len(vista_gains) == 320
+
+    res = reconcile_sales(pipe_txs, vista_gains, date_tolerance_days=7)
+    s = res["summary"]
+
+    assert s["official_sales"] == 310
+    assert s["total_linked_unique"] == 297
+    assert s["fully_audited_match"] == 0
+    assert s["strictly_matched"] == 0
+    assert s["date_only_mismatches"] == 0
+    assert s["value_and_date_mismatches"] == 0
+    assert s["value_matched_date_unresolved"] == 284
+    assert s["value_mismatch_date_unresolved"] == 13
+    assert s["pipeimob_without_vista_gain"] == 13
+    assert s["vista_without_pipeimob_contract"] == 23
+    assert s["total_vista_gains"] == 320
+    assert s["non_auditable_gain_dates"] == 320
+    assert s["value_matched_date_unresolved"] + s["value_mismatch_date_unresolved"] + s["pipeimob_without_vista_gain"] == 310
+    assert s["total_linked_unique"] + s["vista_without_pipeimob_contract"] == 320
+
+
+
 
 

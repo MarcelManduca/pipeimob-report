@@ -2213,12 +2213,14 @@ const HTML = `<!doctype html>
         }
       }
       const s=payload.summary||payload;
-      const matched=typeof s.strictly_matched==="number"?s.strictly_matched:(typeof s.strictly_matched_count==="number"?s.strictly_matched_count:(typeof s.matched==="number"?s.matched:(typeof s.matched_count==="number"?s.matched_count:0)));
+      const matched=typeof s.fully_audited_match==="number"?s.fully_audited_match:(typeof s.strictly_matched==="number"?s.strictly_matched:(typeof s.strictly_matched_count==="number"?s.strictly_matched_count:(typeof s.matched==="number"?s.matched:(typeof s.matched_count==="number"?s.matched_count:0))));
       const valueOnlyMismatches=typeof s.value_only_mismatches==="number"?s.value_only_mismatches:(typeof s.value_mismatches==="number"?s.value_mismatches:(typeof s.value_mismatches_count==="number"?s.value_mismatches_count:0));
       const dateOnlyMismatches=typeof s.date_only_mismatches==="number"?s.date_only_mismatches:(typeof s.date_mismatches==="number"?s.date_mismatches:(typeof s.date_mismatches_count==="number"?s.date_mismatches_count:0));
       const valueAndDateMismatches=typeof s.value_and_date_mismatches==="number"?s.value_and_date_mismatches:0;
-      const linkedUnresolvedGainDate=typeof s.linked_with_unresolved_gain_date==="number"?s.linked_with_unresolved_gain_date:(typeof s.linked_with_unresolved_gain_date_count==="number"?s.linked_with_unresolved_gain_date_count:0);
-      const divergentMatches=typeof s.divergent_linked_unique==="number"?s.divergent_linked_unique:(typeof s.divergent_matches==="number"?s.divergent_matches:(typeof s.divergent_matches_count==="number"?s.divergent_matches_count:(valueOnlyMismatches+dateOnlyMismatches+valueAndDateMismatches+linkedUnresolvedGainDate)));
+      const valueMatchedDateUnresolved=typeof s.value_matched_date_unresolved==="number"?s.value_matched_date_unresolved:(typeof s.linked_with_unresolved_gain_date==="number"?s.linked_with_unresolved_gain_date:0);
+      const valueMismatchDateUnresolved=typeof s.value_mismatch_date_unresolved==="number"?s.value_mismatch_date_unresolved:0;
+      const linkedUnresolvedGainDate=typeof s.linked_with_unresolved_gain_date==="number"?s.linked_with_unresolved_gain_date:(valueMatchedDateUnresolved+valueMismatchDateUnresolved);
+      const divergentMatches=typeof s.divergent_linked_unique==="number"?s.divergent_linked_unique:(typeof s.divergent_matches==="number"?s.divergent_matches:(typeof s.divergent_matches_count==="number"?s.divergent_matches_count:(valueOnlyMismatches+dateOnlyMismatches+valueAndDateMismatches+valueMatchedDateUnresolved+valueMismatchDateUnresolved)));
       const totalLinked=typeof s.total_linked_unique==="number"?s.total_linked_unique:(typeof s.total_linked==="number"?s.total_linked:(typeof s.total_linked_count==="number"?s.total_linked_count:(matched+divergentMatches)));
       const vistaWithoutCcv=typeof s.vista_without_pipeimob_contract==="number"?s.vista_without_pipeimob_contract:(typeof s.vista_without_pipeimob_contract_count==="number"?s.vista_without_pipeimob_contract_count:(typeof s.vista_without_ccv==="number"?s.vista_without_ccv:(typeof s.vista_without_ccv_count==="number"?s.vista_without_ccv_count:0)));
       const ccvWithoutVista=typeof s.pipeimob_without_vista_gain==="number"?s.pipeimob_without_vista_gain:(typeof s.pipeimob_without_vista_gain_count==="number"?s.pipeimob_without_vista_gain_count:(typeof s.ccv_without_vista==="number"?s.ccv_without_vista:(typeof s.ccv_without_vista_count==="number"?s.ccv_without_vista_count:0)));
@@ -2231,11 +2233,14 @@ const HTML = `<!doctype html>
         official_sales:officialSales,
         total_linked:totalLinked,
         total_linked_unique:totalLinked,
+        fully_audited_match:matched,
         matched:matched,
         strictly_matched:matched,
         divergent_matches:divergentMatches,
         divergent_linked_unique:divergentMatches,
-        value_mismatches:valueOnlyMismatches,
+        value_matched_date_unresolved:valueMatchedDateUnresolved,
+        value_mismatch_date_unresolved:valueMismatchDateUnresolved,
+        value_mismatches:valueOnlyMismatches+valueMismatchDateUnresolved,
         value_only_mismatches:valueOnlyMismatches,
         date_mismatches:dateOnlyMismatches,
         date_only_mismatches:dateOnlyMismatches,
@@ -2266,12 +2271,18 @@ const HTML = `<!doctype html>
       let badges="";
       if((d.total_linked||0)>0||(d.divergent_matches||0)>0){
         const divText=[];
-        if((d.value_only_mismatches||d.value_mismatches||0)>0)divText.push(number(d.value_only_mismatches||d.value_mismatches)+' divergência de valor');
+        if((d.value_only_mismatches||0)>0)divText.push(number(d.value_only_mismatches)+' divergência de valor');
+        if((d.value_mismatch_date_unresolved||0)>0)divText.push(number(d.value_mismatch_date_unresolved)+' divergência de valor (data não auditável)');
         if((d.date_only_mismatches||d.date_mismatches||0)>0)divText.push(number(d.date_only_mismatches||d.date_mismatches)+' divergência de data');
         if((d.value_and_date_mismatches||0)>0)divText.push(number(d.value_and_date_mismatches)+' divergência de valor e data');
-        if((d.linked_with_unresolved_gain_date||0)>0)divText.push(number(d.linked_with_unresolved_gain_date)+' data de ganho não auditável');
+        if((d.value_matched_date_unresolved||0)>0 && (d.strictly_matched||0)===0){
+          divText.push(number(d.value_matched_date_unresolved)+' valor conciliado com data não auditável');
+        } else if((d.linked_with_unresolved_gain_date||0)>0 && (d.strictly_matched||0)>0){
+          divText.push(number(d.linked_with_unresolved_gain_date)+' data de ganho não auditável');
+        }
         const divSuffix=divText.length>0?' ('+divText.join(', ')+')':'';
-        badges+='<div class="cso-badge-neutral" style="margin-top:6px;width:100%;justify-content:center;font-size:11px;background:#eef0f8;color:var(--forest);padding:4px 8px;border-radius:6px;display:flex;align-items:center;" title="Identidade: '+number(d.official_sales)+' oficializadas = '+number(d.total_linked)+' vinculados + '+number(d.ccv_without_vista)+' sem ganho | '+number(d.vista_gains)+' ganhos = '+number(d.total_linked)+' vinculados + '+number(d.vista_without_ccv)+' sem CCV">✓ '+number(d.total_linked)+' vinculados: '+number(d.strictly_matched||d.matched)+' conciliados'+divSuffix+'</div>'
+        const concCount = (d.strictly_matched||0) > 0 ? (number(d.strictly_matched)+' plenamente auditados') : (number(d.value_matched_date_unresolved||d.total_linked)+' com valor igual');
+        badges+='<div class="cso-badge-neutral" style="margin-top:6px;width:100%;justify-content:center;font-size:11px;background:#eef0f8;color:var(--forest);padding:4px 8px;border-radius:6px;display:flex;align-items:center;" title="Identidade: '+number(d.official_sales)+' oficializadas = '+number(d.total_linked)+' vinculados + '+number(d.ccv_without_vista)+' sem ganho | '+number(d.vista_gains)+' ganhos = '+number(d.total_linked)+' vinculados + '+number(d.vista_without_ccv)+' sem CCV">✓ '+number(d.total_linked)+' vinculados: '+concCount+divSuffix+'</div>'
       }
       if((d.non_auditable_gain_dates||0)>0){badges+='<div class="cso-badge-warning" style="margin-top:4px;width:100%;justify-content:center;text-align:center;">⚠ '+number(d.non_auditable_gain_dates)+' ganhos retornados pelo filtro de período do Vista não possuem DataFinal preenchida; a data individual de ganho não é auditável.</div>'}
       if((d.unresolved_teams||0)>0){badges+='<div class="cso-badge-warning" style="margin-top:4px;width:100%;justify-content:center;">ℹ '+number(d.unresolved_teams)+' vendas com equipe pendente de mapeamento</div>'}
@@ -2336,7 +2347,7 @@ const HTML = `<!doctype html>
         "Relações acima de 100% expressam a proporção entre etapas acumuladas no período e não taxa de conversão sequencial."
       ];
       const warningsHtml='<div class="cso-funnel-warnings">'+warnings.map(w=>'<div>• '+esc(w)+'</div>').join('')+'</div>';
-      return '<section class="cso-funnel-card"><div class="cso-funnel-head"><div><h2>Funil Comercial</h2></div><div class="cso-funnel-meta"><span class="cso-funnel-badge">Fotografia de Pipeline &amp; CCVs</span></div></div><div class="cso-funnel-layout">'+stagesWrap+reconHtml+'</div>'+warningsHtml+'</section>'
+      return '<section class="cso-funnel-card"><div class="cso-funnel-head"><div><h2>FUNIL · Pipeline (Clientes Únicos)</h2></div><div class="cso-funnel-meta"><span class="cso-funnel-badge">Fotografia de Pipeline &amp; CCVs</span></div></div><div class="cso-funnel-layout">'+stagesWrap+reconHtml+'</div>'+warningsHtml+'</section>'
     }
     let activeReconController=null,currentReconRequestId=0,activeFunnelController=null,currentFunnelRequestId=0;
     function attachRetryHandler(start,end){

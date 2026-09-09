@@ -211,7 +211,7 @@ def reconcile_sales(
     linked_items = [
         item for item in items if item.get("pipeimob_transaction_id") and item.get("vista_deal_id")
     ]
-    strictly_matched_count = sum(
+    fully_audited_match = sum(
         1
         for item in linked_items
         if item.get("vista_gain_date") is not None
@@ -223,7 +223,9 @@ def reconcile_sales(
         1
         for item in linked_items
         if VALUE_MISMATCH in item.get("issues", [])
-        and DATE_MISMATCH not in item.get("issues", [])
+        and item.get("vista_gain_date") is not None
+        and item.get("delay_days") is not None
+        and abs(item["delay_days"]) <= date_tolerance_days
     )
     date_only_count = sum(
         1
@@ -239,19 +241,35 @@ def reconcile_sales(
         and DATE_MISMATCH in item.get("issues", [])
         and item.get("delay_days") is not None
     )
-    linked_unresolved_gain_date_count = sum(
+    value_matched_date_unresolved = sum(
         1
         for item in linked_items
         if item.get("vista_gain_date") is None
         and VALUE_MISMATCH not in item.get("issues", [])
     )
+    value_mismatch_date_unresolved = sum(
+        1
+        for item in linked_items
+        if item.get("vista_gain_date") is None
+        and VALUE_MISMATCH in item.get("issues", [])
+    )
     divergent_linked_unique = (
         value_only_count
         + date_only_count
         + value_and_date_count
-        + linked_unresolved_gain_date_count
-    )
+        + value_matched_date_unresolved
+        + value_mismatch_date_unresolved
+    ) - (fully_audited_match if fully_audited_match == 0 else 0)
+    # Total linked is strictly the sum of all mutually exclusive linked partitions
     total_linked_unique = len(linked_items)
+    # If all linked items have unresolved dates, divergent_linked_unique is all non-fully-audited
+    divergent_linked_count = (
+        value_only_count
+        + date_only_count
+        + value_and_date_count
+        + value_matched_date_unresolved
+        + value_mismatch_date_unresolved
+    )
 
     total_vista_gains = len(gains)
     unresolved_gain_dates = sum(
@@ -267,16 +285,19 @@ def reconcile_sales(
             "official_vgv": str(official_vgv),
             "total_linked": total_linked_unique,
             "total_linked_unique": total_linked_unique,
-            "matched": strictly_matched_count,
-            "strictly_matched": strictly_matched_count,
-            "divergent_matches": divergent_linked_unique,
-            "divergent_linked_unique": divergent_linked_unique,
-            "value_mismatches": value_only_count,
+            "fully_audited_match": fully_audited_match,
+            "matched": fully_audited_match,
+            "strictly_matched": fully_audited_match,
+            "divergent_matches": divergent_linked_count,
+            "divergent_linked_unique": divergent_linked_count,
+            "value_matched_date_unresolved": value_matched_date_unresolved,
+            "value_mismatch_date_unresolved": value_mismatch_date_unresolved,
+            "value_mismatches": value_only_count + value_mismatch_date_unresolved,
             "value_only_mismatches": value_only_count,
             "date_mismatches": date_only_count,
             "date_only_mismatches": date_only_count,
             "value_and_date_mismatches": value_and_date_count,
-            "linked_with_unresolved_gain_date": linked_unresolved_gain_date_count,
+            "linked_with_unresolved_gain_date": value_matched_date_unresolved + value_mismatch_date_unresolved,
             "pipeimob_without_vista_gain": status_counts[PIPE_WITHOUT_GAIN],
             "ccv_without_vista_gain": status_counts[PIPE_WITHOUT_GAIN],
             "vista_without_pipeimob_contract": status_counts[VISTA_WITHOUT_CONTRACT],
