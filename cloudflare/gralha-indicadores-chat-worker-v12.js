@@ -2194,9 +2194,14 @@ const HTML = `<!doctype html>
           matched:null,
           strictly_matched:null,
           total_linked:null,
+          total_linked_unique:null,
           divergent_matches:0,
+          divergent_linked_unique:0,
           value_mismatches:0,
+          value_only_mismatches:0,
           date_mismatches:0,
+          date_only_mismatches:0,
+          value_and_date_mismatches:0,
           vista_gains:null,
           total_vista_gains:null,
           vista_without_ccv:null,
@@ -2208,10 +2213,10 @@ const HTML = `<!doctype html>
       }
       const s=payload.summary||payload;
       const matched=typeof s.strictly_matched==="number"?s.strictly_matched:(typeof s.strictly_matched_count==="number"?s.strictly_matched_count:(typeof s.matched==="number"?s.matched:(typeof s.matched_count==="number"?s.matched_count:0)));
-      const valueMismatches=typeof s.value_only_mismatches==="number"?s.value_only_mismatches:(typeof s.value_mismatches==="number"?s.value_mismatches:(typeof s.value_mismatches_count==="number"?s.value_mismatches_count:0));
-      const dateMismatches=typeof s.date_only_mismatches==="number"?s.date_only_mismatches:(typeof s.date_mismatches==="number"?s.date_mismatches:(typeof s.date_mismatches_count==="number"?s.date_mismatches_count:0));
+      const valueOnlyMismatches=typeof s.value_only_mismatches==="number"?s.value_only_mismatches:(typeof s.value_mismatches==="number"?s.value_mismatches:(typeof s.value_mismatches_count==="number"?s.value_mismatches_count:0));
+      const dateOnlyMismatches=typeof s.date_only_mismatches==="number"?s.date_only_mismatches:(typeof s.date_mismatches==="number"?s.date_mismatches:(typeof s.date_mismatches_count==="number"?s.date_mismatches_count:0));
       const valueAndDateMismatches=typeof s.value_and_date_mismatches==="number"?s.value_and_date_mismatches:0;
-      const divergentMatches=typeof s.divergent_linked_unique==="number"?s.divergent_linked_unique:(typeof s.divergent_matches==="number"?s.divergent_matches:(typeof s.divergent_matches_count==="number"?s.divergent_matches_count:(valueMismatches+dateMismatches+valueAndDateMismatches)));
+      const divergentMatches=typeof s.divergent_linked_unique==="number"?s.divergent_linked_unique:(typeof s.divergent_matches==="number"?s.divergent_matches:(typeof s.divergent_matches_count==="number"?s.divergent_matches_count:(valueOnlyMismatches+dateOnlyMismatches+valueAndDateMismatches)));
       const totalLinked=typeof s.total_linked_unique==="number"?s.total_linked_unique:(typeof s.total_linked==="number"?s.total_linked:(typeof s.total_linked_count==="number"?s.total_linked_count:(matched+divergentMatches)));
       const vistaWithoutCcv=typeof s.vista_without_pipeimob_contract==="number"?s.vista_without_pipeimob_contract:(typeof s.vista_without_pipeimob_contract_count==="number"?s.vista_without_pipeimob_contract_count:(typeof s.vista_without_ccv==="number"?s.vista_without_ccv:(typeof s.vista_without_ccv_count==="number"?s.vista_without_ccv_count:0)));
       const ccvWithoutVista=typeof s.pipeimob_without_vista_gain==="number"?s.pipeimob_without_vista_gain:(typeof s.pipeimob_without_vista_gain_count==="number"?s.pipeimob_without_vista_gain_count:(typeof s.ccv_without_vista==="number"?s.ccv_without_vista:(typeof s.ccv_without_vista_count==="number"?s.ccv_without_vista_count:0)));
@@ -2228,10 +2233,10 @@ const HTML = `<!doctype html>
         strictly_matched:matched,
         divergent_matches:divergentMatches,
         divergent_linked_unique:divergentMatches,
-        value_mismatches:valueMismatches,
-        value_only_mismatches:valueMismatches,
-        date_mismatches:dateMismatches,
-        date_only_mismatches:dateMismatches,
+        value_mismatches:valueOnlyMismatches,
+        value_only_mismatches:valueOnlyMismatches,
+        date_mismatches:dateOnlyMismatches,
+        date_only_mismatches:dateOnlyMismatches,
         value_and_date_mismatches:valueAndDateMismatches,
         vista_gains:vistaGains,
         total_vista_gains:vistaGains,
@@ -2258,12 +2263,13 @@ const HTML = `<!doctype html>
       let badges="";
       if((d.total_linked||0)>0||(d.divergent_matches||0)>0){
         const divText=[];
-        if(d.value_mismatches>0)divText.push(number(d.value_mismatches)+' divergência de valor');
-        if(d.date_mismatches>0)divText.push(number(d.date_mismatches)+' divergência de data');
+        if((d.value_only_mismatches||d.value_mismatches||0)>0)divText.push(number(d.value_only_mismatches||d.value_mismatches)+' divergência de valor');
+        if((d.date_only_mismatches||d.date_mismatches||0)>0)divText.push(number(d.date_only_mismatches||d.date_mismatches)+' divergência de data');
+        if((d.value_and_date_mismatches||0)>0)divText.push(number(d.value_and_date_mismatches)+' divergência de valor e data');
         const divSuffix=divText.length>0?' ('+divText.join(', ')+')':'';
-        badges+='<div class="cso-badge-neutral" style="margin-top:6px;width:100%;justify-content:center;font-size:11px;background:#eef0f8;color:var(--forest);padding:4px 8px;border-radius:6px;display:flex;align-items:center;" title="Identidade: '+number(d.official_sales)+' oficializadas = '+number(d.total_linked)+' vinculados + '+number(d.ccv_without_vista)+' sem ganho | '+number(d.vista_gains)+' ganhos = '+number(d.total_linked)+' vinculados + '+number(d.vista_without_ccv)+' sem CCV">✓ '+number(d.total_linked)+' vinculados: '+number(d.matched)+' conciliados'+divSuffix+'</div>'
+        badges+='<div class="cso-badge-neutral" style="margin-top:6px;width:100%;justify-content:center;font-size:11px;background:#eef0f8;color:var(--forest);padding:4px 8px;border-radius:6px;display:flex;align-items:center;" title="Identidade: '+number(d.official_sales)+' oficializadas = '+number(d.total_linked)+' vinculados + '+number(d.ccv_without_vista)+' sem ganho | '+number(d.vista_gains)+' ganhos = '+number(d.total_linked)+' vinculados + '+number(d.vista_without_ccv)+' sem CCV">✓ '+number(d.total_linked)+' vinculados: '+number(d.strictly_matched||d.matched)+' conciliados'+divSuffix+'</div>'
       }
-      if((d.non_auditable_gain_dates||0)>0){badges+='<div class="cso-badge-warning" style="margin-top:4px;width:100%;justify-content:center;">⚠ '+number(d.non_auditable_gain_dates)+' ganhos com data de fechamento não auditável no CRM</div>'}
+      if((d.non_auditable_gain_dates||0)>0){badges+='<div class="cso-badge-warning" style="margin-top:4px;width:100%;justify-content:center;text-align:center;">⚠ '+number(d.non_auditable_gain_dates)+' ganhos retornados pelo filtro de período do Vista não possuem DataFinal preenchida; a data individual de ganho não é auditável.</div>'}
       if((d.unresolved_teams||0)>0){badges+='<div class="cso-badge-warning" style="margin-top:4px;width:100%;justify-content:center;">ℹ '+number(d.unresolved_teams)+' vendas com equipe pendente de mapeamento</div>'}
       return '<div class="cso-recon-head">Reconciliação Comercial</div><div class="cso-recon-grid"><article class="cso-recon-card" title="Total de ganhos avaliados no CRM ('+number(d.total_linked||d.matched)+' vinculados + '+number(d.vista_without_ccv)+' sem CCV)"><span>Ganhos Vista</span><strong>'+number(d.vista_gains)+'</strong></article><article class="cso-recon-card" title="Vendas formalizadas com contrato CCV assinado ('+number(d.total_linked||d.matched)+' vinculados + '+number(d.ccv_without_vista)+' sem ganho)"><span>Vendas Oficializadas</span><strong>'+number(d.official_sales)+'</strong></article><article class="cso-recon-card'+(hasGainDiff?' warning':'')+'"><span>Vista sem CCV</span><strong>'+number(d.vista_without_ccv)+'</strong>'+(hasGainDiff?'<span class="cso-badge-warning">Divergência</span>':'')+'</article><article class="cso-recon-card'+(hasCcvDiff?' warning':'')+'"><span>CCV sem Ganho Vista</span><strong>'+number(d.ccv_without_vista)+'</strong>'+(hasCcvDiff?'<span class="cso-badge-warning">Divergência</span>':'')+'</article></div>'+badges
     }
@@ -2271,16 +2277,31 @@ const HTML = `<!doctype html>
       if(!state||state.status==="loading"){
         return '<div class="cso-funnel-stages"><div class="cso-recon-loading" style="padding:32px 0;"><span class="cso-spinner"></span> Carregando etapas do Vista CRM…</div></div>'
       }
-      if(state.status==="error"||!state.stages||!state.stages.length){
+      if(!state.stages||!state.stages.length||state.status==="error"){
         return '<div class="cso-funnel-homologation"><div class="cso-homologation-head"><span class="cso-homologation-badge">Etapas Vista em homologação</span><p>As etapas de Captações, Oportunidades, Visitas, Propostas e Fechamentos estão em processo de certificação cadastral no CRM. Nesta versão, a visualização corporativa destaca as <strong>Vendas oficializadas</strong> auditadas via Pipeimob e a <strong>Reconciliação Comercial</strong>.</p><div style="margin-top:8px;"><button type="button" class="cso-retry-btn" id="cso-funnel-retry">Tentar novamente</button></div></div><div class="cso-official-highlight"><div class="cso-official-label"><strong>Vendas Oficializadas (CCV)</strong><span class="cso-stage-source src-pipeimob">[Pipeimob]</span></div><div class="cso-official-val">'+number(officialCount)+'</div></div></div>'
       }
-      const stages=state.stages,relations=state.relations||[],validCounts=stages.map(s=>typeof s.count==="number"?s.count:0),maxCount=Math.max(...validCounts,1);
+      // Deduplicate stages by key so official_sales and Vista stages never duplicate
+      const seenKeys=new Set(),uniqueStages=[];
+      for(const stage of state.stages){
+        const k=stage.key||stage.id;
+        if(!seenKeys.has(k)){seenKeys.add(k);uniqueStages.push(stage)}
+      }
+      const stages=uniqueStages,relations=state.relations||[],validCounts=stages.map(s=>typeof s.count==="number"?s.count:0),maxCount=Math.max(...validCounts,1);
       let html='<div class="cso-funnel-stages">';
       stages.forEach((stage,idx)=>{
         const countVal=typeof stage.count==="number"?number(stage.count):'<span class="unavailable">Indisponível</span>',percent=typeof stage.count==="number"?Math.max(4,Math.min(100,(stage.count/maxCount)*100)):0,srcClass=stage.source==="vista"?"src-vista":"src-pipeimob",srcLabel=stage.source==="vista"?"Vista CRM":"Pipeimob",dateBasis=stage.date_basis?esc(stage.date_basis):"",tooltipText=stage.reason?' title="'+esc(stage.reason)+'"':(dateBasis?' title="Base: '+dateBasis+'"':'');
         html+='<div class="cso-funnel-stage"'+tooltipText+'><div class="cso-stage-label"><strong class="cso-stage-title">'+esc(stage.label)+'</strong><span class="cso-stage-source '+srcClass+'">['+srcLabel+']</span></div><div class="cso-stage-track"><div class="cso-stage-fill" style="width:'+percent+'%"></div></div><div class="cso-stage-count'+(typeof stage.count==="number"?'':' unavailable')+'">'+countVal+'</div></div>';
         if(idx<stages.length-1){
-          const rel=relations.find(r=>r.from_stage===stage.key&&r.to_stage===stages[idx+1].key),ratioVal=rel&&typeof rel.ratio_percentage==="number"?rel.ratio_percentage+'%':'—',isOver100=rel&&typeof rel.ratio_percentage==="number"&&rel.ratio_percentage>100,relReason=isOver100?' title="Relação entre etapas no período (não é conversão sequencial de coorte)"':(rel?.reason?' title="'+esc(rel.reason)+'"':'');
+          const nextStage=stages[idx+1];
+          const rel=relations.find(r=>(r.from_stage===stage.key||r.from_stage===stage.id)&&(r.to_stage===nextStage.key||r.to_stage===nextStage.id));
+          let ratioVal='—';
+          if(rel&&typeof rel.ratio_percentage==="number"){
+            ratioVal=rel.ratio_percentage+'%';
+          }else if(typeof stage.count==="number"&&typeof nextStage.count==="number"){
+            ratioVal=stage.count>0?Math.round((nextStage.count/stage.count)*1000)/10+'%':'0%';
+          }
+          const isOver100=parseFloat(ratioVal)>100||(rel&&typeof rel.ratio_percentage==="number"&&rel.ratio_percentage>100);
+          const relReason=isOver100?' title="Relação entre etapas no período (não é conversão sequencial de coorte)"':(rel?.reason?' title="'+esc(rel.reason)+'"':'');
           html+='<div class="cso-funnel-relation"'+relReason+'><span class="cso-relation-arrow">↓</span> Relação: <strong>'+ratioVal+'</strong></div>'
         }
       });
@@ -2289,9 +2310,20 @@ const HTML = `<!doctype html>
     }
     function csoFunnel(funnel,initialReconState,initialFunnelState){
       if(!funnel||typeof funnel!=="object")return"";
-      const officialStage=Array.isArray(funnel.stages)?funnel.stages.find(s=>s.key==="official_sales"):null;
+      const rawStages=Array.isArray(funnel.stages)?funnel.stages:[];
+      const officialStage=rawStages.find(s=>s.key==="official_sales"||s.id==="vendas_fechadas");
       const officialSalesCount=typeof officialStage?.count==="number"?officialStage.count:0;
-      const fState=initialFunnelState||(Array.isArray(funnel.stages)&&funnel.stages.some(s=>s.key!=="official_sales"&&typeof s.count==="number")?{status:"available",stages:funnel.stages,relations:funnel.relations}:{status:"loading"});
+      const hasVistaData=rawStages.some(s=>s.key!=="official_sales"&&s.id!=="vendas_fechadas"&&typeof s.count==="number");
+      let fState=initialFunnelState;
+      if(!fState){
+        if(hasVistaData){
+          const vistaStages=rawStages.filter(s=>s.key!=="official_sales"&&s.id!=="vendas_fechadas");
+          const allStages=[...vistaStages,officialStage||{key:"official_sales",label:"Vendas oficializadas",count:officialSalesCount,source:"pipeimob",availability:"available"}];
+          fState={status:"available",stages:allStages,relations:funnel.relations};
+        }else{
+          fState={status:"loading"};
+        }
+      }
       const stagesWrap='<div class="cso-funnel-stages-wrap" id="cso-funnel-stages-wrap" aria-live="polite">'+renderFunnelStagesInner(fState,officialSalesCount)+'</div>';
       const reconState=initialReconState||(funnel.reconciliation?{status:"available",data:normalizeReconciliationSummary(funnel.reconciliation)}:{status:"loading"});
       const reconHtml='<div class="cso-recon-panel" id="cso-recon-panel" aria-live="polite">'+renderReconciliationInner(reconState)+'</div>';
@@ -2331,7 +2363,8 @@ const HTML = `<!doctype html>
           if(wrap){wrap.innerHTML=renderFunnelStagesInner({status:"error"},officialCount);attachFunnelRetryHandler(start,end,officialCount)}
           return;
         }
-        const vistaStages=payload.stages;
+        const rawStages=Array.isArray(payload.stages)?payload.stages:[];
+        const vistaStages=rawStages.filter(s=>s.key!=="official_sales"&&s.id!=="vendas_fechadas"&&s.key!=="vendas_fechadas");
         const officialStage={
           key:"official_sales",
           label:"Vendas oficializadas",
@@ -2349,9 +2382,9 @@ const HTML = `<!doctype html>
           const fromSt=allStages[i],toSt=allStages[i+1];
           if(typeof fromSt.count==="number"&&typeof toSt.count==="number"){
             const ratio=fromSt.count>0?Math.round((toSt.count/fromSt.count)*1000)/10:0;
-            relations.push({from_stage:fromSt.key,to_stage:toSt.key,ratio_percentage:ratio,availability:"available",reason:null});
+            relations.push({from_stage:fromSt.key||fromSt.id,to_stage:toSt.key||toSt.id,ratio_percentage:ratio,availability:"available",reason:null});
           }else{
-            relations.push({from_stage:fromSt.key,to_stage:toSt.key,ratio_percentage:null,availability:"unavailable",reason:"Etapa anterior ou seguinte indisponível para cálculo de relação."});
+            relations.push({from_stage:fromSt.key||fromSt.id,to_stage:toSt.key||toSt.id,ratio_percentage:null,availability:"unavailable",reason:"Etapa anterior ou seguinte indisponível para cálculo de relação."});
           }
         }
         if(wrap){
@@ -2486,12 +2519,12 @@ export function normalizeReconciliationSummary(payload) {
     : (typeof s.strictly_matched_count === "number"
         ? s.strictly_matched_count
         : (typeof s.matched === "number" ? s.matched : (typeof s.matched_count === "number" ? s.matched_count : 0)));
-  const valueMismatches = typeof s.value_only_mismatches === "number"
+  const valueOnlyMismatches = typeof s.value_only_mismatches === "number"
     ? s.value_only_mismatches
     : (typeof s.value_mismatches === "number"
         ? s.value_mismatches
         : (typeof s.value_mismatches_count === "number" ? s.value_mismatches_count : 0));
-  const dateMismatches = typeof s.date_only_mismatches === "number"
+  const dateOnlyMismatches = typeof s.date_only_mismatches === "number"
     ? s.date_only_mismatches
     : (typeof s.date_mismatches === "number"
         ? s.date_mismatches
@@ -2501,7 +2534,7 @@ export function normalizeReconciliationSummary(payload) {
     ? s.divergent_linked_unique
     : (typeof s.divergent_matches === "number"
         ? s.divergent_matches
-        : (typeof s.divergent_matches_count === "number" ? s.divergent_matches_count : (valueMismatches + dateMismatches + valueAndDateMismatches)));
+        : (typeof s.divergent_matches_count === "number" ? s.divergent_matches_count : (valueOnlyMismatches + dateOnlyMismatches + valueAndDateMismatches)));
   const totalLinked = typeof s.total_linked_unique === "number"
     ? s.total_linked_unique
     : (typeof s.total_linked === "number"
@@ -2555,10 +2588,10 @@ export function normalizeReconciliationSummary(payload) {
     strictly_matched: matched,
     divergent_matches: divergentMatches,
     divergent_linked_unique: divergentMatches,
-    value_mismatches: valueMismatches,
-    value_only_mismatches: valueMismatches,
-    date_mismatches: dateMismatches,
-    date_only_mismatches: dateMismatches,
+    value_mismatches: valueOnlyMismatches,
+    value_only_mismatches: valueOnlyMismatches,
+    date_mismatches: dateOnlyMismatches,
+    date_only_mismatches: dateOnlyMismatches,
     value_and_date_mismatches: valueAndDateMismatches,
     vista_gains: vistaGains,
     total_vista_gains: vistaGains,

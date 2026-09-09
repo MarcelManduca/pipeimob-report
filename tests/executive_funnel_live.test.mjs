@@ -341,7 +341,7 @@ test("8b. Deduplicação de divergências: registro com divergência simultânea
 test("9. Categorias residuais explícitas estão presentes no payload e na interface", () => {
   assert.match(workerSource, /divergência de valor/i);
   assert.match(workerSource, /divergência de data/i);
-  assert.match(workerSource, /data de fechamento não auditável|data de ganho não auditável/i);
+  assert.match(workerSource, /data de fechamento não auditável|data de ganho não auditável|data individual de ganho não é auditável/i);
   assert.match(workerSource, /value_mismatches|divergent_matches/);
 });
 
@@ -533,5 +533,108 @@ test("15. Frontend utiliza exatamente os parâmetros canônicos esperados pelo b
     /const query\s*=\s*new URLSearchParams\(\{data_inicio_ccv:start,data_fim_ccv:end,date_tolerance_days:"7",refresh:"false",view:"summary"\}\)/
   );
 });
+
+
+// ---------------------------------------------------------------------------
+// 16. Impossibilidade de duplicação de Vendas oficializadas
+// ---------------------------------------------------------------------------
+test("16. Funil: renderiza exatamente uma ocorrência de 'Vendas oficializadas' mesmo se payload já contiver a etapa", () => {
+  assert.match(
+    workerSource,
+    /const vistaStages\s*=\s*rawStages\.filter\(\s*s\s*=>\s*s\.key\s*!==\s*"official_sales"\s*&&\s*s\.id\s*!==\s*"vendas_fechadas"\s*&&\s*s\.key\s*!==\s*"vendas_fechadas"\s*\)/
+  );
+  assert.match(
+    workerSource,
+    /const seenKeys\s*=\s*new Set\(\),\s*uniqueStages\s*=\s*\[\]/
+  );
+});
+
+
+// ---------------------------------------------------------------------------
+// 17. Bloco metodológico renderizado exatamente uma vez
+// ---------------------------------------------------------------------------
+test("17. Bloco metodológico: exibido exatamente uma vez ao final do funil comercial", () => {
+  const matches = workerSource.match(/class="cso-funnel-warnings"/g);
+  // Garante que o container de avisos do funil é único na estrutura HTML
+  assert.equal(matches.length, 1); // Exatamente 1 ocorrência no template HTML de csoFunnel
+});
+
+
+// ---------------------------------------------------------------------------
+// 18. Exatamente cinco conectores entre seis etapas
+// ---------------------------------------------------------------------------
+test("18. Conectores: exatamente 5 conectores entre as 6 etapas do funil", () => {
+  assert.match(
+    workerSource,
+    /for\s*\(\s*let i\s*=\s*0;\s*i\s*<\s*allStages\.length\s*-\s*1;\s*i\+\+\s*\)/
+  );
+  assert.match(
+    workerSource,
+    /if\s*\(\s*idx\s*<\s*stages\.length\s*-\s*1\s*\)/
+  );
+});
+
+
+// ---------------------------------------------------------------------------
+// 19. Nenhuma duplicação após Atualizar ou Retry
+// ---------------------------------------------------------------------------
+test("19. Resiliência: recarregamento ou retry não acumula etapas duplicadas", () => {
+  assert.match(
+    workerSource,
+    /if\s*\(\s*wrap\s*\)\s*wrap\.innerHTML\s*=\s*renderFunnelStagesInner/
+  );
+});
+
+
+// ---------------------------------------------------------------------------
+// 20. Identidade matemática com divergências de data (os 8 CCVs) e mensagem DataFinal nulo
+// ---------------------------------------------------------------------------
+test("20. Identidade matemática: 310 CCVs = 276 strictly matched + 13 value + 8 date + 13 unlinked (total 297 linked)", () => {
+  const payload = {
+    summary: {
+      official_sales: 310,
+      strictly_matched: 276,
+      value_only_mismatches: 13,
+      date_only_mismatches: 8,
+      value_and_date_mismatches: 0,
+      divergent_linked_unique: 21,
+      total_linked_unique: 297,
+      pipeimob_without_vista_gain: 13,
+      vista_without_pipeimob_contract: 23,
+      total_vista_gains: 320,
+      non_auditable_gain_dates: 320,
+    }
+  };
+
+  const norm = normalizeReconciliationSummary(payload);
+  assert.equal(norm.official_sales, 310);
+  assert.equal(norm.strictly_matched, 276);
+  assert.equal(norm.value_only_mismatches, 13);
+  assert.equal(norm.date_only_mismatches, 8);
+  assert.equal(norm.value_and_date_mismatches, 0);
+  assert.equal(norm.divergent_linked_unique, 21);
+  assert.equal(norm.total_linked_unique, 297);
+  assert.equal(norm.pipeimob_without_vista_gain, 13);
+  assert.equal(norm.total_vista_gains, 320);
+  assert.equal(norm.non_auditable_gain_dates, 320);
+
+  // Identidade 1: official_sales = strictly_matched + value_only + date_only + both + pipeimob_without_vista_gain
+  assert.equal(
+    norm.strictly_matched + norm.value_only_mismatches + norm.date_only_mismatches + norm.value_and_date_mismatches + norm.pipeimob_without_vista_gain,
+    norm.official_sales
+  );
+  assert.equal(norm.strictly_matched + norm.divergent_linked_unique + norm.pipeimob_without_vista_gain, 310);
+  assert.equal(norm.total_linked_unique + norm.pipeimob_without_vista_gain, 310);
+
+  // Identidade 2: total_vista_gains = total_linked_unique + vista_without_pipeimob_contract
+  assert.equal(norm.total_linked_unique + norm.vista_without_pipeimob_contract, 320);
+
+  // Mensagem aprimorada para DataFinal nulo
+  assert.match(
+    workerSource,
+    /ganhos retornados pelo filtro de período do Vista não possuem DataFinal preenchida; a data individual de ganho não é auditável/
+  );
+});
+
 
 
