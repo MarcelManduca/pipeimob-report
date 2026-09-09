@@ -587,16 +587,17 @@ test("19. Resiliência: recarregamento ou retry não acumula etapas duplicadas",
 
 
 // ---------------------------------------------------------------------------
-// 20. Identidade matemática com divergências de data (os 8 CCVs) e mensagem DataFinal nulo
+// 20. Identidade matemática com linked_with_unresolved_gain_date (os 8 CCVs) e mensagem DataFinal nulo
 // ---------------------------------------------------------------------------
-test("20. Identidade matemática: 310 CCVs = 276 strictly matched + 13 value + 8 date + 13 unlinked (total 297 linked)", () => {
+test("20. Identidade matemática: 310 CCVs = 276 strictly matched + 13 value + 0 date + 8 unresolved date + 13 unlinked (total 297 linked)", () => {
   const payload = {
     summary: {
       official_sales: 310,
       strictly_matched: 276,
       value_only_mismatches: 13,
-      date_only_mismatches: 8,
+      date_only_mismatches: 0,
       value_and_date_mismatches: 0,
+      linked_with_unresolved_gain_date: 8,
       divergent_linked_unique: 21,
       total_linked_unique: 297,
       pipeimob_without_vista_gain: 13,
@@ -610,17 +611,18 @@ test("20. Identidade matemática: 310 CCVs = 276 strictly matched + 13 value + 8
   assert.equal(norm.official_sales, 310);
   assert.equal(norm.strictly_matched, 276);
   assert.equal(norm.value_only_mismatches, 13);
-  assert.equal(norm.date_only_mismatches, 8);
+  assert.equal(norm.date_only_mismatches, 0);
   assert.equal(norm.value_and_date_mismatches, 0);
+  assert.equal(norm.linked_with_unresolved_gain_date, 8);
   assert.equal(norm.divergent_linked_unique, 21);
   assert.equal(norm.total_linked_unique, 297);
   assert.equal(norm.pipeimob_without_vista_gain, 13);
   assert.equal(norm.total_vista_gains, 320);
   assert.equal(norm.non_auditable_gain_dates, 320);
 
-  // Identidade 1: official_sales = strictly_matched + value_only + date_only + both + pipeimob_without_vista_gain
+  // Identidade 1: official_sales = strictly_matched + value_only + date_only + both + unresolved_date + pipeimob_without_vista_gain
   assert.equal(
-    norm.strictly_matched + norm.value_only_mismatches + norm.date_only_mismatches + norm.value_and_date_mismatches + norm.pipeimob_without_vista_gain,
+    norm.strictly_matched + norm.value_only_mismatches + norm.date_only_mismatches + norm.value_and_date_mismatches + norm.linked_with_unresolved_gain_date + norm.pipeimob_without_vista_gain,
     norm.official_sales
   );
   assert.equal(norm.strictly_matched + norm.divergent_linked_unique + norm.pipeimob_without_vista_gain, 310);
@@ -635,6 +637,64 @@ test("20. Identidade matemática: 310 CCVs = 276 strictly matched + 13 value + 8
     /ganhos retornados pelo filtro de período do Vista não possuem DataFinal preenchida; a data individual de ganho não é auditável/
   );
 });
+
+// 21. Alerta de DataFinal nula não utiliza total_vista_gains como fallback incorreto
+// ---------------------------------------------------------------------------
+test("21. Alerta de auditoria: utiliza estritamente non_auditable_gain_dates / unresolved_gain_dates e nunca total_vista_gains como fallback", () => {
+  // Payload com 0 non_auditable_gain_dates e 320 total_vista_gains
+  const payloadZeroAuditable = {
+    summary: {
+      official_sales: 310,
+      strictly_matched: 276,
+      total_linked_unique: 297,
+      total_vista_gains: 320,
+      non_auditable_gain_dates: 0,
+      unresolved_gain_dates: 0,
+    }
+  };
+
+  const normZero = normalizeReconciliationSummary(payloadZeroAuditable);
+  assert.equal(normZero.non_auditable_gain_dates, 0);
+
+  // Payload sem campo de non_auditable_gain_dates deve ser 0 (nunca 320!)
+  const payloadMissing = {
+    summary: {
+      official_sales: 310,
+      strictly_matched: 276,
+      total_linked_unique: 297,
+      total_vista_gains: 320,
+    }
+  };
+
+  const normMissing = normalizeReconciliationSummary(payloadMissing);
+  assert.equal(normMissing.non_auditable_gain_dates, 0);
+});
+
+// 22. Classificação: DataFinal nula gera linked_with_unresolved_gain_date e nunca date_only_mismatches
+// ---------------------------------------------------------------------------
+test("22. Regra de data: DataFinal ausente/inválida gera linked_with_unresolved_gain_date (delay_days=null), enquanto data válida fora da tolerância gera date_only_mismatches", () => {
+  const norm = normalizeReconciliationSummary({
+    summary: {
+      official_sales: 2,
+      strictly_matched: 0,
+      value_only_mismatches: 0,
+      date_only_mismatches: 1, // 1 deal with valid date > 7 days
+      linked_with_unresolved_gain_date: 1, // 1 deal with null DataFinal
+      divergent_linked_unique: 2,
+      total_linked_unique: 2,
+      pipeimob_without_vista_gain: 0,
+      vista_without_pipeimob_contract: 0,
+      total_vista_gains: 2,
+      non_auditable_gain_dates: 1,
+    }
+  });
+
+  assert.equal(norm.date_only_mismatches, 1);
+  assert.equal(norm.linked_with_unresolved_gain_date, 1);
+  assert.equal(norm.total_linked_unique, 2);
+  assert.equal(norm.strictly_matched + norm.date_only_mismatches + norm.linked_with_unresolved_gain_date, 2);
+});
+
 
 
 

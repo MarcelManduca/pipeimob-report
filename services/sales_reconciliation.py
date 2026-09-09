@@ -11,6 +11,7 @@ PIPE_WITHOUT_GAIN = "PIPEIMOB_SEM_GANHO_VISTA"
 VISTA_WITHOUT_CONTRACT = "VISTA_SEM_CONTRATO_PIPEIMOB"
 VALUE_MISMATCH = "DIVERGENCIA_VALOR"
 DATE_MISMATCH = "DIVERGENCIA_DATA"
+LINKED_UNRESOLVED_GAIN_DATE = "VINCULADO_COM_DATA_GANHO_NAO_RESOLVIDA"
 NO_LINK = "SEM_VINCULO_AUTOMATICO"
 SOURCE_DATA_INCOMPLETE = "DADO_FONTE_INCOMPLETO"
 
@@ -101,6 +102,8 @@ def reconcile_sales(
             issues.append(VALUE_MISMATCH)
         if delay_days is not None and abs(delay_days) > date_tolerance_days:
             issues.append(DATE_MISMATCH)
+        elif selected["gain_date"] is None:
+            issues.append(LINKED_UNRESOLVED_GAIN_DATE)
 
         fiscal_broker = sale["fiscal_broker"]
         commercial_broker = selected["commercial_broker_name"]
@@ -111,9 +114,14 @@ def reconcile_sales(
             )
 
         team_resolution = _resolve_api_team(sale, selected)
+        primary_status = (
+            issues[0]
+            if issues
+            else MATCHED
+        )
         items.append(
             {
-                **_base_pipe_item(sale, issues[0] if issues else MATCHED),
+                **_base_pipe_item(sale, primary_status),
                 "issues": issues,
                 "vista_deal_id": selected["deal_id"],
                 "vista_gain_date": (
@@ -174,7 +182,6 @@ def reconcile_sales(
             )
 
     status_counts = Counter(item["status"] for item in items)
-    issue_counts = Counter(issue for item in items for issue in item["issues"])
     official_vgv = sum(
         (
             sale["official_value"]
@@ -204,23 +211,46 @@ def reconcile_sales(
     linked_items = [
         item for item in items if item.get("pipeimob_transaction_id") and item.get("vista_deal_id")
     ]
-    strictly_matched_count = sum(1 for item in linked_items if not item.get("issues"))
+    strictly_matched_count = sum(
+        1
+        for item in linked_items
+        if item.get("vista_gain_date") is not None
+        and item.get("delay_days") is not None
+        and abs(item["delay_days"]) <= date_tolerance_days
+        and VALUE_MISMATCH not in item.get("issues", [])
+    )
     value_only_count = sum(
         1
         for item in linked_items
-        if VALUE_MISMATCH in item.get("issues", []) and DATE_MISMATCH not in item.get("issues", [])
+        if VALUE_MISMATCH in item.get("issues", [])
+        and DATE_MISMATCH not in item.get("issues", [])
     )
     date_only_count = sum(
         1
         for item in linked_items
-        if DATE_MISMATCH in item.get("issues", []) and VALUE_MISMATCH not in item.get("issues", [])
+        if DATE_MISMATCH in item.get("issues", [])
+        and VALUE_MISMATCH not in item.get("issues", [])
+        and item.get("delay_days") is not None
     )
     value_and_date_count = sum(
         1
         for item in linked_items
-        if VALUE_MISMATCH in item.get("issues", []) and DATE_MISMATCH in item.get("issues", [])
+        if VALUE_MISMATCH in item.get("issues", [])
+        and DATE_MISMATCH in item.get("issues", [])
+        and item.get("delay_days") is not None
     )
-    divergent_linked_unique = sum(1 for item in linked_items if item.get("issues"))
+    linked_unresolved_gain_date_count = sum(
+        1
+        for item in linked_items
+        if item.get("vista_gain_date") is None
+        and VALUE_MISMATCH not in item.get("issues", [])
+    )
+    divergent_linked_unique = (
+        value_only_count
+        + date_only_count
+        + value_and_date_count
+        + linked_unresolved_gain_date_count
+    )
     total_linked_unique = len(linked_items)
 
     total_vista_gains = len(gains)
@@ -246,6 +276,7 @@ def reconcile_sales(
             "date_mismatches": date_only_count,
             "date_only_mismatches": date_only_count,
             "value_and_date_mismatches": value_and_date_count,
+            "linked_with_unresolved_gain_date": linked_unresolved_gain_date_count,
             "pipeimob_without_vista_gain": status_counts[PIPE_WITHOUT_GAIN],
             "ccv_without_vista_gain": status_counts[PIPE_WITHOUT_GAIN],
             "vista_without_pipeimob_contract": status_counts[VISTA_WITHOUT_CONTRACT],

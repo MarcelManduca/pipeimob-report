@@ -2202,6 +2202,7 @@ const HTML = `<!doctype html>
           date_mismatches:0,
           date_only_mismatches:0,
           value_and_date_mismatches:0,
+          linked_with_unresolved_gain_date:0,
           vista_gains:null,
           total_vista_gains:null,
           vista_without_ccv:null,
@@ -2216,13 +2217,14 @@ const HTML = `<!doctype html>
       const valueOnlyMismatches=typeof s.value_only_mismatches==="number"?s.value_only_mismatches:(typeof s.value_mismatches==="number"?s.value_mismatches:(typeof s.value_mismatches_count==="number"?s.value_mismatches_count:0));
       const dateOnlyMismatches=typeof s.date_only_mismatches==="number"?s.date_only_mismatches:(typeof s.date_mismatches==="number"?s.date_mismatches:(typeof s.date_mismatches_count==="number"?s.date_mismatches_count:0));
       const valueAndDateMismatches=typeof s.value_and_date_mismatches==="number"?s.value_and_date_mismatches:0;
-      const divergentMatches=typeof s.divergent_linked_unique==="number"?s.divergent_linked_unique:(typeof s.divergent_matches==="number"?s.divergent_matches:(typeof s.divergent_matches_count==="number"?s.divergent_matches_count:(valueOnlyMismatches+dateOnlyMismatches+valueAndDateMismatches)));
+      const linkedUnresolvedGainDate=typeof s.linked_with_unresolved_gain_date==="number"?s.linked_with_unresolved_gain_date:(typeof s.linked_with_unresolved_gain_date_count==="number"?s.linked_with_unresolved_gain_date_count:0);
+      const divergentMatches=typeof s.divergent_linked_unique==="number"?s.divergent_linked_unique:(typeof s.divergent_matches==="number"?s.divergent_matches:(typeof s.divergent_matches_count==="number"?s.divergent_matches_count:(valueOnlyMismatches+dateOnlyMismatches+valueAndDateMismatches+linkedUnresolvedGainDate)));
       const totalLinked=typeof s.total_linked_unique==="number"?s.total_linked_unique:(typeof s.total_linked==="number"?s.total_linked:(typeof s.total_linked_count==="number"?s.total_linked_count:(matched+divergentMatches)));
       const vistaWithoutCcv=typeof s.vista_without_pipeimob_contract==="number"?s.vista_without_pipeimob_contract:(typeof s.vista_without_pipeimob_contract_count==="number"?s.vista_without_pipeimob_contract_count:(typeof s.vista_without_ccv==="number"?s.vista_without_ccv:(typeof s.vista_without_ccv_count==="number"?s.vista_without_ccv_count:0)));
       const ccvWithoutVista=typeof s.pipeimob_without_vista_gain==="number"?s.pipeimob_without_vista_gain:(typeof s.pipeimob_without_vista_gain_count==="number"?s.pipeimob_without_vista_gain_count:(typeof s.ccv_without_vista==="number"?s.ccv_without_vista:(typeof s.ccv_without_vista_count==="number"?s.ccv_without_vista_count:0)));
       const officialSales=typeof s.official_sales==="number"?s.official_sales:(typeof s.pipeimob_sales_count==="number"?s.pipeimob_sales_count:(typeof s.official_sales_count==="number"?s.official_sales_count:0));
       const vistaGains=typeof s.total_vista_gains==="number"?s.total_vista_gains:(typeof s.total_vista_gains_count==="number"?s.total_vista_gains_count:(typeof s.vista_gains==="number"?s.vista_gains:(typeof s.vista_gain_count==="number"?s.vista_gain_count:(totalLinked+vistaWithoutCcv))));
-      const nonAuditable=typeof s.unresolved_gain_dates==="number"?s.unresolved_gain_dates:(typeof s.non_auditable_gain_dates==="number"?s.non_auditable_gain_dates:(typeof s.non_auditable_gain_dates_count==="number"?s.non_auditable_gain_dates_count:0));
+      const nonAuditable=typeof s.non_auditable_gain_dates==="number"?s.non_auditable_gain_dates:(typeof s.unresolved_gain_dates==="number"?s.unresolved_gain_dates:(typeof s.non_auditable_gain_dates_count==="number"?s.non_auditable_gain_dates_count:0));
       const unresolvedTeams=typeof s.unresolved_teams==="number"?s.unresolved_teams:(typeof s.unresolved_teams_count==="number"?s.unresolved_teams_count:0);
       return{
         availability:"available",
@@ -2238,6 +2240,7 @@ const HTML = `<!doctype html>
         date_mismatches:dateOnlyMismatches,
         date_only_mismatches:dateOnlyMismatches,
         value_and_date_mismatches:valueAndDateMismatches,
+        linked_with_unresolved_gain_date:linkedUnresolvedGainDate,
         vista_gains:vistaGains,
         total_vista_gains:vistaGains,
         vista_without_ccv:vistaWithoutCcv,
@@ -2266,6 +2269,7 @@ const HTML = `<!doctype html>
         if((d.value_only_mismatches||d.value_mismatches||0)>0)divText.push(number(d.value_only_mismatches||d.value_mismatches)+' divergência de valor');
         if((d.date_only_mismatches||d.date_mismatches||0)>0)divText.push(number(d.date_only_mismatches||d.date_mismatches)+' divergência de data');
         if((d.value_and_date_mismatches||0)>0)divText.push(number(d.value_and_date_mismatches)+' divergência de valor e data');
+        if((d.linked_with_unresolved_gain_date||0)>0)divText.push(number(d.linked_with_unresolved_gain_date)+' data de ganho não auditável');
         const divSuffix=divText.length>0?' ('+divText.join(', ')+')':'';
         badges+='<div class="cso-badge-neutral" style="margin-top:6px;width:100%;justify-content:center;font-size:11px;background:#eef0f8;color:var(--forest);padding:4px 8px;border-radius:6px;display:flex;align-items:center;" title="Identidade: '+number(d.official_sales)+' oficializadas = '+number(d.total_linked)+' vinculados + '+number(d.ccv_without_vista)+' sem ganho | '+number(d.vista_gains)+' ganhos = '+number(d.total_linked)+' vinculados + '+number(d.vista_without_ccv)+' sem CCV">✓ '+number(d.total_linked)+' vinculados: '+number(d.strictly_matched||d.matched)+' conciliados'+divSuffix+'</div>'
       }
@@ -2501,9 +2505,15 @@ export function normalizeReconciliationSummary(payload) {
       matched: null,
       strictly_matched: null,
       total_linked: null,
+      total_linked_unique: null,
       divergent_matches: 0,
+      divergent_linked_unique: 0,
       value_mismatches: 0,
+      value_only_mismatches: 0,
       date_mismatches: 0,
+      date_only_mismatches: 0,
+      value_and_date_mismatches: 0,
+      linked_with_unresolved_gain_date: 0,
       vista_gains: null,
       total_vista_gains: null,
       vista_without_ccv: null,
@@ -2530,11 +2540,14 @@ export function normalizeReconciliationSummary(payload) {
         ? s.date_mismatches
         : (typeof s.date_mismatches_count === "number" ? s.date_mismatches_count : 0));
   const valueAndDateMismatches = typeof s.value_and_date_mismatches === "number" ? s.value_and_date_mismatches : 0;
+  const linkedUnresolvedGainDate = typeof s.linked_with_unresolved_gain_date === "number"
+    ? s.linked_with_unresolved_gain_date
+    : (typeof s.linked_with_unresolved_gain_date_count === "number" ? s.linked_with_unresolved_gain_date_count : 0);
   const divergentMatches = typeof s.divergent_linked_unique === "number"
     ? s.divergent_linked_unique
     : (typeof s.divergent_matches === "number"
         ? s.divergent_matches
-        : (typeof s.divergent_matches_count === "number" ? s.divergent_matches_count : (valueOnlyMismatches + dateOnlyMismatches + valueAndDateMismatches)));
+        : (typeof s.divergent_matches_count === "number" ? s.divergent_matches_count : (valueOnlyMismatches + dateOnlyMismatches + valueAndDateMismatches + linkedUnresolvedGainDate)));
   const totalLinked = typeof s.total_linked_unique === "number"
     ? s.total_linked_unique
     : (typeof s.total_linked === "number"
@@ -2568,16 +2581,12 @@ export function normalizeReconciliationSummary(payload) {
             : (typeof s.vista_gain_count === "number"
                 ? s.vista_gain_count
                 : (totalLinked + vistaWithoutCcv))));
-  const nonAuditable = typeof s.unresolved_gain_dates === "number"
-    ? s.unresolved_gain_dates
-    : (typeof s.non_auditable_gain_dates === "number"
-        ? s.non_auditable_gain_dates
-        : (typeof s.non_auditable_gain_dates_count === "number"
-            ? s.non_auditable_gain_dates_count : 0));
+  const nonAuditable = typeof s.non_auditable_gain_dates === "number"
+    ? s.non_auditable_gain_dates
+    : (typeof s.unresolved_gain_dates === "number" ? s.unresolved_gain_dates : (typeof s.non_auditable_gain_dates_count === "number" ? s.non_auditable_gain_dates_count : 0));
   const unresolvedTeams = typeof s.unresolved_teams === "number"
     ? s.unresolved_teams
-    : (typeof s.unresolved_teams_count === "number"
-        ? s.unresolved_teams_count : 0);
+    : (typeof s.unresolved_teams_count === "number" ? s.unresolved_teams_count : 0);
 
   return {
     availability: "available",
@@ -2593,6 +2602,7 @@ export function normalizeReconciliationSummary(payload) {
     date_mismatches: dateOnlyMismatches,
     date_only_mismatches: dateOnlyMismatches,
     value_and_date_mismatches: valueAndDateMismatches,
+    linked_with_unresolved_gain_date: linkedUnresolvedGainDate,
     vista_gains: vistaGains,
     total_vista_gains: vistaGains,
     vista_without_ccv: vistaWithoutCcv,
