@@ -254,7 +254,7 @@ test("8. Identidades matemáticas da reconciliação: official_sales (310) = str
       strictly_matched_count: 276,
       fully_audited_match: 276,
       value_matched_date_unresolved: 0,
-      value_mismatch_date_unresolved: 18,
+      value_mismatch_date_unresolved: 0,
       linked_with_unresolved_gain_date: 0,
       divergent_matches_count: 21,
       divergent_linked_unique: 21,
@@ -320,7 +320,7 @@ test("8b. Deduplicação de divergências: registro com divergência simultânea
       total_linked_unique: 4,
       fully_audited_match: 1,
       value_matched_date_unresolved: 0,
-      value_mismatch_date_unresolved: 1,
+      value_mismatch_date_unresolved: 0,
       linked_with_unresolved_gain_date: 0,
       value_only_mismatches: 1,
       date_only_mismatches: 1,
@@ -353,7 +353,7 @@ test("8b. Deduplicação de divergências: registro com divergência simultânea
 // 9. Categorias residuais explícitas
 // ---------------------------------------------------------------------------
 test("9. Categorias residuais explícitas estão presentes no payload e na interface", () => {
-  assert.match(workerSource, /divergência (comprovada )?de valor/i);
+  assert.match(workerSource, /divergência (confirmada|comprovada)/i);
   assert.match(workerSource, /validação temporal indisponível|data de fechamento não auditável|data de ganho não auditável|data individual de ganho não é auditável/i);
   assert.match(workerSource, /value_mismatches|divergent_matches/);
 });
@@ -606,17 +606,20 @@ test("20. Identidade matemática: 310 CCVs = 284 value matched (unresolved date)
   const payload = {
     summary: {
       official_sales: 310,
+      total_linked_unique: 297,
       fully_audited_match: 0,
       strictly_matched: 0,
       value_matched_date_unresolved: 284,
       value_mismatch_date_unresolved: 13,
+      value_only_mismatches: 0,
+      date_only_mismatches: 0,
+      value_and_date_mismatches: 0,
       confirmed_value_mismatches: 13,
       confirmed_date_mismatches: 0,
       confirmed_value_and_date_mismatches: 0,
       confirmed_divergent_linked_unique: 13,
       divergent_linked_unique: 13,
       linked_with_unresolved_gain_date: 297,
-      total_linked_unique: 297,
       pipeimob_without_vista_gain: 13,
       vista_without_pipeimob_contract: 23,
       total_vista_gains: 320,
@@ -699,7 +702,9 @@ test("22. Regra de data: DataFinal ausente/inválida gera linked_with_unresolved
       fully_audited_match: 0,
       value_matched_date_unresolved: 0,
       value_mismatch_date_unresolved: 0,
+      value_only_mismatches: 0,
       date_only_mismatches: 1, // 1 deal with valid date > 7 days
+      value_and_date_mismatches: 0,
       confirmed_date_mismatches: 1,
       linked_with_unresolved_gain_date: 1, // 1 deal with null DataFinal
       pipeimob_without_vista_gain: 0,
@@ -713,7 +718,7 @@ test("22. Regra de data: DataFinal ausente/inválida gera linked_with_unresolved
   assert.equal(norm.confirmed_date_mismatches, 1);
   assert.equal(norm.linked_with_unresolved_gain_date, 1);
   assert.equal(norm.total_linked_unique, 2);
-  assert.equal(norm.audit_partition_availability, "inconsistent"); // 0 + 0 + 0 + 1 + 0 = 1 != 2
+  assert.equal(norm.audit_partition_availability, "inconsistent"); // 0 + 0 + 0 + 0 + 1 + 0 = 1 != 2
 });
 
 // 23. Payload legado com strictly_matched=276 e DataFinal não auditável
@@ -753,6 +758,9 @@ test("24. Payload nativo: integralmente não auditável (fully_audited_match=0, 
       fully_audited_match: 0,
       value_matched_date_unresolved: 284,
       value_mismatch_date_unresolved: 13,
+      value_only_mismatches: 0,
+      date_only_mismatches: 0,
+      value_and_date_mismatches: 0,
       linked_with_unresolved_gain_date: 297,
       confirmed_value_mismatches: 13,
       confirmed_date_mismatches: 0,
@@ -772,8 +780,8 @@ test("24. Payload nativo: integralmente não auditável (fully_audited_match=0, 
   assert.equal(norm.value_mismatch_date_unresolved, 13);
   assert.equal(norm.linked_with_unresolved_gain_date, 297);
   assert.equal(norm.confirmed_divergent_linked_unique, 13);
-  // Closure: 0 + 284 + 13 + 0 + 0 = 297
-  assert.equal(norm.fully_audited_match + norm.value_matched_date_unresolved + norm.value_mismatch_date_unresolved + norm.confirmed_date_mismatches + norm.confirmed_value_and_date_mismatches, norm.total_linked_unique);
+  // Closure: 0 + 284 + 13 + 0 + 0 + 0 = 297
+  assert.equal(norm.fully_audited_match + norm.value_matched_date_unresolved + norm.value_mismatch_date_unresolved + norm.value_only_mismatches + norm.date_only_mismatches + norm.value_and_date_mismatches, norm.total_linked_unique);
 });
 
 // 25. Payload nativo parcialmente auditável
@@ -786,6 +794,9 @@ test("25. Payload nativo: parcialmente auditável com mensagem proporcional de d
       fully_audited_match: 40,
       value_matched_date_unresolved: 30,
       value_mismatch_date_unresolved: 10,
+      value_only_mismatches: 0,
+      date_only_mismatches: 10,
+      value_and_date_mismatches: 0,
       confirmed_date_mismatches: 10,
       confirmed_value_and_date_mismatches: 0,
       confirmed_divergent_linked_unique: 20,
@@ -802,8 +813,8 @@ test("25. Payload nativo: parcialmente auditável com mensagem proporcional de d
   assert.equal(norm.fully_audited_match, 40);
   assert.equal(norm.linked_with_unresolved_gain_date, 40);
   assert.equal(norm.total_linked_unique, 90);
-  // Closure: 40 + 30 + 10 + 10 + 0 = 90
-  assert.equal(norm.fully_audited_match + norm.value_matched_date_unresolved + norm.value_mismatch_date_unresolved + norm.confirmed_date_mismatches + norm.confirmed_value_and_date_mismatches, 90);
+  // Closure: 40 + 30 + 10 + 0 + 10 + 0 = 90
+  assert.equal(norm.fully_audited_match + norm.value_matched_date_unresolved + norm.value_mismatch_date_unresolved + norm.value_only_mismatches + norm.date_only_mismatches + norm.value_and_date_mismatches, 90);
 });
 
 // 26. Payload nativo com zero divergências e preservação segura de 0 sem fallback
@@ -816,6 +827,9 @@ test("26. Payload nativo: zero divergências preserva estritamente 0 e não subs
       fully_audited_match: 50,
       value_matched_date_unresolved: 0,
       value_mismatch_date_unresolved: 0,
+      value_only_mismatches: 0,
+      date_only_mismatches: 0,
+      value_and_date_mismatches: 0,
       confirmed_value_mismatches: 0,
       confirmed_date_mismatches: 0,
       confirmed_value_and_date_mismatches: 0,
@@ -847,6 +861,9 @@ test("27. Partição inconsistente: detecta que a soma dos subconjuntos difere d
       fully_audited_match: 20,
       value_matched_date_unresolved: 30,
       value_mismatch_date_unresolved: 10,
+      value_only_mismatches: 0,
+      date_only_mismatches: 0,
+      value_and_date_mismatches: 0,
       confirmed_date_mismatches: 0,
       confirmed_value_and_date_mismatches: 0,
       linked_with_unresolved_gain_date: 40,
@@ -859,6 +876,158 @@ test("27. Partição inconsistente: detecta que a soma dos subconjuntos difere d
 
   const norm = normalizeReconciliationSummary(inconsistentPayload);
   assert.equal(norm.audit_partition_availability, "inconsistent");
+});
+
+// 28. Cenário A: Valor divergente com data válida
+// ---------------------------------------------------------------------------
+test("28. Cenário A: Valor divergente com data válida fecha partição (total=1, value_only=1)", () => {
+  const norm = normalizeReconciliationSummary({
+    summary: {
+      official_sales: 1,
+      total_linked_unique: 1,
+      fully_audited_match: 0,
+      value_matched_date_unresolved: 0,
+      value_mismatch_date_unresolved: 0,
+      value_only_mismatches: 1,
+      date_only_mismatches: 0,
+      value_and_date_mismatches: 0,
+      linked_with_unresolved_gain_date: 0,
+      pipeimob_without_vista_gain: 0,
+      vista_without_pipeimob_contract: 0,
+      total_vista_gains: 1,
+    }
+  });
+  assert.equal(norm.audit_partition_availability, "available");
+  assert.equal(norm.value_only_mismatches, 1);
+  assert.equal(norm.confirmed_value_mismatches, 1);
+  assert.equal(norm.confirmed_date_mismatches, 0);
+  assert.equal(norm.confirmed_divergent_linked_unique, 1);
+});
+
+// 29. Cenário B: Data divergente com valor igual
+// ---------------------------------------------------------------------------
+test("29. Cenário B: Data divergente com valor igual fecha partição (total=1, date_only=1)", () => {
+  const norm = normalizeReconciliationSummary({
+    summary: {
+      official_sales: 1,
+      total_linked_unique: 1,
+      fully_audited_match: 0,
+      value_matched_date_unresolved: 0,
+      value_mismatch_date_unresolved: 0,
+      value_only_mismatches: 0,
+      date_only_mismatches: 1,
+      value_and_date_mismatches: 0,
+      linked_with_unresolved_gain_date: 0,
+      pipeimob_without_vista_gain: 0,
+      vista_without_pipeimob_contract: 0,
+      total_vista_gains: 1,
+    }
+  });
+  assert.equal(norm.audit_partition_availability, "available");
+  assert.equal(norm.date_only_mismatches, 1);
+  assert.equal(norm.confirmed_value_mismatches, 0);
+  assert.equal(norm.confirmed_date_mismatches, 1);
+  assert.equal(norm.confirmed_divergent_linked_unique, 1);
+});
+
+// 30. Cenário C: Valor e data divergentes
+// ---------------------------------------------------------------------------
+test("30. Cenário C: Valor e data divergentes entra nos dois totais mas conta 1 em divergentes únicos", () => {
+  const norm = normalizeReconciliationSummary({
+    summary: {
+      official_sales: 1,
+      total_linked_unique: 1,
+      fully_audited_match: 0,
+      value_matched_date_unresolved: 0,
+      value_mismatch_date_unresolved: 0,
+      value_only_mismatches: 0,
+      date_only_mismatches: 0,
+      value_and_date_mismatches: 1,
+      linked_with_unresolved_gain_date: 0,
+      pipeimob_without_vista_gain: 0,
+      vista_without_pipeimob_contract: 0,
+      total_vista_gains: 1,
+    }
+  });
+  assert.equal(norm.audit_partition_availability, "available");
+  assert.equal(norm.value_and_date_mismatches, 1);
+  assert.equal(norm.confirmed_value_mismatches, 1, "value_and_date must count in confirmedValueMismatches");
+  assert.equal(norm.confirmed_date_mismatches, 1, "value_and_date must count in confirmedDateMismatches");
+  assert.equal(norm.confirmed_divergent_linked_unique, 1, "value_and_date must count only once in confirmedDivergent");
+});
+
+// 31. Cenário D: Valor divergente e DataFinal nulo
+// ---------------------------------------------------------------------------
+test("31. Cenário D: Valor divergente e DataFinal nulo fecha partição e conta em confirmedDivergent", () => {
+  const norm = normalizeReconciliationSummary({
+    summary: {
+      official_sales: 1,
+      total_linked_unique: 1,
+      fully_audited_match: 0,
+      value_matched_date_unresolved: 0,
+      value_mismatch_date_unresolved: 1,
+      value_only_mismatches: 0,
+      date_only_mismatches: 0,
+      value_and_date_mismatches: 0,
+      linked_with_unresolved_gain_date: 1,
+      pipeimob_without_vista_gain: 0,
+      vista_without_pipeimob_contract: 0,
+      total_vista_gains: 1,
+      non_auditable_gain_dates: 1,
+    }
+  });
+  assert.equal(norm.audit_partition_availability, "available");
+  assert.equal(norm.value_mismatch_date_unresolved, 1);
+  assert.equal(norm.confirmed_value_mismatches, 1);
+  assert.equal(norm.confirmed_date_mismatches, 0);
+  assert.equal(norm.confirmed_divergent_linked_unique, 1);
+});
+
+// 32. Cenário E: Mistura de todas as 6 categorias
+// ---------------------------------------------------------------------------
+test("32. Cenário E: Mistura de todas as 6 categorias sem dupla contagem (total=50)", () => {
+  // 10 fully + 20 val_match_unres + 5 val_mism_unres + 8 val_only + 3 date_only + 4 val_and_date = 50
+  const norm = normalizeReconciliationSummary({
+    summary: {
+      official_sales: 50,
+      total_linked_unique: 50,
+      fully_audited_match: 10,
+      value_matched_date_unresolved: 20,
+      value_mismatch_date_unresolved: 5,
+      value_only_mismatches: 8,
+      date_only_mismatches: 3,
+      value_and_date_mismatches: 4,
+      linked_with_unresolved_gain_date: 25, // 20 + 5
+      pipeimob_without_vista_gain: 0,
+      vista_without_pipeimob_contract: 0,
+      total_vista_gains: 50,
+      non_auditable_gain_dates: 25,
+    }
+  });
+  assert.equal(norm.audit_partition_availability, "available");
+  assert.equal(norm.fully_audited_match, 10);
+  assert.equal(norm.value_matched_date_unresolved, 20);
+  assert.equal(norm.value_mismatch_date_unresolved, 5);
+  assert.equal(norm.value_only_mismatches, 8);
+  assert.equal(norm.date_only_mismatches, 3);
+  assert.equal(norm.value_and_date_mismatches, 4);
+
+  // Totais agregados:
+  // confirmedValueMismatches = 8 (val_only) + 5 (val_mism_unres) + 4 (val_and_date) = 17
+  assert.equal(norm.confirmed_value_mismatches, 17);
+  // confirmedDateMismatches = 3 (date_only) + 4 (val_and_date) = 7
+  assert.equal(norm.confirmed_date_mismatches, 7);
+  // confirmedDivergent = 8 + 5 + 3 + 4 = 20
+  assert.equal(norm.confirmed_divergent_linked_unique, 20);
+
+  // Exact partition sum check
+  const sum = norm.fully_audited_match +
+    norm.value_matched_date_unresolved +
+    norm.value_mismatch_date_unresolved +
+    norm.value_only_mismatches +
+    norm.date_only_mismatches +
+    norm.value_and_date_mismatches;
+  assert.equal(sum, 50);
 });
 
 

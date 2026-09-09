@@ -2225,22 +2225,56 @@ const HTML = `<!doctype html>
         typeof s.fully_audited_match === "number" &&
         typeof s.value_matched_date_unresolved === "number" &&
         typeof s.value_mismatch_date_unresolved === "number" &&
-        typeof s.linked_with_unresolved_gain_date === "number";
+        typeof s.linked_with_unresolved_gain_date === "number" &&
+        typeof s.value_only_mismatches === "number" &&
+        typeof s.date_only_mismatches === "number" &&
+        typeof s.value_and_date_mismatches === "number";
 
-      let auditPartitionAvailability, fullyAuditedMatch=null, valueMatchedDateUnresolved=null, valueMismatchDateUnresolved=null, linkedUnresolvedGainDate=null, confirmedDivergent=null, confirmedValueMismatches=null, confirmedDateMismatches=null, confirmedValueAndDateMismatches=null;
+      let auditPartitionAvailability,
+        fullyAuditedMatch = null,
+        valueMatchedDateUnresolved = null,
+        valueMismatchDateUnresolved = null,
+        valueOnlyMismatches = null,
+        dateOnlyMismatches = null,
+        valueAndDateMismatches = null,
+        linkedUnresolvedGainDate = null,
+        confirmedDivergent = null,
+        confirmedValueMismatches = null,
+        confirmedDateMismatches = null;
 
       if(hasNativeAuditPartition){
         fullyAuditedMatch = s.fully_audited_match;
         valueMatchedDateUnresolved = s.value_matched_date_unresolved;
         valueMismatchDateUnresolved = s.value_mismatch_date_unresolved;
+        valueOnlyMismatches = s.value_only_mismatches;
+        dateOnlyMismatches = s.date_only_mismatches;
+        valueAndDateMismatches = s.value_and_date_mismatches;
         linkedUnresolvedGainDate = s.linked_with_unresolved_gain_date;
-        confirmedValueMismatches = typeof s.confirmed_value_mismatches === "number" ? s.confirmed_value_mismatches : valueMismatchDateUnresolved;
-        confirmedDateMismatches = typeof s.confirmed_date_mismatches === "number" ? s.confirmed_date_mismatches : 0;
-        confirmedValueAndDateMismatches = typeof s.confirmed_value_and_date_mismatches === "number" ? s.confirmed_value_and_date_mismatches : 0;
-        confirmedDivergent = typeof s.confirmed_divergent_linked_unique === "number" ? s.confirmed_divergent_linked_unique : (confirmedValueMismatches + confirmedDateMismatches + confirmedValueAndDateMismatches);
 
-        const partitionSum = fullyAuditedMatch + valueMatchedDateUnresolved + valueMismatchDateUnresolved + confirmedDateMismatches + confirmedValueAndDateMismatches;
+        const partitionSum =
+          fullyAuditedMatch +
+          valueMatchedDateUnresolved +
+          valueMismatchDateUnresolved +
+          valueOnlyMismatches +
+          dateOnlyMismatches +
+          valueAndDateMismatches;
+
         auditPartitionAvailability = (partitionSum === totalLinked) ? "available" : "inconsistent";
+
+        confirmedValueMismatches =
+          valueOnlyMismatches +
+          valueMismatchDateUnresolved +
+          valueAndDateMismatches;
+
+        confirmedDateMismatches =
+          dateOnlyMismatches +
+          valueAndDateMismatches;
+
+        confirmedDivergent =
+          valueOnlyMismatches +
+          valueMismatchDateUnresolved +
+          dateOnlyMismatches +
+          valueAndDateMismatches;
       } else {
         auditPartitionAvailability = "requires_backend_v1_1";
         confirmedDivergent = typeof s.divergent_matches === "number" ? s.divergent_matches : (typeof s.divergent_linked_unique === "number" ? s.divergent_linked_unique : 0);
@@ -2262,12 +2296,12 @@ const HTML = `<!doctype html>
         value_mismatch_date_unresolved:valueMismatchDateUnresolved,
         confirmed_value_mismatches:confirmedValueMismatches,
         confirmed_date_mismatches:confirmedDateMismatches,
-        confirmed_value_and_date_mismatches:confirmedValueAndDateMismatches,
+        confirmed_value_and_date_mismatches:valueAndDateMismatches,
         value_mismatches:confirmedValueMismatches,
-        value_only_mismatches:typeof s.value_only_mismatches === "number" ? s.value_only_mismatches : 0,
+        value_only_mismatches:valueOnlyMismatches !== null ? valueOnlyMismatches : (typeof s.value_only_mismatches === "number" ? s.value_only_mismatches : 0),
         date_mismatches:confirmedDateMismatches,
-        date_only_mismatches:typeof s.date_only_mismatches === "number" ? s.date_only_mismatches : 0,
-        value_and_date_mismatches:confirmedValueAndDateMismatches,
+        date_only_mismatches:dateOnlyMismatches !== null ? dateOnlyMismatches : (typeof s.date_only_mismatches === "number" ? s.date_only_mismatches : 0),
+        value_and_date_mismatches:valueAndDateMismatches !== null ? valueAndDateMismatches : (typeof s.value_and_date_mismatches === "number" ? s.value_and_date_mismatches : 0),
         linked_with_unresolved_gain_date:linkedUnresolvedGainDate,
         vista_gains:vistaGains,
         total_vista_gains:vistaGains,
@@ -2299,27 +2333,50 @@ const HTML = `<!doctype html>
         } else if(d.audit_partition_availability==="inconsistent"){
           badges+='<div class="cso-badge-warning" style="margin-top:4px;width:100%;justify-content:center;text-align:center;">⚠ Partição de auditabilidade inconsistente no payload.</div>';
         } else {
-          const concCount = typeof d.fully_audited_match==="number" && d.fully_audited_match > 0
-            ? (number(d.fully_audited_match)+' totalmente auditados')
-            : (typeof d.value_matched_date_unresolved==="number" ? (number(d.value_matched_date_unresolved)+' com valor conciliado') : '');
-          const divCount = typeof d.confirmed_divergent_linked_unique==="number" ? d.confirmed_divergent_linked_unique : 0;
-          const divText = divCount > 0 ? ' ('+number(divCount)+' com divergência de valor)' : '';
-          badges+='<div class="cso-badge-neutral" style="margin-top:6px;width:100%;justify-content:center;font-size:11px;background:#eef0f8;color:var(--forest);padding:4px 8px;border-radius:6px;display:flex;align-items:center;" title="Identidade: '+number(d.official_sales)+' oficializadas = '+number(d.total_linked)+' vinculados + '+number(d.ccv_without_vista)+' sem ganho | '+number(d.vista_gains)+' ganhos = '+number(d.total_linked)+' vinculados + '+number(d.vista_without_ccv)+' sem CCV">✓ '+number(d.total_linked)+' vinculados: '+concCount+divText+'</div>';
+          const parts = [];
+          if(typeof d.fully_audited_match === "number" && d.fully_audited_match > 0){
+            parts.push(number(d.fully_audited_match)+' totalmente auditados');
+          }
+          if(typeof d.value_matched_date_unresolved === "number" && d.value_matched_date_unresolved > 0){
+            parts.push(number(d.value_matched_date_unresolved)+' com valor conciliado');
+          }
+          const divCount = typeof d.confirmed_divergent_linked_unique === "number" ? d.confirmed_divergent_linked_unique : 0;
+          if(divCount > 0){
+            parts.push(number(divCount)+' com divergência confirmada');
+          }
+          const concCount = parts.length > 0 ? ': ' + parts.join(', ') : '';
 
-          if(typeof d.linked_with_unresolved_gain_date==="number" && d.linked_with_unresolved_gain_date > 0){
+          let divDetails = [];
+          if(typeof d.value_only_mismatches === "number" && d.value_only_mismatches > 0){
+            divDetails.push(number(d.value_only_mismatches)+' de valor');
+          }
+          if(typeof d.date_only_mismatches === "number" && d.date_only_mismatches > 0){
+            divDetails.push(number(d.date_only_mismatches)+' de data');
+          }
+          if(typeof d.value_and_date_mismatches === "number" && d.value_and_date_mismatches > 0){
+            divDetails.push(number(d.value_and_date_mismatches)+' de valor e data');
+          }
+          if(typeof d.value_mismatch_date_unresolved === "number" && d.value_mismatch_date_unresolved > 0){
+            divDetails.push(number(d.value_mismatch_date_unresolved)+' de valor com data não auditável');
+          }
+          const divDetailTooltip = divDetails.length > 0 ? ' [Divergências: ' + divDetails.join(', ') + ']' : '';
+
+          badges+='<div class="cso-badge-neutral" style="margin-top:6px;width:100%;justify-content:center;font-size:11px;background:#eef0f8;color:var(--forest);padding:4px 8px;border-radius:6px;display:flex;align-items:center;" title="Identidade: '+number(d.official_sales)+' oficializadas = '+number(d.total_linked)+' vinculados + '+number(d.ccv_without_vista)+' sem ganho | '+number(d.vista_gains)+' ganhos = '+number(d.total_linked)+' vinculados + '+number(d.vista_without_ccv)+' sem CCV'+divDetailTooltip+'">✓ '+number(d.total_linked)+' vinculados'+concCount+'</div>';
+
+          if(typeof d.linked_with_unresolved_gain_date === "number" && d.linked_with_unresolved_gain_date > 0){
             let tempMsg;
             if(d.linked_with_unresolved_gain_date === d.total_linked){
               tempMsg = 'Todos os vínculos estão com validação temporal indisponível.';
             } else {
               tempMsg = number(d.linked_with_unresolved_gain_date)+' de '+number(d.total_linked)+' vínculos estão com validação temporal indisponível.';
             }
-            const divExtra = divCount > 0 ? ' Entre os vínculos, '+number(divCount)+' apresentam divergência comprovada de valor.' : '';
+            const divExtra = divCount > 0 ? ' Entre os vínculos, '+number(divCount)+' apresentam divergência confirmada.' : '';
             badges+='<div class="cso-badge-warning" style="margin-top:4px;width:100%;justify-content:center;text-align:center;">ℹ '+tempMsg+divExtra+'</div>';
           }
         }
       }
       if((d.unresolved_teams||0)>0){badges+='<div class="cso-badge-warning" style="margin-top:4px;width:100%;justify-content:center;">ℹ '+number(d.unresolved_teams)+' vendas com equipe pendente de mapeamento</div>'}
-      return '<div class="cso-recon-head">Reconciliação Comercial</div><div class="cso-recon-grid"><article class="cso-recon-card" title="Total de ganhos avaliados no CRM ('+number(d.total_linked||d.matched)+' vinculados + '+number(d.vista_without_ccv)+' sem CCV)"><span>Ganhos Vista</span><strong>'+number(d.vista_gains)+'</strong></article><article class="cso-recon-card" title="Vendas formalizadas com contrato CCV assinado ('+number(d.total_linked||d.matched)+' vinculados + '+number(d.ccv_without_vista)+' sem ganho)"><span>Vendas Oficializadas</span><strong>'+number(d.official_sales)+'</strong></article><article class="cso-recon-card'+(hasGainDiff?' warning':'')+'"><span>Vista sem CCV</span><strong>'+number(d.vista_without_ccv)+'</strong>'+(hasGainDiff?'<span class="cso-badge-warning">Divergência Operacional</span>':'')+'</article><article class="cso-recon-card'+(hasCcvDiff?' warning':'')+'"><span>CCV sem Ganho Vista</span><strong>'+number(d.ccv_without_vista)+'</strong>'+(hasCcvDiff?'<span class="cso-badge-warning">Divergência Operacional</span>':'')+'</article></div>'+badges
+      return '<div class="cso-recon-head">Reconciliação Comercial</div><div class="cso-recon-grid"><article class="cso-recon-card" title="Total de ganhos avaliados no CRM ('+number(d.total_linked)+' vinculados + '+number(d.vista_without_ccv)+' sem CCV)"><span>Ganhos Vista</span><strong>'+number(d.vista_gains)+'</strong></article><article class="cso-recon-card" title="Vendas formalizadas com contrato CCV assinado ('+number(d.total_linked)+' vinculados + '+number(d.ccv_without_vista)+' sem ganho)"><span>Vendas Oficializadas</span><strong>'+number(d.official_sales)+'</strong></article><article class="cso-recon-card'+(hasGainDiff?' warning':'')+'"><span>Vista sem CCV</span><strong>'+number(d.vista_without_ccv)+'</strong>'+(hasGainDiff?'<span class="cso-badge-warning">Divergência Operacional</span>':'')+'</article><article class="cso-recon-card'+(hasCcvDiff?' warning':'')+'"><span>CCV sem Ganho Vista</span><strong>'+number(d.ccv_without_vista)+'</strong>'+(hasCcvDiff?'<span class="cso-badge-warning">Divergência Operacional</span>':'')+'</article></div>'+badges
     }
     function renderFunnelStagesInner(state,officialCount){
       if(!state||state.status==="loading"){
@@ -2580,25 +2637,65 @@ export function normalizeReconciliationSummary(payload) {
     typeof s.fully_audited_match === "number" &&
     typeof s.value_matched_date_unresolved === "number" &&
     typeof s.value_mismatch_date_unresolved === "number" &&
-    typeof s.linked_with_unresolved_gain_date === "number";
+    typeof s.linked_with_unresolved_gain_date === "number" &&
+    typeof s.value_only_mismatches === "number" &&
+    typeof s.date_only_mismatches === "number" &&
+    typeof s.value_and_date_mismatches === "number";
 
-  let auditPartitionAvailability, fullyAuditedMatch = null, valueMatchedDateUnresolved = null, valueMismatchDateUnresolved = null, linkedUnresolvedGainDate = null, confirmedDivergent = null, confirmedValueMismatches = null, confirmedDateMismatches = null, confirmedValueAndDateMismatches = null;
+  let auditPartitionAvailability,
+    fullyAuditedMatch = null,
+    valueMatchedDateUnresolved = null,
+    valueMismatchDateUnresolved = null,
+    valueOnlyMismatches = null,
+    dateOnlyMismatches = null,
+    valueAndDateMismatches = null,
+    linkedUnresolvedGainDate = null,
+    confirmedDivergent = null,
+    confirmedValueMismatches = null,
+    confirmedDateMismatches = null;
 
   if (hasNativeAuditPartition) {
     fullyAuditedMatch = s.fully_audited_match;
     valueMatchedDateUnresolved = s.value_matched_date_unresolved;
     valueMismatchDateUnresolved = s.value_mismatch_date_unresolved;
+    valueOnlyMismatches = s.value_only_mismatches;
+    dateOnlyMismatches = s.date_only_mismatches;
+    valueAndDateMismatches = s.value_and_date_mismatches;
     linkedUnresolvedGainDate = s.linked_with_unresolved_gain_date;
-    confirmedValueMismatches = typeof s.confirmed_value_mismatches === "number" ? s.confirmed_value_mismatches : valueMismatchDateUnresolved;
-    confirmedDateMismatches = typeof s.confirmed_date_mismatches === "number" ? s.confirmed_date_mismatches : 0;
-    confirmedValueAndDateMismatches = typeof s.confirmed_value_and_date_mismatches === "number" ? s.confirmed_value_and_date_mismatches : 0;
-    confirmedDivergent = typeof s.confirmed_divergent_linked_unique === "number" ? s.confirmed_divergent_linked_unique : (confirmedValueMismatches + confirmedDateMismatches + confirmedValueAndDateMismatches);
 
-    const partitionSum = fullyAuditedMatch + valueMatchedDateUnresolved + valueMismatchDateUnresolved + confirmedDateMismatches + confirmedValueAndDateMismatches;
-    auditPartitionAvailability = (partitionSum === totalLinked) ? "available" : "inconsistent";
+    const partitionSum =
+      fullyAuditedMatch +
+      valueMatchedDateUnresolved +
+      valueMismatchDateUnresolved +
+      valueOnlyMismatches +
+      dateOnlyMismatches +
+      valueAndDateMismatches;
+
+    auditPartitionAvailability =
+      partitionSum === totalLinked ? "available" : "inconsistent";
+
+    confirmedValueMismatches =
+      valueOnlyMismatches +
+      valueMismatchDateUnresolved +
+      valueAndDateMismatches;
+
+    confirmedDateMismatches =
+      dateOnlyMismatches +
+      valueAndDateMismatches;
+
+    confirmedDivergent =
+      valueOnlyMismatches +
+      valueMismatchDateUnresolved +
+      dateOnlyMismatches +
+      valueAndDateMismatches;
   } else {
     auditPartitionAvailability = "requires_backend_v1_1";
-    confirmedDivergent = typeof s.divergent_matches === "number" ? s.divergent_matches : (typeof s.divergent_linked_unique === "number" ? s.divergent_linked_unique : 0);
+    confirmedDivergent =
+      typeof s.divergent_matches === "number"
+        ? s.divergent_matches
+        : (typeof s.divergent_linked_unique === "number"
+            ? s.divergent_linked_unique
+            : 0);
   }
 
   return {
@@ -2617,12 +2714,12 @@ export function normalizeReconciliationSummary(payload) {
     value_mismatch_date_unresolved: valueMismatchDateUnresolved,
     confirmed_value_mismatches: confirmedValueMismatches,
     confirmed_date_mismatches: confirmedDateMismatches,
-    confirmed_value_and_date_mismatches: confirmedValueAndDateMismatches,
+    confirmed_value_and_date_mismatches: valueAndDateMismatches,
     value_mismatches: confirmedValueMismatches,
-    value_only_mismatches: typeof s.value_only_mismatches === "number" ? s.value_only_mismatches : 0,
+    value_only_mismatches: valueOnlyMismatches !== null ? valueOnlyMismatches : (typeof s.value_only_mismatches === "number" ? s.value_only_mismatches : 0),
     date_mismatches: confirmedDateMismatches,
-    date_only_mismatches: typeof s.date_only_mismatches === "number" ? s.date_only_mismatches : 0,
-    value_and_date_mismatches: confirmedValueAndDateMismatches,
+    date_only_mismatches: dateOnlyMismatches !== null ? dateOnlyMismatches : (typeof s.date_only_mismatches === "number" ? s.date_only_mismatches : 0),
+    value_and_date_mismatches: valueAndDateMismatches !== null ? valueAndDateMismatches : (typeof s.value_and_date_mismatches === "number" ? s.value_and_date_mismatches : 0),
     linked_with_unresolved_gain_date: linkedUnresolvedGainDate,
     vista_gains: vistaGains,
     total_vista_gains: vistaGains,
