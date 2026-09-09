@@ -816,24 +816,32 @@ def test_reconciliation_exact_mathematical_partition_and_discrepancy_proof():
     # 1. Total Official Sales = 310
     assert s["official_sales"] == 310
 
-    # 2. Total Linked Transactions = 297 (276 + 18 + 3)
+    # 2. Total Linked Transactions = 297 (276 strictly matched + 18 value-only + 3 date-only + 0 both)
     assert s["total_linked"] == 297
+    assert s["total_linked_unique"] == 297
     assert s["matched"] == 276
     assert s["strictly_matched"] == 276
     assert s["divergent_matches"] == 21
+    assert s["divergent_linked_unique"] == 21
     assert s["value_mismatches"] == 18
+    assert s["value_only_mismatches"] == 18
     assert s["date_mismatches"] == 3
+    assert s["date_only_mismatches"] == 3
+    assert s["value_and_date_mismatches"] == 0
+    assert s["value_only_mismatches"] + s["date_only_mismatches"] + s["value_and_date_mismatches"] == s["divergent_linked_unique"]
 
     # 3. Unlinked categories
     assert s["pipeimob_without_vista_gain"] == 13
     assert s["vista_without_pipeimob_contract"] == 30
     assert s["total_vista_gains"] == 327
     assert s["vista_gains"] == 327
+    assert s["gain_period_basis"] == "DataFinal_only_if_present_else_unresolved"
+    assert "UltimaAtualizacao" in s["limitation_note"]
 
     # 4. Rigorous Mathematical Identities
-    # Identity A: official_sales = matched + divergent_matches + pipeimob_without_vista_gain
-    assert s["matched"] + s["divergent_matches"] + s["pipeimob_without_vista_gain"] == s["official_sales"]
-    assert s["total_linked"] + s["pipeimob_without_vista_gain"] == s["official_sales"]
+    # Identity A: official_sales = strictly_matched + divergent_linked_unique + pipeimob_without_vista_gain
+    assert s["strictly_matched"] + s["divergent_linked_unique"] + s["pipeimob_without_vista_gain"] == s["official_sales"]
+    assert s["total_linked_unique"] + s["pipeimob_without_vista_gain"] == s["official_sales"]
     assert 297 + 13 == 310
 
     # Identity B: total_vista_gains = total_linked + vista_without_pipeimob_contract
@@ -874,5 +882,106 @@ def test_reconciliation_prohibits_ultima_atualizacao_as_gain_date():
 
     assert items[0]["vista_gain_date"] is None
     assert s["unresolved_gain_dates"] == 1
+    assert s["non_auditable_gain_dates"] == 1
+    assert s["gain_period_basis"] == "DataFinal_only_if_present_else_unresolved"
+    assert "UltimaAtualizacao" in s["limitation_note"]
+
+
+def test_reconciliation_simultaneous_value_and_date_mismatch_no_double_counting():
+    """Verify that deals with simultaneous value and date mismatch are never double-counted."""
+    pipe_txs = [
+        # 1. Strictly matched
+        {
+            "transacao_unique_id_pipeimob": "tx-strict",
+            "codigo_imovel": "PROP-STRICT",
+            "data_assinatura_ccv": "2026-05-10",
+            "valor_contrato": "500000.00",
+        },
+        # 2. Value-only mismatch
+        {
+            "transacao_unique_id_pipeimob": "tx-val",
+            "codigo_imovel": "PROP-VAL",
+            "data_assinatura_ccv": "2026-05-10",
+            "valor_contrato": "500000.00",
+        },
+        # 3. Date-only mismatch (> 7 days)
+        {
+            "transacao_unique_id_pipeimob": "tx-date",
+            "codigo_imovel": "PROP-DATE",
+            "data_assinatura_ccv": "2026-05-10",
+            "valor_contrato": "500000.00",
+        },
+        # 4. Simultaneous value AND date mismatch
+        {
+            "transacao_unique_id_pipeimob": "tx-both",
+            "codigo_imovel": "PROP-BOTH",
+            "data_assinatura_ccv": "2026-05-10",
+            "valor_contrato": "500000.00",
+        },
+        # 5. Pipeimob without Vista gain
+        {
+            "transacao_unique_id_pipeimob": "tx-nocrm",
+            "codigo_imovel": "PROP-NOCRM",
+            "data_assinatura_ccv": "2026-05-10",
+            "valor_contrato": "500000.00",
+        },
+    ]
+
+    vista_gains = [
+        # 1. Strictly matched
+        {
+            "deal_id": "deal-strict",
+            "property_code": "PROP-STRICT",
+            "gain_date": "2026-05-10",
+            "deal_value": "500000.00",
+        },
+        # 2. Value-only mismatch (diff value, same date)
+        {
+            "deal_id": "deal-val",
+            "property_code": "PROP-VAL",
+            "gain_date": "2026-05-10",
+            "deal_value": "550000.00",
+        },
+        # 3. Date-only mismatch (diff date > 7d, same value)
+        {
+            "deal_id": "deal-date",
+            "property_code": "PROP-DATE",
+            "gain_date": "2026-05-30",
+            "deal_value": "500000.00",
+        },
+        # 4. Simultaneous value AND date mismatch (diff date > 7d AND diff value)
+        {
+            "deal_id": "deal-both",
+            "property_code": "PROP-BOTH",
+            "gain_date": "2026-05-30",
+            "deal_value": "600000.00",
+        },
+        # 6. Vista gain without Pipeimob contract
+        {
+            "deal_id": "deal-nopipe",
+            "property_code": "PROP-NOPIPE",
+            "gain_date": "2026-05-12",
+            "deal_value": "400000.00",
+        },
+    ]
+
+    res = reconcile_sales(pipe_txs, vista_gains, date_tolerance_days=7)
+    s = res["summary"]
+
+    assert s["official_sales"] == 5
+    assert s["strictly_matched"] == 1
+    assert s["value_only_mismatches"] == 1
+    assert s["date_only_mismatches"] == 1
+    assert s["value_and_date_mismatches"] == 1
+    assert s["divergent_linked_unique"] == 3  # 1 val + 1 date + 1 both (never 4!)
+    assert s["total_linked_unique"] == 4  # 1 strict + 3 divergent
+    assert s["pipeimob_without_vista_gain"] == 1
+    assert s["vista_without_pipeimob_contract"] == 1
+    assert s["total_vista_gains"] == 5  # 4 linked + 1 unlinked
+
+    # Mathematical identities
+    assert s["strictly_matched"] + s["divergent_linked_unique"] + s["pipeimob_without_vista_gain"] == s["official_sales"]
+    assert s["total_linked_unique"] + s["vista_without_pipeimob_contract"] == s["total_vista_gains"]
+
 
 

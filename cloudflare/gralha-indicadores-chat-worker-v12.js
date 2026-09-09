@@ -378,26 +378,20 @@ async function reconciliationSalesApi(request, env, url) {
   const auth = await authenticatedUser(request, env);
   if (!auth) return json({ error: "Sua sessão expirou. Entre novamente." }, 401);
 
-  let isExecutive = false;
+  let profile = null;
   try {
     const profileRes = await rest(
       env,
       auth.accessToken,
-      `profiles?select=access_role,status&id=eq.${auth.id}`,
+      `profiles?select=access_role,status,team,store&id=eq.${auth.id}`,
     );
     if (profileRes.ok) {
       const rows = await profileRes.json().catch(() => []);
-      const p = rows[0];
-      if (
-        p?.status === "active" &&
-        ["ceo", "cso", "cmo"].includes(String(p?.access_role || "").toLowerCase())
-      ) {
-        isExecutive = true;
-      }
+      profile = rows[0] || null;
     }
   } catch {}
 
-  if (!isExecutive) {
+  if (!profile) {
     try {
       const adminMeUrl =
         (env.SUPABASE_URL
@@ -417,17 +411,18 @@ async function reconciliationSalesApi(request, env, url) {
       });
       if (meRes.ok) {
         const meData = await meRes.json().catch(() => null);
-        const p = meData?.profile;
-        const role = String(p?.access_role || "").toLowerCase();
-        if (
-          p?.status === "active" &&
-          (p?.has_global_access === true || ["ceo", "cso", "cmo"].includes(role))
-        ) {
-          isExecutive = true;
-        }
+        profile = meData?.profile || null;
       }
     } catch {}
   }
+
+  if (!profile || profile.status !== "active") {
+    return json({ error: "Perfil inativo ou não autorizado.", code: "inactive_profile" }, 403);
+  }
+
+  const role = String(profile.access_role || "").toLowerCase();
+  const isExecutive =
+    profile.has_global_access === true || ["ceo", "cso", "cmo"].includes(role);
 
   if (!isExecutive) {
     return json(
@@ -581,26 +576,20 @@ async function vistaFunnelSummaryApi(request, env, url) {
   const auth = await authenticatedUser(request, env);
   if (!auth) return json({ error: "Sua sessão expirou. Entre novamente." }, 401);
 
-  let isExecutive = false;
+  let profile = null;
   try {
     const profileRes = await rest(
       env,
       auth.accessToken,
-      `profiles?select=access_role,status&id=eq.${auth.id}`,
+      `profiles?select=access_role,status,team,store&id=eq.${auth.id}`,
     );
     if (profileRes.ok) {
       const rows = await profileRes.json().catch(() => []);
-      const p = rows[0];
-      if (
-        p?.status === "active" &&
-        ["ceo", "cso", "cmo"].includes(String(p?.access_role || "").toLowerCase())
-      ) {
-        isExecutive = true;
-      }
+      profile = rows[0] || null;
     }
   } catch {}
 
-  if (!isExecutive) {
+  if (!profile) {
     try {
       const adminMeUrl =
         (env.SUPABASE_URL
@@ -620,21 +609,35 @@ async function vistaFunnelSummaryApi(request, env, url) {
       });
       if (meRes.ok) {
         const meData = await meRes.json().catch(() => null);
-        const p = meData?.profile;
-        const role = String(p?.access_role || "").toLowerCase();
-        if (
-          p?.status === "active" &&
-          (p?.has_global_access === true || ["ceo", "cso", "cmo"].includes(role))
-        ) {
-          isExecutive = true;
-        }
+        profile = meData?.profile || null;
       }
     } catch {}
   }
 
+  if (!profile || profile.status !== "active") {
+    return json({ error: "Perfil inativo ou não autorizado.", code: "inactive_profile" }, 403);
+  }
+
+  const role = String(profile.access_role || "").toLowerCase();
+  const isExecutive =
+    profile.has_global_access === true || ["ceo", "cso", "cmo"].includes(role);
+
   if (!isExecutive) {
+    if (["store_director", "team_manager", "director", "gerente", "diretor"].includes(role)) {
+      return json(
+        {
+          error:
+            "O isolamento de escopo por equipe/loja no Funil Comercial do Vista CRM está temporariamente indisponível até a certificação dos mapeamentos organizacionais.",
+          code: "organizational_scope_unavailable",
+          role,
+          scope_limitation:
+            "A API do Vista CRM não possui mapeamento cadastral confiável de equipes para garantir o isolamento estrito de dados para Diretores e Gerentes.",
+        },
+        403,
+      );
+    }
     return json(
-      { error: "Acesso exclusivo para cargos executivos (CEO, CSO e CMO)." },
+      { error: "Acesso exclusivo para cargos executivos (CEO, CSO e CMO).", code: "unauthorized_role" },
       403,
     );
   }
@@ -2205,10 +2208,11 @@ const HTML = `<!doctype html>
       }
       const s=payload.summary||payload;
       const matched=typeof s.strictly_matched==="number"?s.strictly_matched:(typeof s.strictly_matched_count==="number"?s.strictly_matched_count:(typeof s.matched==="number"?s.matched:(typeof s.matched_count==="number"?s.matched_count:0)));
-      const valueMismatches=typeof s.value_mismatches==="number"?s.value_mismatches:(typeof s.value_mismatches_count==="number"?s.value_mismatches_count:0);
-      const dateMismatches=typeof s.date_mismatches==="number"?s.date_mismatches:(typeof s.date_mismatches_count==="number"?s.date_mismatches_count:0);
-      const divergentMatches=typeof s.divergent_matches==="number"?s.divergent_matches:(typeof s.divergent_matches_count==="number"?s.divergent_matches_count:(valueMismatches+dateMismatches));
-      const totalLinked=typeof s.total_linked==="number"?s.total_linked:(typeof s.total_linked_count==="number"?s.total_linked_count:(matched+divergentMatches));
+      const valueMismatches=typeof s.value_only_mismatches==="number"?s.value_only_mismatches:(typeof s.value_mismatches==="number"?s.value_mismatches:(typeof s.value_mismatches_count==="number"?s.value_mismatches_count:0));
+      const dateMismatches=typeof s.date_only_mismatches==="number"?s.date_only_mismatches:(typeof s.date_mismatches==="number"?s.date_mismatches:(typeof s.date_mismatches_count==="number"?s.date_mismatches_count:0));
+      const valueAndDateMismatches=typeof s.value_and_date_mismatches==="number"?s.value_and_date_mismatches:0;
+      const divergentMatches=typeof s.divergent_linked_unique==="number"?s.divergent_linked_unique:(typeof s.divergent_matches==="number"?s.divergent_matches:(typeof s.divergent_matches_count==="number"?s.divergent_matches_count:(valueMismatches+dateMismatches+valueAndDateMismatches)));
+      const totalLinked=typeof s.total_linked_unique==="number"?s.total_linked_unique:(typeof s.total_linked==="number"?s.total_linked:(typeof s.total_linked_count==="number"?s.total_linked_count:(matched+divergentMatches)));
       const vistaWithoutCcv=typeof s.vista_without_pipeimob_contract==="number"?s.vista_without_pipeimob_contract:(typeof s.vista_without_pipeimob_contract_count==="number"?s.vista_without_pipeimob_contract_count:(typeof s.vista_without_ccv==="number"?s.vista_without_ccv:(typeof s.vista_without_ccv_count==="number"?s.vista_without_ccv_count:0)));
       const ccvWithoutVista=typeof s.pipeimob_without_vista_gain==="number"?s.pipeimob_without_vista_gain:(typeof s.pipeimob_without_vista_gain_count==="number"?s.pipeimob_without_vista_gain_count:(typeof s.ccv_without_vista==="number"?s.ccv_without_vista:(typeof s.ccv_without_vista_count==="number"?s.ccv_without_vista_count:0)));
       const officialSales=typeof s.official_sales==="number"?s.official_sales:(typeof s.pipeimob_sales_count==="number"?s.pipeimob_sales_count:(typeof s.official_sales_count==="number"?s.official_sales_count:0));
@@ -2219,12 +2223,18 @@ const HTML = `<!doctype html>
         availability:"available",
         official_sales:officialSales,
         total_linked:totalLinked,
+        total_linked_unique:totalLinked,
         matched:matched,
         strictly_matched:matched,
         divergent_matches:divergentMatches,
+        divergent_linked_unique:divergentMatches,
         value_mismatches:valueMismatches,
+        value_only_mismatches:valueMismatches,
         date_mismatches:dateMismatches,
+        date_only_mismatches:dateMismatches,
+        value_and_date_mismatches:valueAndDateMismatches,
         vista_gains:vistaGains,
+        total_vista_gains:vistaGains,
         vista_without_ccv:vistaWithoutCcv,
         ccv_without_vista:ccvWithoutVista,
         ccv_without_vista_gain:ccvWithoutVista,
@@ -2232,6 +2242,8 @@ const HTML = `<!doctype html>
         pipeimob_without_vista_gain:ccvWithoutVista,
         non_auditable_gain_dates:nonAuditable,
         unresolved_teams:unresolvedTeams,
+        gain_period_basis:s.gain_period_basis||"DataFinal_only_if_present_else_unresolved",
+        limitation_note:s.limitation_note||"Registros do Vista CRM sem DataFinal preenchida (DataFinal=null) não possuem data de ganho auditável. O sistema não utiliza UltimaAtualizacao como fallback.",
         notes:Array.isArray(payload.notes)?payload.notes:(Array.isArray(s.notes)?s.notes:[])
       }
     }
@@ -2474,18 +2486,27 @@ export function normalizeReconciliationSummary(payload) {
     : (typeof s.strictly_matched_count === "number"
         ? s.strictly_matched_count
         : (typeof s.matched === "number" ? s.matched : (typeof s.matched_count === "number" ? s.matched_count : 0)));
-  const valueMismatches = typeof s.value_mismatches === "number"
-    ? s.value_mismatches
-    : (typeof s.value_mismatches_count === "number" ? s.value_mismatches_count : 0);
-  const dateMismatches = typeof s.date_mismatches === "number"
-    ? s.date_mismatches
-    : (typeof s.date_mismatches_count === "number" ? s.date_mismatches_count : 0);
-  const divergentMatches = typeof s.divergent_matches === "number"
-    ? s.divergent_matches
-    : (typeof s.divergent_matches_count === "number" ? s.divergent_matches_count : (valueMismatches + dateMismatches));
-  const totalLinked = typeof s.total_linked === "number"
-    ? s.total_linked
-    : (typeof s.total_linked_count === "number" ? s.total_linked_count : (matched + divergentMatches));
+  const valueMismatches = typeof s.value_only_mismatches === "number"
+    ? s.value_only_mismatches
+    : (typeof s.value_mismatches === "number"
+        ? s.value_mismatches
+        : (typeof s.value_mismatches_count === "number" ? s.value_mismatches_count : 0));
+  const dateMismatches = typeof s.date_only_mismatches === "number"
+    ? s.date_only_mismatches
+    : (typeof s.date_mismatches === "number"
+        ? s.date_mismatches
+        : (typeof s.date_mismatches_count === "number" ? s.date_mismatches_count : 0));
+  const valueAndDateMismatches = typeof s.value_and_date_mismatches === "number" ? s.value_and_date_mismatches : 0;
+  const divergentMatches = typeof s.divergent_linked_unique === "number"
+    ? s.divergent_linked_unique
+    : (typeof s.divergent_matches === "number"
+        ? s.divergent_matches
+        : (typeof s.divergent_matches_count === "number" ? s.divergent_matches_count : (valueMismatches + dateMismatches + valueAndDateMismatches)));
+  const totalLinked = typeof s.total_linked_unique === "number"
+    ? s.total_linked_unique
+    : (typeof s.total_linked === "number"
+        ? s.total_linked
+        : (typeof s.total_linked_count === "number" ? s.total_linked_count : (matched + divergentMatches)));
   const vistaWithoutCcv = typeof s.vista_without_pipeimob_contract === "number"
     ? s.vista_without_pipeimob_contract
     : (typeof s.vista_without_pipeimob_contract_count === "number"
@@ -2529,11 +2550,16 @@ export function normalizeReconciliationSummary(payload) {
     availability: "available",
     official_sales: officialSales,
     total_linked: totalLinked,
+    total_linked_unique: totalLinked,
     matched: matched,
     strictly_matched: matched,
     divergent_matches: divergentMatches,
+    divergent_linked_unique: divergentMatches,
     value_mismatches: valueMismatches,
+    value_only_mismatches: valueMismatches,
     date_mismatches: dateMismatches,
+    date_only_mismatches: dateMismatches,
+    value_and_date_mismatches: valueAndDateMismatches,
     vista_gains: vistaGains,
     total_vista_gains: vistaGains,
     vista_without_ccv: vistaWithoutCcv,
@@ -2543,6 +2569,8 @@ export function normalizeReconciliationSummary(payload) {
     pipeimob_without_vista_gain: ccvWithoutVista,
     non_auditable_gain_dates: nonAuditable,
     unresolved_teams: unresolvedTeams,
+    gain_period_basis: s.gain_period_basis || "DataFinal_only_if_present_else_unresolved",
+    limitation_note: s.limitation_note || "Registros do Vista CRM sem DataFinal preenchida (DataFinal=null) não possuem data de ganho auditável. O sistema não utiliza UltimaAtualizacao como fallback.",
     notes: Array.isArray(payload.notes) ? payload.notes : (Array.isArray(s.notes) ? s.notes : []),
   };
 }

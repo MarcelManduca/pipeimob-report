@@ -152,10 +152,10 @@ test("6. RBAC: CEO, CSO, CMO possuem acesso global ao proxy /api/vista/funnel/su
 });
 
 // ---------------------------------------------------------------------------
-// 7. Escopo de equipe e loja (Gerente e Diretor não podem acessar dados globais do executivo)
+// 7. Escopo de equipe e loja: Diretor e Gerente recebem organizational_scope_unavailable
 // ---------------------------------------------------------------------------
-test("7. RBAC: Gerente e Diretor sem perfil executivo são restritos / 403", async () => {
-  for (const role of ["gerente", "diretor"]) {
+test("7. RBAC: Gerente e Diretor recebem 403 com code 'organizational_scope_unavailable'", async () => {
+  for (const role of ["store_director", "team_manager", "diretor", "gerente"]) {
     const mockFetch = createMockFetch([
       {
         matches: (url) => url.includes("/auth/v1/user"),
@@ -174,6 +174,8 @@ test("7. RBAC: Gerente e Diretor sem perfil executivo são restritos / 403", asy
                 id: `user-${role}`,
                 access_role: role,
                 status: "active",
+                team: "Equipe Alfa",
+                store: "Loja Central",
               },
             ]),
             { status: 200, headers: { "Content-Type": "application/json" } }
@@ -190,53 +192,148 @@ test("7. RBAC: Gerente e Diretor sem perfil executivo são restritos / 403", asy
     try {
       const res = await worker.fetch(req, MOCK_ENV, {});
       assert.equal(res.status, 403, `Role ${role} should receive 403 Forbidden`);
+      const body = await res.json();
+      assert.equal(body.code, "organizational_scope_unavailable");
+      assert.match(body.error, /temporariamente indisponível/i);
     } finally {
       globalThis.fetch = origFetch;
     }
   }
 });
 
+test("7b. RBAC: Perfil inativo recebe 403 com code 'inactive_profile'", async () => {
+  const mockFetch = createMockFetch([
+    {
+      matches: (url) => url.includes("/auth/v1/user"),
+      handle: () =>
+        new Response(
+          JSON.stringify({ id: "user-inactive", email: "inactive@gralha.com.br" }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        ),
+    },
+    {
+      matches: (url) => url.includes("/rest/v1/profiles"),
+      handle: () =>
+        new Response(
+          JSON.stringify([
+            {
+              id: "user-inactive",
+              access_role: "ceo",
+              status: "disabled",
+            },
+          ]),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        ),
+    },
+  ]);
+
+  const req = new Request("https://indicadores.gralha.com.br/api/vista/funnel/summary?data_inicio=2026-01-01&data_fim=2026-08-09", {
+    headers: { Authorization: "Bearer mock-token-inactive" },
+  });
+
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = mockFetch;
+  try {
+    const res = await worker.fetch(req, MOCK_ENV, {});
+    assert.equal(res.status, 403);
+    const body = await res.json();
+    assert.equal(body.code, "inactive_profile");
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
 
 // ---------------------------------------------------------------------------
-// 8. Identidades matemáticas da reconciliação (306/310/30/13 comprovado)
+// 8. Identidades matemáticas da reconciliação (306/310/30/13 comprovado e deduplicação)
 // ---------------------------------------------------------------------------
-test("8. Identidades matemáticas da reconciliação: official_sales (310) = matched (276) + divergent (21) + ccv_without_vista (13)", () => {
+test("8. Identidades matemáticas da reconciliação: official_sales (310) = strictly_matched (276) + divergent_linked_unique (21) + ccv_without_vista (13)", () => {
   const rawPayload = {
     summary: {
       pipeimob_sales_count: 310,
       matched_count: 276,
+      strictly_matched_count: 276,
       divergent_matches_count: 21,
+      divergent_linked_unique: 21,
       value_mismatches_count: 18,
+      value_only_mismatches: 18,
       date_mismatches_count: 3,
+      date_only_mismatches: 3,
+      value_and_date_mismatches: 0,
       pipeimob_without_vista_gain_count: 13,
       vista_without_pipeimob_contract_count: 30,
       total_linked_count: 297,
+      total_linked_unique: 297,
       total_vista_gains_count: 327,
       ambiguous_matches_count: 0,
       unresolved_gain_dates_count: 0,
+      gain_period_basis: "DataFinal_only_if_present_else_unresolved",
+      limitation_note: "Registros do Vista CRM sem DataFinal preenchida (DataFinal=null) não possuem data de ganho auditável. O sistema não utiliza UltimaAtualizacao como fallback.",
     }
   };
 
   const norm = normalizeReconciliationSummary(rawPayload);
   assert.equal(norm.official_sales, 310);
+  assert.equal(norm.strictly_matched, 276);
   assert.equal(norm.matched, 276);
   assert.equal(norm.divergent_matches, 21);
+  assert.equal(norm.divergent_linked_unique, 21);
   assert.equal(norm.value_mismatches, 18);
+  assert.equal(norm.value_only_mismatches, 18);
   assert.equal(norm.date_mismatches, 3);
+  assert.equal(norm.date_only_mismatches, 3);
+  assert.equal(norm.value_and_date_mismatches, 0);
   assert.equal(norm.total_linked, 297);
+  assert.equal(norm.total_linked_unique, 297);
   assert.equal(norm.ccv_without_vista_gain, 13);
   assert.equal(norm.vista_without_ccv, 30);
+  assert.equal(norm.total_vista_gains, 327);
   assert.equal(norm.vista_gains, 327);
 
-  // Math Identity 1: official_sales === total_linked + ccv_without_vista_gain
-  assert.equal(norm.total_linked + norm.ccv_without_vista_gain, norm.official_sales);
-  // Math Identity 2: total_linked === matched + divergent_matches
-  assert.equal(norm.matched + norm.divergent_matches, norm.total_linked);
-  // Math Identity 3: vista_gains === total_linked + vista_without_ccv
-  assert.equal(norm.total_linked + norm.vista_without_ccv, norm.vista_gains);
-  // Discrepancy explained: 276 + 30 = 306 (which omitted the 21 divergent deals)
-  assert.equal(norm.matched + norm.vista_without_ccv, 306);
+  // Divergence partition: 18 value-only + 3 date-only + 0 both = 21 unique divergent deals
+  assert.equal(
+    norm.value_only_mismatches + norm.date_only_mismatches + norm.value_and_date_mismatches,
+    norm.divergent_linked_unique
+  );
+
+  // Math Identity 1: official_sales === strictly_matched + divergent_linked_unique + ccv_without_vista_gain
+  assert.equal(norm.strictly_matched + norm.divergent_linked_unique + norm.ccv_without_vista_gain, norm.official_sales);
+  // Math Identity 2: total_linked_unique === strictly_matched + divergent_linked_unique
+  assert.equal(norm.strictly_matched + norm.divergent_linked_unique, norm.total_linked_unique);
+  // Math Identity 3: total_vista_gains === total_linked_unique + vista_without_ccv
+  assert.equal(norm.total_linked_unique + norm.vista_without_ccv, norm.total_vista_gains);
+  // Discrepancy explained: 276 + 30 = 306 (which omitted the 21 unique divergent deals)
+  assert.equal(norm.strictly_matched + norm.vista_without_ccv, 306);
 });
+
+test("8b. Deduplicação de divergências: registro com divergência simultânea de valor e data não é duplamente contado", () => {
+  const rawPayload = {
+    summary: {
+      official_sales: 5,
+      strictly_matched: 1,
+      value_only_mismatches: 1,
+      date_only_mismatches: 1,
+      value_and_date_mismatches: 1,
+      divergent_linked_unique: 3, // 1 val + 1 date + 1 both
+      total_linked_unique: 4,
+      pipeimob_without_vista_gain: 1,
+      vista_without_pipeimob_contract: 1,
+      total_vista_gains: 5,
+    }
+  };
+
+  const norm = normalizeReconciliationSummary(rawPayload);
+  assert.equal(norm.official_sales, 5);
+  assert.equal(norm.strictly_matched, 1);
+  assert.equal(norm.divergent_linked_unique, 3);
+  assert.equal(norm.total_linked_unique, 4);
+  assert.equal(
+    norm.value_only_mismatches + norm.date_only_mismatches + norm.value_and_date_mismatches,
+    norm.divergent_linked_unique
+  );
+  assert.equal(norm.strictly_matched + norm.divergent_linked_unique + norm.ccv_without_vista_gain, norm.official_sales);
+  assert.equal(norm.total_linked_unique + norm.vista_without_pipeimob_contract, norm.total_vista_gains);
+});
+
 
 // ---------------------------------------------------------------------------
 // 9. Categorias residuais explícitas
