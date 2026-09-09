@@ -411,3 +411,127 @@ test("13. Preservação dos KPIs quando o Vista estiver indisponível (Pipeimob 
   );
 });
 
+
+// ---------------------------------------------------------------------------
+// 14. Contrato canônico dos endpoints e rejeição de aliases/parâmetros divergentes
+// ---------------------------------------------------------------------------
+test("14. Contrato canônico: validação estrita de parâmetros e rejeição de aliases", async () => {
+  const mockFetch = createMockFetch([
+    {
+      matches: (url) => url.includes("/auth/v1/user"),
+      handle: () =>
+        new Response(
+          JSON.stringify({ id: "user-cso", email: "cso@gralha.com.br" }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        ),
+    },
+    {
+      matches: (url) => url.includes("/rest/v1/profiles"),
+      handle: () =>
+        new Response(
+          JSON.stringify([{ id: "user-cso", access_role: "cso", status: "active", has_global_access: true }]),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        ),
+    },
+    {
+      matches: (url) => url.includes("/api/vista/funnel/summary"),
+      handle: () =>
+        new Response(
+          JSON.stringify({ contract_version: "1.1", source: "vista_negocios_listar", stages: [] }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        ),
+    },
+    {
+      matches: (url) => url.includes("/api/reconciliation/sales"),
+      handle: () =>
+        new Response(
+          JSON.stringify({ summary: { official_sales: 310 }, items: [] }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        ),
+    },
+  ]);
+
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = mockFetch;
+
+  try {
+    // A. /api/vista/funnel/summary aceita estritamente data_inicio e data_fim
+    const resValidFunnel = await worker.fetch(
+      new Request(
+        "https://gralha.workers.dev/api/vista/funnel/summary?data_inicio=2026-08-01&data_fim=2026-08-31",
+        { headers: { Authorization: "Bearer valid-token" } }
+      ),
+      MOCK_ENV
+    );
+    assert.equal(resValidFunnel.status, 200);
+
+    // Rejeita aliases como start_date/end_date ou data_inicio_ccv/data_fim_ccv
+    const resInvalidFunnel1 = await worker.fetch(
+      new Request(
+        "https://gralha.workers.dev/api/vista/funnel/summary?start_date=2026-08-01&end_date=2026-08-31",
+        { headers: { Authorization: "Bearer valid-token" } }
+      ),
+      MOCK_ENV
+    );
+    assert.equal(resInvalidFunnel1.status, 400);
+
+    const resInvalidFunnel2 = await worker.fetch(
+      new Request(
+        "https://gralha.workers.dev/api/vista/funnel/summary?data_inicio_ccv=2026-08-01&data_fim_ccv=2026-08-31",
+        { headers: { Authorization: "Bearer valid-token" } }
+      ),
+      MOCK_ENV
+    );
+    assert.equal(resInvalidFunnel2.status, 400);
+
+    // B. /api/reconciliation/sales aceita estritamente data_inicio_ccv e data_fim_ccv
+    const resValidRecon = await worker.fetch(
+      new Request(
+        "https://gralha.workers.dev/api/reconciliation/sales?data_inicio_ccv=2026-08-01&data_fim_ccv=2026-08-31",
+        { headers: { Authorization: "Bearer valid-token" } }
+      ),
+      MOCK_ENV
+    );
+    assert.equal(resValidRecon.status, 200);
+
+    const resInvalidRecon1 = await worker.fetch(
+      new Request(
+        "https://gralha.workers.dev/api/reconciliation/sales?start_date=2026-08-01&end_date=2026-08-31",
+        { headers: { Authorization: "Bearer valid-token" } }
+      ),
+      MOCK_ENV
+    );
+    assert.equal(resInvalidRecon1.status, 400);
+
+    const resInvalidRecon2 = await worker.fetch(
+      new Request(
+        "https://gralha.workers.dev/api/reconciliation/sales?data_inicio=2026-08-01&data_fim=2026-08-31",
+        { headers: { Authorization: "Bearer valid-token" } }
+      ),
+      MOCK_ENV
+    );
+    assert.equal(resInvalidRecon2.status, 400);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+
+
+// ---------------------------------------------------------------------------
+// 15. Frontend utiliza exatamente os mesmos parâmetros canônicos do backend
+// ---------------------------------------------------------------------------
+test("15. Frontend utiliza exatamente os parâmetros canônicos esperados pelo backend", () => {
+  // Funnel fetcher usa data_inicio e data_fim
+  assert.match(
+    workerSource,
+    /const query\s*=\s*new URLSearchParams\(\{data_inicio:start,data_fim:end,refresh:"false"\}\)/
+  );
+  // Reconciliation fetcher usa data_inicio_ccv e data_fim_ccv
+  assert.match(
+    workerSource,
+    /const query\s*=\s*new URLSearchParams\(\{data_inicio_ccv:start,data_fim_ccv:end,date_tolerance_days:"7",refresh:"false",view:"summary"\}\)/
+  );
+});
+
+
