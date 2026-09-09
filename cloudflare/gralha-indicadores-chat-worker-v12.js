@@ -378,26 +378,20 @@ async function reconciliationSalesApi(request, env, url) {
   const auth = await authenticatedUser(request, env);
   if (!auth) return json({ error: "Sua sessão expirou. Entre novamente." }, 401);
 
-  let isExecutive = false;
+  let profile = null;
   try {
     const profileRes = await rest(
       env,
       auth.accessToken,
-      `profiles?select=access_role,status&id=eq.${auth.id}`,
+      `profiles?select=access_role,status,team,store&id=eq.${auth.id}`,
     );
     if (profileRes.ok) {
       const rows = await profileRes.json().catch(() => []);
-      const p = rows[0];
-      if (
-        p?.status === "active" &&
-        ["ceo", "cso", "cmo"].includes(String(p?.access_role || "").toLowerCase())
-      ) {
-        isExecutive = true;
-      }
+      profile = rows[0] || null;
     }
   } catch {}
 
-  if (!isExecutive) {
+  if (!profile) {
     try {
       const adminMeUrl =
         (env.SUPABASE_URL
@@ -417,17 +411,18 @@ async function reconciliationSalesApi(request, env, url) {
       });
       if (meRes.ok) {
         const meData = await meRes.json().catch(() => null);
-        const p = meData?.profile;
-        const role = String(p?.access_role || "").toLowerCase();
-        if (
-          p?.status === "active" &&
-          (p?.has_global_access === true || ["ceo", "cso", "cmo"].includes(role))
-        ) {
-          isExecutive = true;
-        }
+        profile = meData?.profile || null;
       }
     } catch {}
   }
+
+  if (!profile || profile.status !== "active") {
+    return json({ error: "Perfil inativo ou não autorizado.", code: "inactive_profile" }, 403);
+  }
+
+  const role = String(profile.access_role || "").toLowerCase();
+  const isExecutive =
+    profile.has_global_access === true || ["ceo", "cso", "cmo"].includes(role);
 
   if (!isExecutive) {
     return json(
@@ -569,6 +564,180 @@ async function reconciliationSalesApi(request, env, url) {
   } catch {
     return json(
       { error: "Serviço de reconciliação indisponível temporariamente." },
+      503,
+    );
+  }
+}
+
+async function vistaFunnelSummaryApi(request, env, url) {
+  const token = bearer(request);
+  if (!token) return json({ error: "Sua sessão expirou. Entre novamente." }, 401);
+
+  const auth = await authenticatedUser(request, env);
+  if (!auth) return json({ error: "Sua sessão expirou. Entre novamente." }, 401);
+
+  let profile = null;
+  try {
+    const profileRes = await rest(
+      env,
+      auth.accessToken,
+      `profiles?select=access_role,status,team,store&id=eq.${auth.id}`,
+    );
+    if (profileRes.ok) {
+      const rows = await profileRes.json().catch(() => []);
+      profile = rows[0] || null;
+    }
+  } catch {}
+
+  if (!profile) {
+    try {
+      const adminMeUrl =
+        (env.SUPABASE_URL
+          ? supabaseUrl(env, "/functions/v1/gralha-portal-admin")
+          : ADMIN_URL) + "/me";
+      const headers = {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      };
+      if (env.SUPABASE_PUBLISHABLE_KEY) {
+        headers.apikey = env.SUPABASE_PUBLISHABLE_KEY;
+      }
+      const meRes = await fetch(adminMeUrl, {
+        method: "GET",
+        headers,
+        signal: AbortSignal.timeout(ADMIN_TIMEOUT_MS),
+      });
+      if (meRes.ok) {
+        const meData = await meRes.json().catch(() => null);
+        profile = meData?.profile || null;
+      }
+    } catch {}
+  }
+
+  if (!profile || profile.status !== "active") {
+    return json({ error: "Perfil inativo ou não autorizado.", code: "inactive_profile" }, 403);
+  }
+
+  const role = String(profile.access_role || "").toLowerCase();
+  const isExecutive =
+    profile.has_global_access === true || ["ceo", "cso", "cmo"].includes(role);
+
+  if (!isExecutive) {
+    if (["store_director", "team_manager", "director", "gerente", "diretor"].includes(role)) {
+      return json(
+        {
+          error:
+            "O isolamento de escopo por equipe/loja no Funil Comercial do Vista CRM está temporariamente indisponível até a certificação dos mapeamentos organizacionais.",
+          code: "organizational_scope_unavailable",
+          role,
+          scope_limitation:
+            "A API do Vista CRM não possui mapeamento cadastral confiável de equipes para garantir o isolamento estrito de dados para Diretores e Gerentes.",
+        },
+        403,
+      );
+    }
+    return json(
+      { error: "Acesso exclusivo para cargos executivos (CEO, CSO e CMO).", code: "unauthorized_role" },
+      403,
+    );
+  }
+
+  const ALLOWED_PARAMS = new Set([
+    "data_inicio",
+    "data_fim",
+    "refresh",
+  ]);
+  for (const key of url.searchParams.keys()) {
+    if (!ALLOWED_PARAMS.has(key)) {
+      return json({ error: `Parâmetro não permitido: ${key}` }, 400);
+    }
+  }
+
+  const start = url.searchParams.get("data_inicio");
+  const end = url.searchParams.get("data_fim");
+  if (!start || !end) {
+    return json(
+      { error: "Parâmetros data_inicio e data_fim são obrigatórios." },
+      400,
+    );
+  }
+
+  if (!isValidCalendarDate(start) || !isValidCalendarDate(end)) {
+    return json(
+      { error: "As datas devem estar no formato YYYY-MM-DD e representar datas válidas de calendário." },
+      400,
+    );
+  }
+
+  const startParsed = Date.parse(`${start}T00:00:00Z`);
+  const endParsed = Date.parse(`${end}T00:00:00Z`);
+  if (startParsed > endParsed) {
+    return json(
+      { error: "A data inicial não pode ser posterior à data final." },
+      400,
+    );
+  }
+
+  const refreshParam = url.searchParams.get("refresh");
+  let refresh;
+  if (refreshParam !== null) {
+    if (refreshParam !== "true" && refreshParam !== "false") {
+      return json({ error: "refresh deve ser 'true' ou 'false'." }, 400);
+    }
+    refresh = refreshParam === "true";
+  }
+
+  const backendUrl = (
+    env.RECONCILIATION_BACKEND_URL ||
+    env.MCP_PIPEIMOB_BACKEND_URL ||
+    RECONCILIATION_BACKEND_URL
+  ).replace(/\/+$/, "");
+  const targetUrl = new URL(`${backendUrl}/api/vista/funnel/summary`);
+  targetUrl.searchParams.set("data_inicio", start);
+  targetUrl.searchParams.set("data_fim", end);
+  if (refresh !== undefined) {
+    targetUrl.searchParams.set("refresh", String(refresh));
+  }
+
+  try {
+    const upstream = await fetch(targetUrl.toString(), {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/json",
+      },
+      signal: AbortSignal.timeout(RECONCILIATION_TIMEOUT_MS),
+    });
+
+    const rawBody = await upstream.text().catch(() => null);
+    if (rawBody === null) {
+      return json(
+        { error: "Serviço do funil Vista não retornou dados." },
+        upstream.status >= 400 ? upstream.status : 502,
+      );
+    }
+
+    let payload;
+    try {
+      payload = JSON.parse(rawBody);
+    } catch {
+      return json(
+        { error: "Serviço do funil Vista retornou uma resposta não-JSON ou inválida." },
+        upstream.status >= 400 ? upstream.status : 502,
+      );
+    }
+
+    if (!upstream.ok) {
+      if (upstream.status === 401) {
+        return json({ error: "Sua sessão expirou. Entre novamente." }, 401);
+      }
+      return json(payload, upstream.status);
+    }
+
+    return json(payload, upstream.status);
+  } catch {
+    return json(
+      { error: "Serviço do funil Vista indisponível temporariamente." },
       503,
     );
   }
@@ -2023,7 +2192,13 @@ const HTML = `<!doctype html>
           availability:"unavailable",
           official_sales:null,
           matched:null,
+          strictly_matched:null,
+          total_linked:null,
+          divergent_matches:0,
+          value_mismatches:0,
+          date_mismatches:0,
           vista_gains:null,
+          total_vista_gains:null,
           vista_without_ccv:null,
           ccv_without_vista:null,
           non_auditable_gain_dates:0,
@@ -2032,22 +2207,43 @@ const HTML = `<!doctype html>
         }
       }
       const s=payload.summary||payload;
-      const matched=typeof s.matched==="number"?s.matched:(typeof s.matched_count==="number"?s.matched_count:0);
-      const vistaWithoutCcv=typeof s.vista_without_pipeimob_contract==="number"?s.vista_without_pipeimob_contract:(typeof s.vista_without_ccv==="number"?s.vista_without_ccv:(typeof s.vista_without_ccv_count==="number"?s.vista_without_ccv_count:0));
-      const ccvWithoutVista=typeof s.pipeimob_without_vista_gain==="number"?s.pipeimob_without_vista_gain:(typeof s.ccv_without_vista==="number"?s.ccv_without_vista:(typeof s.ccv_without_vista_count==="number"?s.ccv_without_vista_count:0));
-      const officialSales=typeof s.official_sales==="number"?s.official_sales:(typeof s.official_sales_count==="number"?s.official_sales_count:0);
-      const vistaGains=typeof s.vista_gains==="number"?s.vista_gains:(typeof s.vista_gain_count==="number"?s.vista_gain_count:(matched+vistaWithoutCcv));
-      const nonAuditable=typeof s.non_auditable_gain_dates==="number"?s.non_auditable_gain_dates:(typeof s.non_auditable_gain_dates_count==="number"?s.non_auditable_gain_dates_count:(typeof s.unresolved_gain_dates==="number"?s.unresolved_gain_dates:0));
+      const matched=typeof s.strictly_matched==="number"?s.strictly_matched:(typeof s.strictly_matched_count==="number"?s.strictly_matched_count:(typeof s.matched==="number"?s.matched:(typeof s.matched_count==="number"?s.matched_count:0)));
+      const valueMismatches=typeof s.value_only_mismatches==="number"?s.value_only_mismatches:(typeof s.value_mismatches==="number"?s.value_mismatches:(typeof s.value_mismatches_count==="number"?s.value_mismatches_count:0));
+      const dateMismatches=typeof s.date_only_mismatches==="number"?s.date_only_mismatches:(typeof s.date_mismatches==="number"?s.date_mismatches:(typeof s.date_mismatches_count==="number"?s.date_mismatches_count:0));
+      const valueAndDateMismatches=typeof s.value_and_date_mismatches==="number"?s.value_and_date_mismatches:0;
+      const divergentMatches=typeof s.divergent_linked_unique==="number"?s.divergent_linked_unique:(typeof s.divergent_matches==="number"?s.divergent_matches:(typeof s.divergent_matches_count==="number"?s.divergent_matches_count:(valueMismatches+dateMismatches+valueAndDateMismatches)));
+      const totalLinked=typeof s.total_linked_unique==="number"?s.total_linked_unique:(typeof s.total_linked==="number"?s.total_linked:(typeof s.total_linked_count==="number"?s.total_linked_count:(matched+divergentMatches)));
+      const vistaWithoutCcv=typeof s.vista_without_pipeimob_contract==="number"?s.vista_without_pipeimob_contract:(typeof s.vista_without_pipeimob_contract_count==="number"?s.vista_without_pipeimob_contract_count:(typeof s.vista_without_ccv==="number"?s.vista_without_ccv:(typeof s.vista_without_ccv_count==="number"?s.vista_without_ccv_count:0)));
+      const ccvWithoutVista=typeof s.pipeimob_without_vista_gain==="number"?s.pipeimob_without_vista_gain:(typeof s.pipeimob_without_vista_gain_count==="number"?s.pipeimob_without_vista_gain_count:(typeof s.ccv_without_vista==="number"?s.ccv_without_vista:(typeof s.ccv_without_vista_count==="number"?s.ccv_without_vista_count:0)));
+      const officialSales=typeof s.official_sales==="number"?s.official_sales:(typeof s.pipeimob_sales_count==="number"?s.pipeimob_sales_count:(typeof s.official_sales_count==="number"?s.official_sales_count:0));
+      const vistaGains=typeof s.total_vista_gains==="number"?s.total_vista_gains:(typeof s.total_vista_gains_count==="number"?s.total_vista_gains_count:(typeof s.vista_gains==="number"?s.vista_gains:(typeof s.vista_gain_count==="number"?s.vista_gain_count:(totalLinked+vistaWithoutCcv))));
+      const nonAuditable=typeof s.unresolved_gain_dates==="number"?s.unresolved_gain_dates:(typeof s.non_auditable_gain_dates==="number"?s.non_auditable_gain_dates:(typeof s.non_auditable_gain_dates_count==="number"?s.non_auditable_gain_dates_count:0));
       const unresolvedTeams=typeof s.unresolved_teams==="number"?s.unresolved_teams:(typeof s.unresolved_teams_count==="number"?s.unresolved_teams_count:0);
       return{
         availability:"available",
         official_sales:officialSales,
+        total_linked:totalLinked,
+        total_linked_unique:totalLinked,
         matched:matched,
+        strictly_matched:matched,
+        divergent_matches:divergentMatches,
+        divergent_linked_unique:divergentMatches,
+        value_mismatches:valueMismatches,
+        value_only_mismatches:valueMismatches,
+        date_mismatches:dateMismatches,
+        date_only_mismatches:dateMismatches,
+        value_and_date_mismatches:valueAndDateMismatches,
         vista_gains:vistaGains,
+        total_vista_gains:vistaGains,
         vista_without_ccv:vistaWithoutCcv,
         ccv_without_vista:ccvWithoutVista,
+        ccv_without_vista_gain:ccvWithoutVista,
+        vista_without_pipeimob_contract:vistaWithoutCcv,
+        pipeimob_without_vista_gain:ccvWithoutVista,
         non_auditable_gain_dates:nonAuditable,
         unresolved_teams:unresolvedTeams,
+        gain_period_basis:s.gain_period_basis||"DataFinal_only_if_present_else_unresolved",
+        limitation_note:s.limitation_note||"Registros do Vista CRM sem DataFinal preenchida (DataFinal=null) não possuem data de ganho auditável. O sistema não utiliza UltimaAtualizacao como fallback.",
         notes:Array.isArray(payload.notes)?payload.notes:(Array.isArray(s.notes)?s.notes:[])
       }
     }
@@ -2060,39 +2256,112 @@ const HTML = `<!doctype html>
       }
       const d=state.data,hasGainDiff=(d.vista_without_ccv||0)>0,hasCcvDiff=(d.ccv_without_vista||0)>0;
       let badges="";
-      if((d.non_auditable_gain_dates||0)>0){badges+='<div class="cso-badge-warning" style="margin-top:6px;width:100%;justify-content:center;">⚠ '+number(d.non_auditable_gain_dates)+' ganhos com data de fechamento não auditável no CRM</div>'}
-      if((d.unresolved_teams||0)>0){badges+='<div class="cso-badge-warning" style="margin-top:4px;width:100%;justify-content:center;">ℹ '+number(d.unresolved_teams)+' vendas com equipe pendente de mapeamento</div>'}
-      return '<div class="cso-recon-head">Reconciliação Comercial</div><div class="cso-recon-grid"><article class="cso-recon-card"><span>Ganhos Vista</span><strong>'+number(d.vista_gains)+'</strong></article><article class="cso-recon-card"><span>Vendas Oficializadas</span><strong>'+number(d.official_sales)+'</strong></article><article class="cso-recon-card'+(hasGainDiff?' warning':'')+'"><span>Vista sem CCV</span><strong>'+number(d.vista_without_ccv)+'</strong>'+(hasGainDiff?'<span class="cso-badge-warning">Divergência</span>':'')+'</article><article class="cso-recon-card'+(hasCcvDiff?' warning':'')+'"><span>CCV sem Ganho Vista</span><strong>'+number(d.ccv_without_vista)+'</strong>'+(hasCcvDiff?'<span class="cso-badge-warning">Divergência</span>':'')+'</article></div>'+badges
-    }
-    function csoFunnel(funnel,initialReconState){
-      if(!funnel||typeof funnel!=="object")return"";
-      const stages=Array.isArray(funnel.stages)?funnel.stages:[],relations=Array.isArray(funnel.relations)?funnel.relations:[],warnings=Array.isArray(funnel.warnings)?funnel.warnings:[],intermediateStages=stages.filter(s=>s.key!=="official_sales"),hasIntermediateData=intermediateStages.some(s=>typeof s.count==="number"),validCounts=stages.map(s=>typeof s.count==="number"?s.count:0),maxCount=Math.max(...validCounts,1);
-      let stagesHtml="";
-      if(!hasIntermediateData){
-        const officialStage=stages.find(s=>s.key==="official_sales")||{},officialCount=typeof officialStage.count==="number"?number(officialStage.count):"—";
-        stagesHtml='<div class="cso-funnel-homologation"><div class="cso-homologation-head"><span class="cso-homologation-badge">Etapas Vista em homologação</span><p>As etapas de Captações, Oportunidades, Visitas, Propostas e Fechamentos estão em processo de certificação cadastral no CRM. Nesta versão, a visualização corporativa destaca as <strong>Vendas oficializadas</strong> auditadas via Pipeimob e a <strong>Reconciliação Comercial</strong>.</p></div><div class="cso-official-highlight"><div class="cso-official-label"><strong>Vendas Oficializadas (CCV)</strong><span class="cso-stage-source src-pipeimob">[Pipeimob]</span></div><div class="cso-official-val">'+officialCount+'</div></div></div>'
-      }else{
-        stagesHtml='<div class="cso-funnel-stages">';
-        stages.forEach((stage,idx)=>{
-          const countVal=typeof stage.count==="number"?number(stage.count):'<span class="unavailable">Indisponível</span>',percent=typeof stage.count==="number"?Math.max(4,Math.min(100,(stage.count/maxCount)*100)):0,srcClass=stage.source==="vista"?"src-vista":"src-pipeimob",srcLabel=stage.source==="vista"?"Vista CRM":"Pipeimob",dateBasis=stage.date_basis?esc(stage.date_basis):"",tooltipText=stage.reason?' title="'+esc(stage.reason)+'"':(dateBasis?' title="Base: '+dateBasis+'"':'');
-          stagesHtml+='<div class="cso-funnel-stage"'+tooltipText+'><div class="cso-stage-label"><strong class="cso-stage-title">'+esc(stage.label)+'</strong><span class="cso-stage-source '+srcClass+'">['+srcLabel+']</span></div><div class="cso-stage-track"><div class="cso-stage-fill" style="width:'+percent+'%"></div></div><div class="cso-stage-count'+(typeof stage.count==="number"?'':' unavailable')+'">'+countVal+'</div></div>';
-          if(idx<stages.length-1){
-            const rel=relations.find(r=>r.from_stage===stage.key&&r.to_stage===stages[idx+1].key),ratioVal=rel&&typeof rel.ratio_percentage==="number"?rel.ratio_percentage+'%':'—',isOver100=rel&&typeof rel.ratio_percentage==="number"&&rel.ratio_percentage>100,relReason=isOver100?' title="Relação entre etapas no período (não é conversão sequencial de coorte)"':(rel?.reason?' title="'+esc(rel.reason)+'"':'');
-            stagesHtml+='<div class="cso-funnel-relation"'+relReason+'><span class="cso-relation-arrow">↓</span> Relação: <strong>'+ratioVal+'</strong></div>'
-          }
-        });
-        stagesHtml+='</div>'
+      if((d.total_linked||0)>0||(d.divergent_matches||0)>0){
+        const divText=[];
+        if(d.value_mismatches>0)divText.push(number(d.value_mismatches)+' divergência de valor');
+        if(d.date_mismatches>0)divText.push(number(d.date_mismatches)+' divergência de data');
+        const divSuffix=divText.length>0?' ('+divText.join(', ')+')':'';
+        badges+='<div class="cso-badge-neutral" style="margin-top:6px;width:100%;justify-content:center;font-size:11px;background:#eef0f8;color:var(--forest);padding:4px 8px;border-radius:6px;display:flex;align-items:center;" title="Identidade: '+number(d.official_sales)+' oficializadas = '+number(d.total_linked)+' vinculados + '+number(d.ccv_without_vista)+' sem ganho | '+number(d.vista_gains)+' ganhos = '+number(d.total_linked)+' vinculados + '+number(d.vista_without_ccv)+' sem CCV">✓ '+number(d.total_linked)+' vinculados: '+number(d.matched)+' conciliados'+divSuffix+'</div>'
       }
+      if((d.non_auditable_gain_dates||0)>0){badges+='<div class="cso-badge-warning" style="margin-top:4px;width:100%;justify-content:center;">⚠ '+number(d.non_auditable_gain_dates)+' ganhos com data de fechamento não auditável no CRM</div>'}
+      if((d.unresolved_teams||0)>0){badges+='<div class="cso-badge-warning" style="margin-top:4px;width:100%;justify-content:center;">ℹ '+number(d.unresolved_teams)+' vendas com equipe pendente de mapeamento</div>'}
+      return '<div class="cso-recon-head">Reconciliação Comercial</div><div class="cso-recon-grid"><article class="cso-recon-card" title="Total de ganhos avaliados no CRM ('+number(d.total_linked||d.matched)+' vinculados + '+number(d.vista_without_ccv)+' sem CCV)"><span>Ganhos Vista</span><strong>'+number(d.vista_gains)+'</strong></article><article class="cso-recon-card" title="Vendas formalizadas com contrato CCV assinado ('+number(d.total_linked||d.matched)+' vinculados + '+number(d.ccv_without_vista)+' sem ganho)"><span>Vendas Oficializadas</span><strong>'+number(d.official_sales)+'</strong></article><article class="cso-recon-card'+(hasGainDiff?' warning':'')+'"><span>Vista sem CCV</span><strong>'+number(d.vista_without_ccv)+'</strong>'+(hasGainDiff?'<span class="cso-badge-warning">Divergência</span>':'')+'</article><article class="cso-recon-card'+(hasCcvDiff?' warning':'')+'"><span>CCV sem Ganho Vista</span><strong>'+number(d.ccv_without_vista)+'</strong>'+(hasCcvDiff?'<span class="cso-badge-warning">Divergência</span>':'')+'</article></div>'+badges
+    }
+    function renderFunnelStagesInner(state,officialCount){
+      if(!state||state.status==="loading"){
+        return '<div class="cso-funnel-stages"><div class="cso-recon-loading" style="padding:32px 0;"><span class="cso-spinner"></span> Carregando etapas do Vista CRM…</div></div>'
+      }
+      if(state.status==="error"||!state.stages||!state.stages.length){
+        return '<div class="cso-funnel-homologation"><div class="cso-homologation-head"><span class="cso-homologation-badge">Etapas Vista em homologação</span><p>As etapas de Captações, Oportunidades, Visitas, Propostas e Fechamentos estão em processo de certificação cadastral no CRM. Nesta versão, a visualização corporativa destaca as <strong>Vendas oficializadas</strong> auditadas via Pipeimob e a <strong>Reconciliação Comercial</strong>.</p><div style="margin-top:8px;"><button type="button" class="cso-retry-btn" id="cso-funnel-retry">Tentar novamente</button></div></div><div class="cso-official-highlight"><div class="cso-official-label"><strong>Vendas Oficializadas (CCV)</strong><span class="cso-stage-source src-pipeimob">[Pipeimob]</span></div><div class="cso-official-val">'+number(officialCount)+'</div></div></div>'
+      }
+      const stages=state.stages,relations=state.relations||[],validCounts=stages.map(s=>typeof s.count==="number"?s.count:0),maxCount=Math.max(...validCounts,1);
+      let html='<div class="cso-funnel-stages">';
+      stages.forEach((stage,idx)=>{
+        const countVal=typeof stage.count==="number"?number(stage.count):'<span class="unavailable">Indisponível</span>',percent=typeof stage.count==="number"?Math.max(4,Math.min(100,(stage.count/maxCount)*100)):0,srcClass=stage.source==="vista"?"src-vista":"src-pipeimob",srcLabel=stage.source==="vista"?"Vista CRM":"Pipeimob",dateBasis=stage.date_basis?esc(stage.date_basis):"",tooltipText=stage.reason?' title="'+esc(stage.reason)+'"':(dateBasis?' title="Base: '+dateBasis+'"':'');
+        html+='<div class="cso-funnel-stage"'+tooltipText+'><div class="cso-stage-label"><strong class="cso-stage-title">'+esc(stage.label)+'</strong><span class="cso-stage-source '+srcClass+'">['+srcLabel+']</span></div><div class="cso-stage-track"><div class="cso-stage-fill" style="width:'+percent+'%"></div></div><div class="cso-stage-count'+(typeof stage.count==="number"?'':' unavailable')+'">'+countVal+'</div></div>';
+        if(idx<stages.length-1){
+          const rel=relations.find(r=>r.from_stage===stage.key&&r.to_stage===stages[idx+1].key),ratioVal=rel&&typeof rel.ratio_percentage==="number"?rel.ratio_percentage+'%':'—',isOver100=rel&&typeof rel.ratio_percentage==="number"&&rel.ratio_percentage>100,relReason=isOver100?' title="Relação entre etapas no período (não é conversão sequencial de coorte)"':(rel?.reason?' title="'+esc(rel.reason)+'"':'');
+          html+='<div class="cso-funnel-relation"'+relReason+'><span class="cso-relation-arrow">↓</span> Relação: <strong>'+ratioVal+'</strong></div>'
+        }
+      });
+      html+='</div>';
+      return html;
+    }
+    function csoFunnel(funnel,initialReconState,initialFunnelState){
+      if(!funnel||typeof funnel!=="object")return"";
+      const officialStage=Array.isArray(funnel.stages)?funnel.stages.find(s=>s.key==="official_sales"):null;
+      const officialSalesCount=typeof officialStage?.count==="number"?officialStage.count:0;
+      const fState=initialFunnelState||(Array.isArray(funnel.stages)&&funnel.stages.some(s=>s.key!=="official_sales"&&typeof s.count==="number")?{status:"available",stages:funnel.stages,relations:funnel.relations}:{status:"loading"});
+      const stagesWrap='<div class="cso-funnel-stages-wrap" id="cso-funnel-stages-wrap" aria-live="polite">'+renderFunnelStagesInner(fState,officialSalesCount)+'</div>';
       const reconState=initialReconState||(funnel.reconciliation?{status:"available",data:normalizeReconciliationSummary(funnel.reconciliation)}:{status:"loading"});
       const reconHtml='<div class="cso-recon-panel" id="cso-recon-panel" aria-live="polite">'+renderReconciliationInner(reconState)+'</div>';
-      let warningsHtml='';
-      if(warnings.length>0){warningsHtml='<div class="cso-funnel-warnings">'+warnings.map(w=>'<div>• '+esc(w)+'</div>').join('')+'</div>'}
-      return '<section class="cso-funnel-card"><div class="cso-funnel-head"><div><h2>Funil Comercial</h2></div><div class="cso-funnel-meta"><span class="cso-funnel-badge">'+(hasIntermediateData?'Fotografia de Pipeline &amp; CCVs':'Estrutura Auditável &amp; Reconciliação')+'</span></div></div><div class="cso-funnel-layout">'+stagesHtml+reconHtml+'</div>'+warningsHtml+'</section>'
+      const warnings=Array.isArray(funnel.warnings)?funnel.warnings:[
+        "As primeiras 5 etapas refletem a atividade e snapshot do Vista CRM, enquanto as Vendas oficializadas decorrem exclusivamente de CCVs formalizados no Pipeimob.",
+        "Relações acima de 100% expressam a proporção entre etapas acumuladas no período e não taxa de conversão sequencial."
+      ];
+      const warningsHtml='<div class="cso-funnel-warnings">'+warnings.map(w=>'<div>• '+esc(w)+'</div>').join('')+'</div>';
+      return '<section class="cso-funnel-card"><div class="cso-funnel-head"><div><h2>Funil Comercial</h2></div><div class="cso-funnel-meta"><span class="cso-funnel-badge">Fotografia de Pipeline &amp; CCVs</span></div></div><div class="cso-funnel-layout">'+stagesWrap+reconHtml+'</div>'+warningsHtml+'</section>'
     }
-    let activeReconController=null,currentReconRequestId=0;
+    let activeReconController=null,currentReconRequestId=0,activeFunnelController=null,currentFunnelRequestId=0;
     function attachRetryHandler(start,end){
       const btn=$("cso-recon-retry");
       if(btn)btn.addEventListener("click",()=>fetchReconciliationAsync(start,end));
+    }
+    function attachFunnelRetryHandler(start,end,officialCount){
+      const btn=$("cso-funnel-retry");
+      if(btn)btn.addEventListener("click",()=>fetchFunnelSummaryAsync(start,end,officialCount));
+    }
+    async function fetchFunnelSummaryAsync(start,end,officialCount){
+      if(activeFunnelController){activeFunnelController.abort();activeFunnelController=null}
+      activeFunnelController=new AbortController();
+      const signal=activeFunnelController.signal,requestId=++currentFunnelRequestId;
+      const wrap=$("cso-funnel-stages-wrap");
+      if(wrap)wrap.innerHTML=renderFunnelStagesInner({status:"loading"},officialCount);
+      try{
+        const query=new URLSearchParams({data_inicio:start,data_fim:end,refresh:"false"});
+        const res=await fetch("/api/vista/funnel/summary?"+query,{method:"GET",headers:{"Content-Type":"application/json",Authorization:"Bearer "+session?.access_token},signal});
+        if(requestId!==currentFunnelRequestId)return;
+        if(!res.ok){
+          if(wrap){wrap.innerHTML=renderFunnelStagesInner({status:"error"},officialCount);attachFunnelRetryHandler(start,end,officialCount)}
+          return;
+        }
+        const payload=await res.json().catch(()=>null);
+        if(requestId!==currentFunnelRequestId)return;
+        if(!payload||typeof payload!=="object"||!Array.isArray(payload.stages)){
+          if(wrap){wrap.innerHTML=renderFunnelStagesInner({status:"error"},officialCount);attachFunnelRetryHandler(start,end,officialCount)}
+          return;
+        }
+        const vistaStages=payload.stages;
+        const officialStage={
+          key:"official_sales",
+          label:"Vendas oficializadas",
+          count:officialCount,
+          movement_count:officialCount,
+          metric_type:"contracts",
+          source:"pipeimob",
+          date_basis:"ccv_signature_date",
+          availability:"available",
+          reason:null
+        };
+        const allStages=[...vistaStages,officialStage];
+        const relations=[];
+        for(let i=0;i<allStages.length-1;i++){
+          const fromSt=allStages[i],toSt=allStages[i+1];
+          if(typeof fromSt.count==="number"&&typeof toSt.count==="number"){
+            const ratio=fromSt.count>0?Math.round((toSt.count/fromSt.count)*1000)/10:0;
+            relations.push({from_stage:fromSt.key,to_stage:toSt.key,ratio_percentage:ratio,availability:"available",reason:null});
+          }else{
+            relations.push({from_stage:fromSt.key,to_stage:toSt.key,ratio_percentage:null,availability:"unavailable",reason:"Etapa anterior ou seguinte indisponível para cálculo de relação."});
+          }
+        }
+        if(wrap){
+          wrap.innerHTML=renderFunnelStagesInner({status:"available",stages:allStages,relations},officialCount);
+        }
+      }catch(err){
+        if(err.name==="AbortError")return;
+        if(requestId!==currentFunnelRequestId)return;
+        if(wrap){wrap.innerHTML=renderFunnelStagesInner({status:"error"},officialCount);attachFunnelRetryHandler(start,end,officialCount)}
+      }
     }
     async function fetchReconciliationAsync(start,end){
       if(activeReconController){activeReconController.abort();activeReconController=null}
@@ -2138,9 +2407,11 @@ const HTML = `<!doctype html>
           }
         }
       }
-      $("cso-content").innerHTML='<div class="cso-kpis"><article class="cso-card"><span>VGV</span><strong>'+money(summary.total_sales)+'</strong></article><article class="cso-card"><span>VGC</span><strong>'+vgcDisplay+'</strong>'+vgcBadge+'</article><article class="cso-card"><span>Vendas</span><strong>'+number(summary.transaction_count)+'</strong></article><article class="cso-card"><span>Comissão média</span><strong>'+(summary.avg_commission_rate!=null?number(summary.avg_commission_rate)+'%':'—')+'</strong></article></div>'+csoFunnel(funnel,{status:"loading"})+'<div class="cso-grid"><section class="cso-panel"><h2>VGV por corretor</h2>'+csoBars(managers,"manager","volume")+'</section><section class="cso-panel"><h2>Origem das vendas</h2>'+csoBars(origins,"origin","volume")+'</section></div><div class="cso-table-wrap"><table class="cso-table"><thead><tr><th>Período</th><th>Vendas</th><th>VGV</th><th>VGC</th></tr></thead><tbody>'+timeline.map(row=>'<tr><td>'+esc(row.label||row.period||row.month||"")+'</td><td>'+number(row.transaction_count)+'</td><td>'+money(row.total_sales)+'</td><td>'+money(row.total_commissions)+'</td></tr>').join("")+'</tbody></table></div><p class="cso-note">Fonte automática: Pipeimob, pelo período de assinatura do CCV. VGV ajustado, comissão individual do CSO e recebido pelo CSO permanecem indisponíveis até existir regra oficial na integração.</p>';
+      $("cso-content").innerHTML='<div class="cso-kpis"><article class="cso-card"><span>VGV</span><strong>'+money(summary.total_sales)+'</strong></article><article class="cso-card"><span>VGC</span><strong>'+vgcDisplay+'</strong>'+vgcBadge+'</article><article class="cso-card"><span>Vendas</span><strong>'+number(summary.transaction_count)+'</strong></article><article class="cso-card"><span>Comissão média</span><strong>'+(summary.avg_commission_rate!=null?number(summary.avg_commission_rate)+'%':'—')+'</strong></article></div>'+csoFunnel(funnel,{status:"loading"},{status:"loading"})+'<div class="cso-grid"><section class="cso-panel"><h2>VGV por corretor</h2>'+csoBars(managers,"manager","volume")+'</section><section class="cso-panel"><h2>Origem das vendas</h2>'+csoBars(origins,"origin","volume")+'</section></div><div class="cso-table-wrap"><table class="cso-table"><thead><tr><th>Período</th><th>Vendas</th><th>VGV</th><th>VGC</th></tr></thead><tbody>'+timeline.map(row=>'<tr><td>'+esc(row.label||row.period||row.month||"")+'</td><td>'+number(row.transaction_count)+'</td><td>'+money(row.total_sales)+'</td><td>'+money(row.total_commissions)+'</td></tr>').join("")+'</tbody></table></div><p class="cso-note">Fonte automática: Pipeimob, pelo período de assinatura do CCV. VGV ajustado, comissão individual do CSO e recebido pelo CSO permanecem indisponíveis até existir regra oficial na integração.</p>';
       const reqStart=start||$("cso-start")?.value,reqEnd=end||$("cso-end")?.value;
+      const officialCount=Number(summary.transaction_count)||0;
       if(reqStart&&reqEnd){
+        fetchFunnelSummaryAsync(reqStart,reqEnd,officialCount);
         fetchReconciliationAsync(reqStart,reqEnd);
       }
     }
@@ -2149,6 +2420,7 @@ const HTML = `<!doctype html>
       content.innerHTML="<p>Carregando indicadores do Pipeimob…</p>";
       button.disabled=true;
       if(activeReconController){activeReconController.abort();activeReconController=null}
+      if(activeFunnelController){activeFunnelController.abort();activeFunnelController=null}
       const start=$("cso-start").value,end=$("cso-end").value;
       const query=new URLSearchParams({data_inicio:start,data_fim:end});
       const res=await authedRequest("/api/cso-dashboard?"+query);
@@ -2194,7 +2466,13 @@ export function normalizeReconciliationSummary(payload) {
       availability: "unavailable",
       official_sales: null,
       matched: null,
+      strictly_matched: null,
+      total_linked: null,
+      divergent_matches: 0,
+      value_mismatches: 0,
+      date_mismatches: 0,
       vista_gains: null,
+      total_vista_gains: null,
       vista_without_ccv: null,
       ccv_without_vista: null,
       non_auditable_gain_dates: 0,
@@ -2203,30 +2481,66 @@ export function normalizeReconciliationSummary(payload) {
     };
   }
   const s = payload.summary || payload;
-  const matched = typeof s.matched === "number" ? s.matched : (typeof s.matched_count === "number" ? s.matched_count : 0);
+  const matched = typeof s.strictly_matched === "number"
+    ? s.strictly_matched
+    : (typeof s.strictly_matched_count === "number"
+        ? s.strictly_matched_count
+        : (typeof s.matched === "number" ? s.matched : (typeof s.matched_count === "number" ? s.matched_count : 0)));
+  const valueMismatches = typeof s.value_only_mismatches === "number"
+    ? s.value_only_mismatches
+    : (typeof s.value_mismatches === "number"
+        ? s.value_mismatches
+        : (typeof s.value_mismatches_count === "number" ? s.value_mismatches_count : 0));
+  const dateMismatches = typeof s.date_only_mismatches === "number"
+    ? s.date_only_mismatches
+    : (typeof s.date_mismatches === "number"
+        ? s.date_mismatches
+        : (typeof s.date_mismatches_count === "number" ? s.date_mismatches_count : 0));
+  const valueAndDateMismatches = typeof s.value_and_date_mismatches === "number" ? s.value_and_date_mismatches : 0;
+  const divergentMatches = typeof s.divergent_linked_unique === "number"
+    ? s.divergent_linked_unique
+    : (typeof s.divergent_matches === "number"
+        ? s.divergent_matches
+        : (typeof s.divergent_matches_count === "number" ? s.divergent_matches_count : (valueMismatches + dateMismatches + valueAndDateMismatches)));
+  const totalLinked = typeof s.total_linked_unique === "number"
+    ? s.total_linked_unique
+    : (typeof s.total_linked === "number"
+        ? s.total_linked
+        : (typeof s.total_linked_count === "number" ? s.total_linked_count : (matched + divergentMatches)));
   const vistaWithoutCcv = typeof s.vista_without_pipeimob_contract === "number"
     ? s.vista_without_pipeimob_contract
-    : (typeof s.vista_without_ccv === "number"
-        ? s.vista_without_ccv
-        : (typeof s.vista_without_ccv_count === "number" ? s.vista_without_ccv_count : 0));
+    : (typeof s.vista_without_pipeimob_contract_count === "number"
+        ? s.vista_without_pipeimob_contract_count
+        : (typeof s.vista_without_ccv === "number"
+            ? s.vista_without_ccv
+            : (typeof s.vista_without_ccv_count === "number" ? s.vista_without_ccv_count : 0)));
   const ccvWithoutVista = typeof s.pipeimob_without_vista_gain === "number"
     ? s.pipeimob_without_vista_gain
-    : (typeof s.ccv_without_vista === "number"
-        ? s.ccv_without_vista
-        : (typeof s.ccv_without_vista_count === "number" ? s.ccv_without_vista_count : 0));
+    : (typeof s.pipeimob_without_vista_gain_count === "number"
+        ? s.pipeimob_without_vista_gain_count
+        : (typeof s.ccv_without_vista === "number"
+            ? s.ccv_without_vista
+            : (typeof s.ccv_without_vista_count === "number" ? s.ccv_without_vista_count : 0)));
   const officialSales = typeof s.official_sales === "number"
     ? s.official_sales
-    : (typeof s.official_sales_count === "number" ? s.official_sales_count : 0);
-  const vistaGains = typeof s.vista_gains === "number"
-    ? s.vista_gains
-    : (typeof s.vista_gain_count === "number"
-        ? s.vista_gain_count
-        : (matched + vistaWithoutCcv));
-  const nonAuditable = typeof s.non_auditable_gain_dates === "number"
-    ? s.non_auditable_gain_dates
-    : (typeof s.non_auditable_gain_dates_count === "number"
-        ? s.non_auditable_gain_dates_count
-        : (typeof s.unresolved_gain_dates === "number" ? s.unresolved_gain_dates : 0));
+    : (typeof s.pipeimob_sales_count === "number"
+        ? s.pipeimob_sales_count
+        : (typeof s.official_sales_count === "number" ? s.official_sales_count : 0));
+  const vistaGains = typeof s.total_vista_gains === "number"
+    ? s.total_vista_gains
+    : (typeof s.total_vista_gains_count === "number"
+        ? s.total_vista_gains_count
+        : (typeof s.vista_gains === "number"
+            ? s.vista_gains
+            : (typeof s.vista_gain_count === "number"
+                ? s.vista_gain_count
+                : (totalLinked + vistaWithoutCcv))));
+  const nonAuditable = typeof s.unresolved_gain_dates === "number"
+    ? s.unresolved_gain_dates
+    : (typeof s.non_auditable_gain_dates === "number"
+        ? s.non_auditable_gain_dates
+        : (typeof s.non_auditable_gain_dates_count === "number"
+            ? s.non_auditable_gain_dates_count : 0));
   const unresolvedTeams = typeof s.unresolved_teams === "number"
     ? s.unresolved_teams
     : (typeof s.unresolved_teams_count === "number"
@@ -2235,12 +2549,28 @@ export function normalizeReconciliationSummary(payload) {
   return {
     availability: "available",
     official_sales: officialSales,
+    total_linked: totalLinked,
+    total_linked_unique: totalLinked,
     matched: matched,
+    strictly_matched: matched,
+    divergent_matches: divergentMatches,
+    divergent_linked_unique: divergentMatches,
+    value_mismatches: valueMismatches,
+    value_only_mismatches: valueMismatches,
+    date_mismatches: dateMismatches,
+    date_only_mismatches: dateMismatches,
+    value_and_date_mismatches: valueAndDateMismatches,
     vista_gains: vistaGains,
+    total_vista_gains: vistaGains,
     vista_without_ccv: vistaWithoutCcv,
     ccv_without_vista: ccvWithoutVista,
+    ccv_without_vista_gain: ccvWithoutVista,
+    vista_without_pipeimob_contract: vistaWithoutCcv,
+    pipeimob_without_vista_gain: ccvWithoutVista,
     non_auditable_gain_dates: nonAuditable,
     unresolved_teams: unresolvedTeams,
+    gain_period_basis: s.gain_period_basis || "DataFinal_only_if_present_else_unresolved",
+    limitation_note: s.limitation_note || "Registros do Vista CRM sem DataFinal preenchida (DataFinal=null) não possuem data de ganho auditável. O sistema não utiliza UltimaAtualizacao como fallback.",
     notes: Array.isArray(payload.notes) ? payload.notes : (Array.isArray(s.notes) ? s.notes : []),
   };
 }
@@ -2286,6 +2616,12 @@ export default {
           return json({ error: "Método não permitido." }, 405);
         }
         return reconciliationSalesApi(request, env, url);
+      }
+      if (url.pathname === "/api/vista/funnel/summary") {
+        if (request.method !== "GET") {
+          return json({ error: "Método não permitido." }, 405);
+        }
+        return vistaFunnelSummaryApi(request, env, url);
       }
       return json({ error: "Rota não encontrada." }, 404);
     } catch (error) {

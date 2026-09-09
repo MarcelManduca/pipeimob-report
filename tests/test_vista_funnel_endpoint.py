@@ -192,3 +192,80 @@ def test_vista_funnel_endpoint_rejects_period_over_one_year():
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Funnel period cannot exceed 366 days"
+
+
+def test_vista_funnel_summary_endpoint_returns_5_stages_and_relations():
+    app.dependency_overrides[verify_backend_api_key] = lambda: {"sub": "test"}
+    try:
+        with patch(
+            "main.VistaFunnelClient.from_env",
+            return_value=FakeVistaFunnelClient(),
+        ):
+            response = TestClient(app).get(
+                "/api/vista/funnel/summary"
+                "?data_inicio=2026-08-01&data_fim=2026-08-30"
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["contract_version"] == "1.1"
+    assert payload["source"] == "vista_negocios_listar"
+    assert len(payload["stages"]) == 5
+    assert payload["stages"][0]["key"] == "leads"
+    assert payload["stages"][0]["count"] is None
+    assert payload["stages"][0]["availability"] == "unavailable"
+    assert payload["stages"][1]["key"] == "opportunities"
+    assert payload["stages"][1]["count"] == 2
+    assert payload["stages"][3]["key"] == "proposals"
+    assert payload["stages"][3]["count"] == 2
+    assert "relations" in payload
+    assert response.headers["X-Funnel-Cache"] == "miss"
+    assert response.headers["X-Funnel-Contract"] == "1.1"
+
+
+def test_vista_funnel_summary_endpoint_caches_and_handles_failure():
+    app.dependency_overrides[verify_backend_api_key] = lambda: {"sub": "test"}
+    fake_client = FakeVistaFunnelClient()
+    try:
+        with patch("main.VistaFunnelClient.from_env", return_value=fake_client):
+            client = TestClient(app)
+            first = client.get(
+                "/api/vista/funnel/summary"
+                "?data_inicio=2026-08-01&data_fim=2026-08-30"
+            )
+            assert first.status_code == 200
+            assert first.headers["X-Funnel-Cache"] == "miss"
+
+            second = client.get(
+                "/api/vista/funnel/summary"
+                "?data_inicio=2026-08-01&data_fim=2026-08-30"
+            )
+            assert second.status_code == 200
+            cache_key = (
+                "vista_funnel_summary",
+                "1.1",
+                "2026-08-01",
+                "2026-08-30",
+            )
+            with main.vista_funnel_cache.lock:
+                payload, _, stale_until = main.vista_funnel_cache.cache[cache_key]
+                main.vista_funnel_cache.cache[cache_key] = (
+                    payload,
+                    0,
+                    stale_until,
+                )
+
+            fake_client.fetch_created_deals = lambda *_: (_ for _ in ()).throw(
+                VistaSalesAPIError("vista down")
+            )
+            third = client.get(
+                "/api/vista/funnel/summary"
+                "?data_inicio=2026-08-01&data_fim=2026-08-30"
+            )
+            assert third.status_code == 200
+            assert third.headers["X-Funnel-Cache"] == "stale-if-error"
+    finally:
+        app.dependency_overrides.clear()
+

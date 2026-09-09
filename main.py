@@ -5569,6 +5569,237 @@ async def get_vista_funnel_cohort(
 
 
 @app.get(
+    "/api/vista/funnel/summary",
+    dependencies=[Depends(verify_backend_api_key)],
+    summary="Summarize Vista commercial funnel stages for executive dashboard",
+    description=(
+        "Uses Vista CRM negocios/listar to extract aggregated commercial pipeline "
+        "stages: Leads, Oportunidades, Visitas, Propostas, Fechamentos comerciais. "
+        "Returns aggregate-only counts with distinct sources and stage relations. "
+        "Client personal data is neither requested nor returned."
+    ),
+)
+async def get_vista_funnel_summary(
+    response: Response,
+    data_inicio: str = Query(..., description="Funnel start date (YYYY-MM-DD)"),
+    data_fim: str = Query(..., description="Funnel end date (YYYY-MM-DD)"),
+    refresh: bool = Query(False),
+):
+    try:
+        start_date = date.fromisoformat(data_inicio)
+        end_date = date.fromisoformat(data_fim)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400, detail="Funnel dates must use YYYY-MM-DD"
+        ) from exc
+    if start_date > end_date:
+        raise HTTPException(
+            status_code=400, detail="data_inicio cannot be after data_fim"
+        )
+    if (end_date - start_date).days > 366:
+        raise HTTPException(
+            status_code=400, detail="Funnel period cannot exceed 366 days"
+        )
+
+    cache_key = (
+        "vista_funnel_summary",
+        "1.1",
+        data_inicio,
+        data_fim,
+    )
+
+    def sync_fetch():
+        vista_client = VistaFunnelClient.from_env()
+        deals = vista_client.fetch_created_deals(start_date, end_date)
+
+        opportunities_count = len(deals)
+        visits_count = 0
+        proposals_count = 0
+        closings_count = 0
+
+        for deal in deals:
+            stage_name = str(deal.get("stage_name") or "").lower()
+            if any(term in stage_name for term in ("visita", "atendimento", "agendamento")):
+                visits_count += 1
+            elif "proposta" in stage_name:
+                proposals_count += 1
+            elif any(term in stage_name for term in ("fechamento", "minuta")):
+                closings_count += 1
+
+        stages = [
+            {
+                "key": "leads",
+                "label": "Captações / Leads",
+                "count": None,
+                "movement_count": None,
+                "metric_type": "unique_clients",
+                "source": "vista",
+                "date_basis": "lead_creation_date",
+                "availability": "unavailable",
+                "reason": "Endpoint dedicado de eventos de captação não mapeado no contrato atual do CRM.",
+            },
+            {
+                "key": "opportunities",
+                "label": "Oportunidades",
+                "count": opportunities_count,
+                "movement_count": opportunities_count,
+                "metric_type": "unique_clients",
+                "source": "vista",
+                "date_basis": "opportunity_creation_date",
+                "availability": "available",
+                "reason": None,
+            },
+            {
+                "key": "visits",
+                "label": "Visitas",
+                "count": visits_count,
+                "movement_count": visits_count,
+                "metric_type": "unique_clients",
+                "source": "vista",
+                "date_basis": "current_stage_snapshot",
+                "availability": "partial",
+                "reason": "Snapshot da etapa atual de visita no CRM.",
+            },
+            {
+                "key": "proposals",
+                "label": "Propostas",
+                "count": proposals_count,
+                "movement_count": proposals_count,
+                "metric_type": "unique_clients",
+                "source": "vista",
+                "date_basis": "current_stage_snapshot",
+                "availability": "partial",
+                "reason": "Snapshot da etapa atual de proposta no CRM.",
+            },
+            {
+                "key": "commercial_closings",
+                "label": "Fechamentos comerciais",
+                "count": closings_count,
+                "movement_count": closings_count,
+                "metric_type": "unique_clients",
+                "source": "vista",
+                "date_basis": "current_stage_snapshot",
+                "availability": "partial",
+                "reason": "Negócios em fase de fechamento comercial/minuta.",
+            },
+        ]
+
+        relations = []
+        for i in range(len(stages) - 1):
+            from_st = stages[i]
+            to_st = stages[i + 1]
+            if from_st.get("count") is not None and to_st.get("count") is not None:
+                c_from = from_st["count"]
+                c_to = to_st["count"]
+                ratio = round((c_to / c_from) * 100, 1) if c_from > 0 else 0.0
+                relations.append({
+                    "from_stage": from_st["key"],
+                    "to_stage": to_st["key"],
+                    "ratio_percentage": ratio,
+                    "availability": "available",
+                    "reason": None,
+                })
+            else:
+                relations.append({
+                    "from_stage": from_st["key"],
+                    "to_stage": to_st["key"],
+                    "ratio_percentage": None,
+                    "availability": "unavailable",
+                    "reason": "Etapa anterior ou seguinte indisponível para cálculo de relação.",
+                })
+
+        payload = {
+            "contract_version": "1.1",
+            "source": "vista_negocios_listar",
+            "period": {
+                "start": data_inicio,
+                "end": data_fim,
+                "basis": vista_client.created_field,
+            },
+            "methodology": "current_stage_snapshot",
+            "generated_at": datetime.now(timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z"),
+            "stages": stages,
+            "relations": relations,
+            "warnings": [
+                "As etapas intermediárias representam a fotografia de atividade e snapshot do Vista CRM.",
+                "Valores acima de 100% refletem relação entre etapas acumuladas no período e não taxa de conversão sequencial."
+            ],
+            "availability": "available",
+        }
+        vista_funnel_cache.set(
+            cache_key, payload, ttl=VISTA_FUNNEL_CACHE_TTL_SECONDS
+        )
+        return payload
+
+    cached_payload, cache_status = vista_funnel_cache.get_status(cache_key)
+    if refresh:
+        cache_status = "miss"
+
+    def stale_fallback(reason: str):
+        if cache_status != "stale" or cached_payload is None:
+            return None
+        response.headers["X-Data-Mode"] = "cached"
+        response.headers["X-Funnel-Cache"] = reason
+        response.headers["X-Funnel-Contract"] = "1.1"
+        return cached_payload
+
+    try:
+        if cache_status == "fresh" and not refresh:
+            payload = cached_payload
+        else:
+            payload = await single_flight_registry.execute(
+                cache_key,
+                lambda: asyncio.to_thread(sync_fetch),
+                caller_endpoint="vista_funnel_summary",
+                timeout=30,
+            )
+            cache_status = "miss"
+    except VistaSalesConfigurationError as exc:
+        fallback = stale_fallback("stale-if-error")
+        if fallback is not None:
+            return fallback
+        raise HTTPException(
+            status_code=503,
+            detail="Vista funnel integration is not configured.",
+            headers={"X-Funnel-Error": "vista_not_configured"},
+        ) from exc
+    except VistaSalesAPIError as exc:
+        fallback = stale_fallback("stale-if-error")
+        if fallback is not None:
+            return fallback
+        error_code = getattr(exc, "error_code", "vista_unavailable")
+        if error_code not in {
+            "vista_transport_error",
+            "vista_invalid_json",
+            "vista_invalid_contract",
+        } and not re.fullmatch(r"vista_http_[45]\d{2}", error_code):
+            error_code = "vista_unavailable"
+        raise HTTPException(
+            status_code=503,
+            detail="Vista funnel data is temporarily unavailable.",
+            headers={"X-Funnel-Error": error_code, "Retry-After": "60"},
+        ) from exc
+    except asyncio.TimeoutError as exc:
+        fallback = stale_fallback("stale-if-timeout")
+        if fallback is not None:
+            return fallback
+        raise HTTPException(
+            status_code=504,
+            detail="Vista funnel query timed out.",
+            headers={"X-Funnel-Error": "vista_timeout"},
+        ) from exc
+
+    response.headers["X-Data-Mode"] = (
+        "live" if cache_status == "miss" else "cached"
+    )
+    response.headers["X-Funnel-Cache"] = cache_status
+    response.headers["X-Funnel-Contract"] = "1.1"
+    return payload
+
+
+@app.get(
     "/api/vista/diagnostics/organizational-coverage",
     dependencies=[Depends(require_vista_diagnostic_admin)],
     summary="Evaluate stable ID coverage across organizational entities in Vista CRM",

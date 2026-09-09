@@ -201,6 +201,33 @@ def reconcile_sales(
         if item.get("team_resolution_status") == "ambiguous_pipeimob_groups"
     )
 
+    linked_items = [
+        item for item in items if item.get("pipeimob_transaction_id") and item.get("vista_deal_id")
+    ]
+    strictly_matched_count = sum(1 for item in linked_items if not item.get("issues"))
+    value_only_count = sum(
+        1
+        for item in linked_items
+        if VALUE_MISMATCH in item.get("issues", []) and DATE_MISMATCH not in item.get("issues", [])
+    )
+    date_only_count = sum(
+        1
+        for item in linked_items
+        if DATE_MISMATCH in item.get("issues", []) and VALUE_MISMATCH not in item.get("issues", [])
+    )
+    value_and_date_count = sum(
+        1
+        for item in linked_items
+        if VALUE_MISMATCH in item.get("issues", []) and DATE_MISMATCH in item.get("issues", [])
+    )
+    divergent_linked_unique = sum(1 for item in linked_items if item.get("issues"))
+    total_linked_unique = len(linked_items)
+
+    total_vista_gains = len(gains)
+    unresolved_gain_dates = sum(
+        1 for item in items if item.get("vista_deal_id") and not item.get("vista_gain_date")
+    )
+
     return {
         "contract_version": "1.1",
         "official_source": "pipeimob_api_v2",
@@ -208,13 +235,32 @@ def reconcile_sales(
         "summary": {
             "official_sales": len(pipe_sales),
             "official_vgv": str(official_vgv),
-            "matched": status_counts[MATCHED],
+            "total_linked": total_linked_unique,
+            "total_linked_unique": total_linked_unique,
+            "matched": strictly_matched_count,
+            "strictly_matched": strictly_matched_count,
+            "divergent_matches": divergent_linked_unique,
+            "divergent_linked_unique": divergent_linked_unique,
+            "value_mismatches": value_only_count,
+            "value_only_mismatches": value_only_count,
+            "date_mismatches": date_only_count,
+            "date_only_mismatches": date_only_count,
+            "value_and_date_mismatches": value_and_date_count,
             "pipeimob_without_vista_gain": status_counts[PIPE_WITHOUT_GAIN],
+            "ccv_without_vista_gain": status_counts[PIPE_WITHOUT_GAIN],
             "vista_without_pipeimob_contract": status_counts[VISTA_WITHOUT_CONTRACT],
-            "value_mismatches": issue_counts[VALUE_MISMATCH],
-            "date_mismatches": issue_counts[DATE_MISMATCH],
+            "vista_without_ccv": status_counts[VISTA_WITHOUT_CONTRACT],
+            "total_vista_gains": total_vista_gains,
+            "vista_gains": total_vista_gains,
             "no_automatic_link": status_counts[NO_LINK],
             "source_data_incomplete": status_counts[SOURCE_DATA_INCOMPLETE],
+            "non_auditable_gain_dates": unresolved_gain_dates,
+            "unresolved_gain_dates": unresolved_gain_dates,
+            "gain_period_basis": "DataFinal_only_if_present_else_unresolved",
+            "limitation_note": (
+                "Registros do Vista CRM sem DataFinal preenchida (DataFinal=null) não possuem data de ganho auditável. "
+                "O sistema não utiliza UltimaAtualizacao como fallback."
+            ),
             "missing_commercial_broker": missing_commercial_broker,
             "api_team_resolved": api_team_resolved,
             "api_team_unresolved": max(len(pipe_sales) - api_team_resolved, 0),
@@ -700,32 +746,41 @@ def build_funnel_payload(
         official_sales_rec = int(rec_summary.get("official_sales", len(official_transactions)))
         official_vgv_rec = str(rec_summary.get("official_vgv") or official_vgv or "0.00")
         v_matched = int(rec_summary.get("matched", 0))
+        v_divergent = int(rec_summary.get("divergent_matches", 0))
+        v_linked = int(rec_summary.get("total_linked", v_matched + v_divergent))
         v_without_ccv = int(rec_summary.get("vista_without_pipeimob_contract", 0))
         ccv_without_vista_gain = int(rec_summary.get("pipeimob_without_vista_gain", 0))
         
         distinct_vista_deals = set(
             item["vista_deal_id"] for item in rec_items if item.get("vista_deal_id")
         )
-        vista_gains = len(distinct_vista_deals) if distinct_vista_deals else (v_matched + v_without_ccv)
+        vista_gains = int(
+            rec_summary.get("total_vista_gains")
+            or rec_summary.get("vista_gains")
+            or (len(distinct_vista_deals) if distinct_vista_deals else (v_linked + v_without_ccv))
+        )
         
         non_auditable_deals = set(
             item["vista_deal_id"]
             for item in rec_items
             if item.get("vista_deal_id") and not item.get("vista_gain_date")
         )
-        unresolved_dates = len(non_auditable_deals)
+        unresolved_dates = len(non_auditable_deals) if non_auditable_deals else int(rec_summary.get("unresolved_gain_dates", 0))
         api_team_unresolved = int(rec_summary.get("api_team_unresolved", len(official_transactions)))
         api_team_resolved = int(rec_summary.get("api_team_resolved", 0))
-        divergence_flag = (v_without_ccv > 0) or (ccv_without_vista_gain > 0)
+        divergence_flag = (v_without_ccv > 0) or (ccv_without_vista_gain > 0) or (v_divergent > 0)
         
         reconciliation = {
             "official_sales_count": official_sales_rec,
             "official_sales": official_sales_rec,
             "official_vgv": official_vgv_rec,
+            "total_linked": v_linked,
             "matched_count": v_matched,
             "matched": v_matched,
+            "divergent_matches": v_divergent,
             "vista_gain_count": vista_gains,
             "vista_gains": vista_gains,
+            "total_vista_gains": vista_gains,
             "vista_without_ccv_count": v_without_ccv,
             "vista_without_ccv": v_without_ccv,
             "ccv_without_vista_count": ccv_without_vista_gain,
