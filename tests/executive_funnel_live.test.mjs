@@ -583,7 +583,11 @@ test("18. Semântica: rotula Negócios criados no período e remove conectores d
   );
   assert.match(
     workerSource,
-    /Negócios criados no período, distribuídos pela etapa atual na data da consulta/
+    /Vista: negócios criados no período, por etapa atual\.<br>Pipeimob: vendas por data de assinatura do CCV\./
+  );
+  assert.match(
+    workerSource,
+    /\(Total de entrada\)/
   );
   assert.doesNotMatch(
     workerSource,

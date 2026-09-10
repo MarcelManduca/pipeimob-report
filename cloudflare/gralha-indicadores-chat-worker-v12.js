@@ -2394,8 +2394,11 @@ const HTML = `<!doctype html>
       const stages=uniqueStages,validCounts=stages.map(s=>typeof s.count==="number"?s.count:0),maxCount=Math.max(...validCounts,1);
       let html='<div class="cso-funnel-stages">';
       stages.forEach((stage)=>{
-        const countVal=typeof stage.count==="number"?number(stage.count):'<span class="unavailable">Indisponível</span>',percent=typeof stage.count==="number"?Math.max(4,Math.min(100,(stage.count/maxCount)*100)):0,srcClass=stage.source==="vista"?"src-vista":"src-pipeimob",srcLabel=stage.source==="vista"?"Vista CRM":"Pipeimob",dateBasis=stage.date_basis?esc(stage.date_basis):"",tooltipText=stage.reason?' title="'+esc(stage.reason)+'"':(dateBasis?' title="Base: '+dateBasis+'"':'');
-        html+='<div class="cso-funnel-stage"'+tooltipText+'><div class="cso-stage-label"><strong class="cso-stage-title">'+esc(stage.label)+'</strong><span class="cso-stage-source '+srcClass+'">['+srcLabel+']</span></div><div class="cso-stage-track"><div class="cso-stage-fill" style="width:'+percent+'%"></div></div><div class="cso-stage-count'+(typeof stage.count==="number"?'':' unavailable')+'">'+countVal+'</div></div>';
+        const countVal=typeof stage.count==="number"?number(stage.count):'<span class="unavailable">Indisponível</span>',percent=typeof stage.count==="number"?Math.max(4,Math.min(100,(stage.count/maxCount)*100)):0,srcClass=stage.source==="vista"?"src-vista":"src-pipeimob",srcLabel=stage.source==="vista"?"Vista CRM":"Pipeimob",dateBasis=stage.date_basis?esc(stage.date_basis):"";
+        const isEntryStage = stage.key==="opportunities" || stage.id==="opportunities";
+        const stageLabelText = isEntryStage ? esc(stage.label)+' <span style="font-weight:600;font-size:11px;color:var(--muted);">(Total de entrada)</span>' : esc(stage.label);
+        const stageTooltip = isEntryStage ? ' title="Total de entrada de negócios criados no período (não é etapa mutuamente exclusiva das demais)"' : (stage.reason?' title="'+esc(stage.reason)+'"':(dateBasis?' title="Base: '+dateBasis+'"':''));
+        html+='<div class="cso-funnel-stage"'+stageTooltip+'><div class="cso-stage-label"><strong class="cso-stage-title">'+stageLabelText+'</strong><span class="cso-stage-source '+srcClass+'">['+srcLabel+']</span></div><div class="cso-stage-track"><div class="cso-stage-fill" style="width:'+percent+'%"></div></div><div class="cso-stage-count'+(typeof stage.count==="number"?'':' unavailable')+'">'+countVal+'</div></div>';
       });
       html+='</div>';
       return html;
@@ -2424,7 +2427,7 @@ const HTML = `<!doctype html>
         "Os volumes apresentados representam a contagem de negócios em cada etapa na data da consulta e não constituem conversão sequencial de coorte."
       ];
       const warningsHtml='<div class="cso-funnel-warnings">'+warnings.map(w=>'<div>• '+esc(w)+'</div>').join('')+'</div>';
-      return '<section class="cso-funnel-card"><div class="cso-funnel-head"><div><h2>FUNIL · Pipeline (Negócios)</h2><p class="cso-funnel-subtitle" style="margin:4px 0 0;font-size:12px;color:var(--muted);">Negócios criados no período, distribuídos pela etapa atual na data da consulta</p></div><div class="cso-funnel-meta"><span class="cso-funnel-badge">Distribuição por Etapa &amp; CCVs</span></div></div><div class="cso-funnel-layout">'+stagesWrap+reconHtml+'</div>'+warningsHtml+'</section>'
+      return '<section class="cso-funnel-card"><div class="cso-funnel-head"><div><h2>FUNIL · Pipeline (Negócios)</h2><p class="cso-funnel-subtitle" style="margin:4px 0 0;font-size:12px;color:var(--muted);line-height:1.4;">Vista: negócios criados no período, por etapa atual.<br>Pipeimob: vendas por data de assinatura do CCV.</p></div><div class="cso-funnel-meta"><span class="cso-funnel-badge">Distribuição por Etapa &amp; CCVs</span></div></div><div class="cso-funnel-layout">'+stagesWrap+reconHtml+'</div>'+warningsHtml+'</section>'
     }
     let activeReconController=null,currentReconRequestId=0,activeFunnelController=null,currentFunnelRequestId=0;
     function attachRetryHandler(start,end){
