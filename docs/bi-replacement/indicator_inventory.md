@@ -21,8 +21,8 @@
 | **PR #58 (Governança & RBAC)** | `origin/docs/data-governance-rbac-policy` | `f003e6704bbd` | **OPEN** | Política de governança de dados, RBAC e matriz de conferência. |
 | **Branch Organizacional** | `origin/feature/vista-organization-resolution` | `6ef35df950e06fcf401286d3cd45cb23035f97c8` | Criada | Branch isolada para integração de `/usuarios/listar`, mantendo o mesmo commit da `main`. |
 | **Backend FastAPI** | Render (`pipeimob-report.onrender.com`) | Commit de produção `6ef35df` | Publicado | Endpoints autenticados `/api/reconciliation/sales` e `/api/vista/funnel/summary` com cache single-flight. |
-| **Edge API / Frontend** | Cloudflare Workers (`gralha-indicadores.gralha-worker.workers.dev`) | Commit de produção `6ef35df` | Publicado | Proxy de borda, validação JWT Supabase, cache e painel executivo. |
-| **Autenticação & RBAC** | Supabase Auth (`roles` na tabela de perfis) | Produção | Operacional | Perfis auditados: `CEO`, `CSO`, `CMO` (escopo global executivo); `store_director` (diretor de loja); `team_manager` (gerente de equipe); `broker` (corretor). Aplicação fail-closed. |
+| **Edge API / Frontend** | Cloudflare Workers (`gralha-indicadores-chat.marcelmanduca-b05.workers.dev`) | Commit de produção `6ef35df` | Publicado | Proxy de borda, validação JWT Supabase, cache e painel executivo. |
+| **Autenticação & RBAC** | Supabase Auth (`roles` na tabela de perfis) | Produção | Operacional | Perfis auditados: `CEO`, `CSO`, `CMO` (escopo global executivo); `store_director` (diretor de loja); `team_manager` (gerente de equipe). Aplicação fail-closed. |
 
 ### 1.2 Diferenciação Semântica: Implementado × Publicado × Homologado
 
@@ -152,10 +152,10 @@ Portanto:
 
 ---
 
-## 5. Material Original Pendente de Evidência Direta
+## 5. Materiais Complementares e Validação de Fontes
 
-Para transformar este inventário preliminar em inventário definitivo homologado, é necessário obter e auditar:
-1. **Evidência individual (prints / capturas) das 11 páginas completas do Power BI original**.
-2. **Cópia integral das fórmulas DAX e medidas do arquivo `.pbix`** para confirmar os denominadores exatos de cada indicador.
-3. **Mapeamento das mídias/canais de captação** para validação do relatório de Leads Captação.
-4. **Retorno do chamado formal junto ao suporte Vista CRM (empresa 2662)** quanto à existência de rotas para agenciamentos, placas e acesso a imóveis arquivados.
+Para consolidação e refinamento do inventário de substituição:
+1. **Evidência visual individual das telas operacionais (1 a 10) e do GuideLine** para conferência de componentes de interface.
+2. **Consulta a medidas DAX / arquivo `.pbix`** como fonte desejável para conferência de fórmulas de apoio (não pré-requisito absoluto).
+3. **Mapeamento das mídias/canais de captação** para validação dos nomes dos veículos de captação.
+4. **Esclarecimento do suporte Vista CRM (empresa 2662)** quanto à existência de rotas para agenciamentos, placas e acesso a imóveis inativos/arquivados.
