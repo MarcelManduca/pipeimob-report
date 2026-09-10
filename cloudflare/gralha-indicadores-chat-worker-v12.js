@@ -2391,24 +2391,14 @@ const HTML = `<!doctype html>
         const k=stage.key||stage.id;
         if(!seenKeys.has(k)){seenKeys.add(k);uniqueStages.push(stage)}
       }
-      const stages=uniqueStages,relations=state.relations||[],validCounts=stages.map(s=>typeof s.count==="number"?s.count:0),maxCount=Math.max(...validCounts,1);
+      const stages=uniqueStages,validCounts=stages.map(s=>typeof s.count==="number"?s.count:0),maxCount=Math.max(...validCounts,1);
       let html='<div class="cso-funnel-stages">';
-      stages.forEach((stage,idx)=>{
-        const countVal=typeof stage.count==="number"?number(stage.count):'<span class="unavailable">Indisponível</span>',percent=typeof stage.count==="number"?Math.max(4,Math.min(100,(stage.count/maxCount)*100)):0,srcClass=stage.source==="vista"?"src-vista":"src-pipeimob",srcLabel=stage.source==="vista"?"Vista CRM":"Pipeimob",dateBasis=stage.date_basis?esc(stage.date_basis):"",tooltipText=stage.reason?' title="'+esc(stage.reason)+'"':(dateBasis?' title="Base: '+dateBasis+'"':'');
-        html+='<div class="cso-funnel-stage"'+tooltipText+'><div class="cso-stage-label"><strong class="cso-stage-title">'+esc(stage.label)+'</strong><span class="cso-stage-source '+srcClass+'">['+srcLabel+']</span></div><div class="cso-stage-track"><div class="cso-stage-fill" style="width:'+percent+'%"></div></div><div class="cso-stage-count'+(typeof stage.count==="number"?'':' unavailable')+'">'+countVal+'</div></div>';
-        if(idx<stages.length-1){
-          const nextStage=stages[idx+1];
-          const rel=relations.find(r=>(r.from_stage===stage.key||r.from_stage===stage.id)&&(r.to_stage===nextStage.key||r.to_stage===nextStage.id));
-          let ratioVal='—';
-          if(rel&&typeof rel.ratio_percentage==="number"){
-            ratioVal=rel.ratio_percentage+'%';
-          }else if(typeof stage.count==="number"&&typeof nextStage.count==="number"){
-            ratioVal=stage.count>0?Math.round((nextStage.count/stage.count)*1000)/10+'%':'0%';
-          }
-          const isOver100=parseFloat(ratioVal)>100||(rel&&typeof rel.ratio_percentage==="number"&&rel.ratio_percentage>100);
-          const relReason=isOver100?' title="Relação entre etapas no período (não é conversão sequencial de coorte)"':(rel?.reason?' title="'+esc(rel.reason)+'"':'');
-          html+='<div class="cso-funnel-relation"'+relReason+'><span class="cso-relation-arrow">↓</span> Relação: <strong>'+ratioVal+'</strong></div>'
-        }
+      stages.forEach((stage)=>{
+        const countVal=typeof stage.count==="number"?number(stage.count):'<span class="unavailable">Indisponível</span>',percent=typeof stage.count==="number"?Math.max(4,Math.min(100,(stage.count/maxCount)*100)):0,srcClass=stage.source==="vista"?"src-vista":"src-pipeimob",srcLabel=stage.source==="vista"?"Vista CRM":"Pipeimob",dateBasis=stage.date_basis?esc(stage.date_basis):"";
+        const isEntryStage = stage.key==="opportunities" || stage.id==="opportunities";
+        const stageLabelText = isEntryStage ? esc(stage.label)+' <span style="font-weight:600;font-size:11px;color:var(--muted);">(Total de entrada)</span>' : esc(stage.label);
+        const stageTooltip = isEntryStage ? ' title="Total de entrada de negócios criados no período (não é etapa mutuamente exclusiva das demais)"' : (stage.reason?' title="'+esc(stage.reason)+'"':(dateBasis?' title="Base: '+dateBasis+'"':''));
+        html+='<div class="cso-funnel-stage"'+stageTooltip+'><div class="cso-stage-label"><strong class="cso-stage-title">'+stageLabelText+'</strong><span class="cso-stage-source '+srcClass+'">['+srcLabel+']</span></div><div class="cso-stage-track"><div class="cso-stage-fill" style="width:'+percent+'%"></div></div><div class="cso-stage-count'+(typeof stage.count==="number"?'':' unavailable')+'">'+countVal+'</div></div>';
       });
       html+='</div>';
       return html;
@@ -2433,11 +2423,11 @@ const HTML = `<!doctype html>
       const reconState=initialReconState||(funnel.reconciliation?{status:"available",data:normalizeReconciliationSummary(funnel.reconciliation)}:{status:"loading"});
       const reconHtml='<div class="cso-recon-panel" id="cso-recon-panel" aria-live="polite">'+renderReconciliationInner(reconState)+'</div>';
       const warnings=Array.isArray(funnel.warnings)?funnel.warnings:[
-        "As primeiras 5 etapas refletem a atividade e snapshot do Vista CRM, enquanto as Vendas oficializadas decorrem exclusivamente de CCVs formalizados no Pipeimob.",
-        "Relações acima de 100% expressam a proporção entre etapas acumuladas no período e não taxa de conversão sequencial."
+        "As primeiras 5 etapas refletem os negócios criados no período, distribuídos pela etapa atual na data da consulta no Vista CRM, enquanto as Vendas oficializadas decorrem exclusivamente de CCVs formalizados no Pipeimob.",
+        "Os volumes apresentados representam a contagem de negócios em cada etapa na data da consulta e não constituem conversão sequencial de coorte."
       ];
       const warningsHtml='<div class="cso-funnel-warnings">'+warnings.map(w=>'<div>• '+esc(w)+'</div>').join('')+'</div>';
-      return '<section class="cso-funnel-card"><div class="cso-funnel-head"><div><h2>FUNIL · Pipeline (Clientes Únicos)</h2></div><div class="cso-funnel-meta"><span class="cso-funnel-badge">Fotografia de Pipeline &amp; CCVs</span></div></div><div class="cso-funnel-layout">'+stagesWrap+reconHtml+'</div>'+warningsHtml+'</section>'
+      return '<section class="cso-funnel-card"><div class="cso-funnel-head"><div><h2>FUNIL · Pipeline (Negócios)</h2><p class="cso-funnel-subtitle" style="margin:4px 0 0;font-size:12px;color:var(--muted);line-height:1.4;">Vista: negócios criados no período, por etapa atual.<br>Pipeimob: vendas por data de assinatura do CCV.</p></div><div class="cso-funnel-meta"><span class="cso-funnel-badge">Distribuição por Etapa &amp; CCVs</span></div></div><div class="cso-funnel-layout">'+stagesWrap+reconHtml+'</div>'+warningsHtml+'</section>'
     }
     let activeReconController=null,currentReconRequestId=0,activeFunnelController=null,currentFunnelRequestId=0;
     function attachRetryHandler(start,end){
