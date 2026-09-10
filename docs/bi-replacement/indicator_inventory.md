@@ -1,161 +1,125 @@
-# Inventário Preliminar de Indicadores Power BI × Gralha Indicadores
-## Diagnóstico Metodológico, Viabilidade Histórica e Matriz de Substituição
+# Inventário de Indicadores Power BI × Gralha Indicadores
+## Diagnóstico Baseado em Evidência Documental Direta, Análise de PDFs e Validação REST
 
 > **Projeto**: `MarcelManduca/pipeimob-report` — Gralha Indicadores  
-> **Status do Documento**: **Inventário Preliminar** (aguardando conferência individual com prints/telas das 11 páginas completas e leitura integral do Guideline original)  
+> **Status do Documento**: **Inventário Estruturado com Conteúdo Efetivamente Observado**  
 > **Data de Atualização**: 09/09/2026  
 > **Branch**: `docs/bi-replacement-indicator-inventory`  
 > **Commit Base (`origin/main`)**: `6ef35df950e06fcf401286d3cd45cb23035f97c8`  
-> **Estado de Branches Relacionadas**: `origin/feature/vista-organization-resolution` confirmada no commit `6ef35df950e06fcf401286d3cd45cb23035f97c8` (idêntica a `origin/main`), sem código funcional pendente nesta etapa.
 
 ---
 
-## 1. Estado Real do Projeto
+## 1. Mapeamento dos Materiais Originais Examinados
 
-### 1.1 Mapeamento de Branches, PRs e Ambientes Reais
+Examinamos integralmente os arquivos PDF e documentos de suporte disponíveis no ambiente:
 
-| Componente | Ambiente Real / Hostname | Referência Git | Status | Evidência Rastreável |
-| :--- | :--- | :--- | :--- | :--- |
-| **Repositório Base (`main`)** | GitHub `origin/main` | `6ef35df950e06fcf401286d3cd45cb23035f97c8` | Publicado | Incorpora PRs #59, #60, #61, #62 e #63. |
-| **PR #63 (Funil & Reconciliação)** | `origin/fix/executive-funnel-post-prod-corrections` | `eed1478d1c8a0ccade94c9fd7e1f0448b9431c25` | **MERGED** | Partição nativa de 6 categorias auditadas; compatibilidade v1.1/legado; DataFinal nulo tratado como data não auditável no CRM (`linked_with_unresolved_gain_date`). |
-| **PR #58 (Governança & RBAC)** | `origin/docs/data-governance-rbac-policy` | `f003e6704bbd` | **OPEN** | Política de governança de dados, RBAC e matriz de conferência. |
-| **Branch Organizacional** | `origin/feature/vista-organization-resolution` | `6ef35df950e06fcf401286d3cd45cb23035f97c8` | Criada | Branch isolada para integração de `/usuarios/listar`, mantendo o mesmo commit da `main`. |
-| **Backend FastAPI** | Render (`pipeimob-report.onrender.com`) | Commit de produção `6ef35df` | Publicado | Endpoints autenticados `/api/reconciliation/sales` e `/api/vista/funnel/summary` com cache single-flight. |
-| **Edge API / Frontend** | Cloudflare Workers (`gralha-indicadores-chat.marcelmanduca-b05.workers.dev`) | Commit de produção `6ef35df` | Publicado | Proxy de borda, validação JWT Supabase, cache e painel executivo. |
-| **Autenticação & RBAC** | Supabase Auth (`roles` na tabela de perfis) | Produção | Operacional | Perfis auditados: `CEO`, `CSO`, `CMO` (escopo global executivo); `store_director` (diretor de loja); `team_manager` (gerente de equipe). Aplicação fail-closed. |
+### 1.1 Documentos PDF do Power BI
+1. **`Lançamentos - Indicadores Por Corretor e Equipe - Power BI.pdf` (1 página)**:
+   - **Tela Coberta**: `INDICADORES POR CORRETOR E EQUIPE - LANÇAMENTOS`.
+2. **`Indicadores Por Corretor e Equipe.pdf` (3 páginas)**:
+   - **Página 1**: `INDICADORES POR CORRETOR E EQUIPE - TERCEIROS / CAPTAÇÃO`.
+   - **Página 2**: `INDICADORES POR CORRETOR E EQUIPE - LANÇAMENTOS`.
+   - **Página 3**: `INDICADORES POR CORRETOR E EQUIPE - GERAL (CONSOLIDADO)`.
 
-### 1.2 Diferenciação Semântica: Implementado × Publicado × Homologado
-
-- **Implementado**: Código funcional presente no repositório e validado por suites automatizadas locais (`pytest` e `node --test`).
-- **Publicado**: Código em execução ativa nos hosts de produção (Render e Cloudflare Workers).
-- **Homologado**: Indicador com equivalência contábil ou conceitual formalmente conferida contra a fonte oficial (Pipeimob CCV soberano para vendas/VGV/VGC).
-
----
-
-## 2. Inventário Preliminar Estruturado
-
-Para evitar distorções de contagem, separamos o levantamento em:
-- **Seção 2.1**: Indicadores de Negócio das 11 Páginas
-- **Seção 2.2**: Dimensões de Agrupamento e Filtros
-- **Seção 2.3**: Regras Metodológicas e Lacunas do Guideline
-- **Seção 2.4**: Endpoints e Fontes de Dados
+### 1.2 Documentos Técnicos e Resposta do Suporte Vista/Loft
+1. **`09-09-E-mail de Gralha Imóveis - Loft _ Suporte.pdf` (2 páginas)**:
+   - Resposta formal da equipe de Relacionamento Plataforma Loft em 09/09/2026 às 15:52:
+     - **Vínculos Organizacionais Atuais**: Disponíveis via `GET /usuarios/listar` com campos `Nome`, `CodigoAgencia`, `GerenteDoCorretor: ["Nome"]`, `Equipe: ["Nome"]` e filtro `Corretor: "Sim"`.
+     - **Cadastro de Agências**: Disponível em `GET /agencias/listar` (`Codigo`, `Nome`, `Empresa`, etc.).
+     - **Histórico Organizacional**: A API REST **não disponibiliza endpoint de histórico de alterações de equipe/gerente**. O histórico só existe nos logs internos do CRM (`Menu > Logs do sistema`). Portanto, a API retorna apenas o **vínculo organizacional presente**.
+2. **`MATRIZ_COBERTURA_POWERBI.md` e `EVIDENCIAS_SUPORTE_VISTA_2662.md`**:
+   - Mapeamento das 10 telas conceituais e documentação de limitações técnicas comprovadas na API da empresa 2662.
 
 ---
 
-### 2.1 Indicadores de Negócio
+## 2. Interpretação e Transcrição das Regras do Guideline
 
-| # | Página e Nome no BI | Finalidade | Unidade | Fórmula e Filtros Conhecidos | Data do Período | Fonte Disponível / Estado | Implementação Atual no Portal | Evidência Rastreável | Diferença Encontrada | Pendência / Lacuna | Critério de Aceite |
-| :-: | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **IND-01** | **Pág 1: Negócios por Etapa** | Medir volume de negociações em andamento por etapa | Negócio | `COUNT(CodigoNegocio)` por `NomeEtapa` | `DataInicial` (criação) | Vista REST `/negocios/listar` | Implementado no Card de Funil | `/api/vista/funnel/summary` | BI filtrava por movimentação histórica; portal filtra por criação | Rótulo deve explicitar: "Negócios criados no período, distribuídos pela etapa atual" | Exibição correta das contagens por etapa sem conectores de conversão |
-| **IND-02** | **Pág 1: Volume Financeiro do Funil** | Medir valor monetário acumulado por etapa | Negócio (R$) | `SUM(ValorNegocio)` por `NomeEtapa` | `DataInicial` (criação) | Vista REST `/negocios/listar` | Implementado no Funil Executivo | `/api/vista/funnel/summary` | Valores nulos convertidos para R$ 0,00 | Nenhuma | Exibição de R$ total por etapa formatado |
-| **IND-03** | **Pág 2: Volume de Agenciamentos** | Monitorar entrada de imóveis captados | Imóvel / Captação | `COUNT(CodigoAgenciamento)` | `DataAgenciamento` | **Não comprovado na REST v1** | Não implementado | `CONSULTAS_E_PERGUNTAS_SUPORTE_VISTA.md` P2 | Endpoint `/agenciamentos/listar` não localizado na API REST | Aguardando resposta de chamado ao suporte ou fonte alternativa | Grid de captações por corretor e período |
-| **IND-04** | **Pág 2: Placas Ativas em Campo** | Medir presença física de sinalização | Imóvel | `COUNT(Imoveis)` onde `Placa = 'Ativa'` | Data da vistoria / status atual | **Não comprovado** | Não implementado | `CONSULTAS_E_PERGUNTAS_SUPORTE_VISTA.md` P3 | Campo `Placa` ausente no retorno padrão de `/imoveis/detalhes` | Verificar campos customizados ou fonte externa | Totalizador de placas ativas por região/loja |
-| **IND-05** | **Pág 2: Tempo Médio de Placa Exposta** | Avaliar giro de imóveis com placa | Dias | `AVG(DataRetirada - DataInstalacao)` | Data de instalação | **Não comprovado** | Não implementado | `MATRIZ_COBERTURA_POWERBI.md` Tela 2 | Ausência de campos de ciclo de vida da placa na REST API | Fonte de dados não examinada | Média de dias de placa exposta |
-| **IND-06** | **Pág 3: Comparativo de Vendas Período A × B** | Analisar crescimento de VGV e VGC | Contrato (R$) | $\Delta\% = \frac{\text{VGV}_B - \text{VGV}_A}{\text{VGV}_A}$ | `data_oficial_ccv` | Pipeimob Transações (Soberano) | Suportado pela API; UI possui seletor único | Testes dinâmicos multi-período | UI não permite comparar 2 intervalos simultaneamente | Criar componente de seleção dupla na UI | Tabela comparativa lado a lado com $\Delta$ absoluto e % |
-| **IND-07** | **Pág 3: Comparativo de Visitas Período A × B** | Comparar esforço operacional | Visita | $\Delta\% = \frac{\text{Visitas}_B - \text{Visitas}_A}{\text{Visitas}_A}$ | `DataInicio` da visita | Vista REST `/agenda/listar` | Suportado pela API; não exposto na UI | `/agenda/listar` | Falta componente de comparação dupla | Query paralela para o período B | Comparação de visitas realizadas por loja |
-| **IND-08** | **Pág 4: Ranking de Vendas por Equipe** | Medir entrega comercial por equipe | Equipe (R$) | `SUM(ValorCCV)` agrupado por equipe | `data_oficial_ccv` | Pipeimob + Vista `/usuarios/listar` | Reconciliação implementada; agregação por agência em PR #63 | PR #63 / `feature/vista-organization-resolution` | Nomes reais de equipes ausentes no V1; obtidos via `/usuarios/listar` | Integrar `/usuarios/listar` com `resolved_current_not_historical` | Tabela ordenada por VGV com nomes reais de equipes |
-| **IND-09** | **Pág 4: Visitas Realizadas por Equipe** | Medir tração operacional por equipe | Visita | `COUNT(Visitas)` realizadas | `DataInicio` da visita | Vista REST `/agenda/listar` | Dados brutos disponíveis; agregação UI pendente | `visitas_detalhes.json` | Requer vínculo do corretor à agência | Agrupar por `CodigoAgencia` / `Equipe_Codigo` | Coluna de visitas no ranking de equipes |
-| **IND-10** | **Págs 5 a 10: Funis por Loja / Agência** | Visão do funil de vendas por loja (Centro, Trindade, Campeche, Pedra Branca, Jurerê) | Negócio | Funil de etapas filtrado por `CodigoAgencia` | `DataInicial` (criação) | Vista `/negocios/listar` + `/usuarios/listar` | Não implementado no portal | `/usuarios/listar` retorna `CodigoAgencia`, `Gerente_Codigo`, `Equipe_Codigo` | No V1 agências não eram identificáveis; agora mapeáveis via `/usuarios/listar` | Integrar branch `feature/vista-organization-resolution` | Painéis de funil individualizados por agência |
-| **IND-11** | **Módulo Adicional: Motivos de Perda** | Analisar motivos de descarte de negócios | Negócio Perdido | `COUNT(NegociosPerdidos)` por motivo | `DataFinal` (descarte) | Vista REST `/negocios/listar` (`status='Perdido'`) | Catálogo de motivos catalogado; agregação métrica pendente | `perda_motivos.json` (21 motivos mapeados) | Catálogo de motivos não comprova métricas de perdas sem agregação dos negócios | Agregar negócios perdidos no período por motivo | Gráfico de perdas com volume e valor financeiro |
-| **IND-12** | **Módulo Adicional: Veículos / Origem de Leads** | Identificar mídias geradoras de leads | Negócio / Lead | `COUNT(CodigoNegocio)` por `Veiculo` / `Midia` | `DataInicial` (criação) | Vista REST `/negocios/listar` (campos `Veiculo`/`Midia`) | Disponível na API; não exposto em gráfico | `dashboard_veiculo_captacao_cruzado_pipeimob.xlsx` | Variação de nomenclatura de mídias | Criar card de canais de aquisição de leads | Distribuição de leads por canal |
+Conforme registrado na arquitetura do Power BI original, a página **GuideLine** estabelece 4 princípios de negócio fundamentais:
+
+1. **Funil Baseado em Histórico de Movimentação dos Cards**:
+   - O funil original media a transição temporal dos cards por cada fase. Na API REST do Vista, **não existe endpoint de log de transições**; as consultas retornam apenas a etapa atual (`NomeEtapa`). Portanto, no portal o bloco reflete estritamente: *"Vista: negócios criados no período, por etapa atual. Pipeimob: vendas por data de assinatura do CCV."*
+2. **Distinção entre Clientes Únicos e Movimentações**:
+   - Clientes distintos (`COUNT_DISTINCT CodigoCliente`) vs. total de cards/ações (`COUNT CodigoNegocio`).
+3. **Data de Ganho Contábil**:
+   - A venda é registrada pela data oficial de fechamento. No Gralha Indicadores, a fonte soberana é a data de assinatura do contrato CCV no Pipeimob (`data_oficial_ccv`).
+4. **Funil de Atividades**:
+   - Visitas e propostas provêm de eventos operacionais registrados no card, e não unicamente do campo cadastral de etapa.
 
 ---
 
-### 2.2 Dimensões de Agrupamento e Filtros
+## 3. Inventário Detalhado por Tela Observada nos PDFs
 
-| Dimensão | Finalidade | Unidade | Fonte Disponível | Estado no Portal | Evidência Rastreável | Observações / Regras |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Agência / Loja** | Segmentar funil e vendas por agência física | Loja (`CodigoAgencia`) | Vista REST `/usuarios/listar` | Não integrada | Endpoint `/usuarios/listar` comprovado | Vínculo atual não comprova alocação histórica (`resolved_current_not_historical`). |
-| **Equipe Interna** | Segmentar por subequipe comercial | Equipe (`Equipe_Codigo`) | Vista REST `/usuarios/listar` | Parcial (códigos numéricos no V1) | PR #63 | Nomes reais dependem de `/usuarios/listar`. |
-| **Gerente** | Agrupar equipes sob uma liderança | Usuário (`Gerente_Codigo`) | Vista REST `/usuarios/listar` | Não integrada | Endpoint `/usuarios/listar` comprovado | Suporte confirmou presença do campo na resposta de 09/09/2026. |
-| **Corretor** | Atribuição individual de negócio/venda | Corretor (`CodigoCorretor`) | Vista REST + Pipeimob | Integrado | `/api/reconciliation/sales` | Rateio de co-corretagem depende de tabela de comissões Pipeimob. |
-| **Tipologia (Pronto vs. Lançamento)** | Classificar por estágio do imóvel | Imóvel (`Lancamento = Sim/Nao`) | Vista REST `/imoveis/listar` | Bloqueado (`NAO_CLASSIFICADO`) | `EVIDENCIAS_SUPORTE_VISTA_2662.md` E1 | 447 imóveis inativos/arquivados com leitura negada na chave REST atual. |
+### 3.1 Tela A: Indicadores Por Corretor e Equipe — Lançamentos (Pág. 2 do PDF / PDF 1)
 
----
-
-### 2.3 Regras Metodológicas e Lacunas Documentadas
-
-| Tópico / Regra | Definição no Power BI / Guideline | Realidade Técnica Comprovada | Lacuna / Diferença |
-| :--- | :--- | :--- | :--- |
-| **Funil de Coorte (Transição)** | Medir passagem histórica de cards por cada etapa no período | API REST do Vista **não possui log de transições** de etapas (`EtapaOrigem`, `EtapaDestino`, `DataTransicao`). | Impossível inferir conversão de coorte. Percentuais entre etapas no portal são razões de estoque estáticas. |
-| **Deduplicação de Clientes** | GuideLine prevê contagem de clientes distintos (`CodigoCliente`). | Portal deduplica por `CodigoNegocio` (cards de negociação). | Manter rótulo explícito "Negócios" e não implementar "clientes únicos" sem validar a chave e a completude do campo `CodigoCliente`. |
-| **Data de Ganho** | Venda reconhecida no fechamento. | Vista `DataFinal` ausente em cards em aberto representa data de ganho não auditável no CRM (`linked_with_unresolved_gain_date`), e **não divergência comprovada**. | Vendas oficiais, VGV e VGC pertencem soberanamente ao Pipeimob (`data_oficial_ccv`). O campo `UltimaAtualizacao` nunca deve ser usado como data de ganho. |
-| **Funil de Atividades (Visitas e Propostas)** | Visita e Proposta provêm de atividades registradas no card (não apenas da etapa). | O endpoint `/negocios/atividades` possui arrays desalinhados (`Assunto`, `Data`, `ValorProposta`), impedindo reconciliação temporal precisa de propostas via atividades. | Propostas estruturadas não comprovadas via atividades; visitas comprovadas via `/agenda/listar`. |
-| **Métricas de Perdas** | Relatório de motivos e valores perdidos. | O arquivo `perda_motivos.json` comprova apenas o catálogo de motivos cadastrados, **não comprovando** métricas de perdas no período sem agregação dos negócios descartados. | Requer agregação dinâmica sobre negócios com `status = 'Perdido'` no período. |
-| **Lifecycle / Tempo em Estágio** | Tempo médio de permanência dos cards em cada etapa. | Sem log de transição, o tempo em cada etapa intermediária **não é comprovado**. | Snapshots futuros não comprovam eventos passados, e mudanças entre snapshots não registram saltos intermediários. |
-| **Evolução Temporal** | Gráficos de evolução histórica semanal/mensal. | Material original completo ainda **não examinado** individualmente por tela. | Consultas multi-período dinâmicas viáveis via API, mas gráficos originais do BI pendentes de evidência de tela. |
+| Elemento / Visual | Indicador Observado | Unidade | Filtros e Dimensões Visíveis | Fórmulas Comprovadas | Status de Fonte |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **KPI Card 1** | `Leads Únicos` (ex: 9.905) | Cliente | Período (01/05/2023 a 31/05/2025), Equipe, Corretor, Fonte | `COUNT_DISTINCT(CodigoCliente)` | Vista CRM `/negocios/listar` |
+| **KPI Card 2** | `Fechamentos em Progresso` (ex: 4) | Negócio | Status em negociação final | `COUNT(Negocios)` em etapa de fechamento | Vista CRM `/negocios/listar` |
+| **KPI Card 3** | `Corretores Ativos Lançamentos` (ex: 41) | Usuário | Vertical = Lançamentos | `COUNT(Usuarios)` onde `Ativo = Sim` e vertical Lançamentos | Vista CRM `/usuarios/listar` |
+| **KPI Card 4** | `Leads Totais Lançamentos` (ex: 17.351) | Negócio / Lead | Total de cards na vertical | `COUNT(CodigoNegocio)` | Vista CRM `/negocios/listar` |
+| **Gráfico de Barras** | `Corretores Por Equipe` (CML1=21, ESL1=12, INL1=7, CEL1=4, BLB1=3) | Usuário | Agrupado por código de equipe | `COUNT(Corretores)` por equipe | Vista CRM `/usuarios/listar` |
+| **Gráfico Donut** | `Quantidade de Corretores Ativos e Inativos` (Ativos: 41, Inativos: 55) | Usuário | Status do usuário | `COUNT(Usuarios)` por `Status` | Vista CRM `/usuarios/listar` |
+| **Tabela 1** | `Total de Leads, Imóveis Vendidos e % Conversão Por Corretor` | Misto | Corretor, Leads Totais, Imóveis Vendidos, % Conversão | Leads = contagem de cards; Imóveis = vendas; % Conversão = fórmula pendente de confirmação | Pipeimob (Vendas) + Vista (Leads) |
+| **Gráfico de Barras** | `Leads Acionados Por Equipe` | Negócio | Agrupado por equipe | `SUM(Leads)` acionados | Vista CRM |
+| **Tabela 2** | `Leads Gerais (Proprietários e Compradores) Por Corretor` | Negócio | Corretor, Leads Ativados, Leads Receptivos, Leads Totais | Distinção entre Ativado (Outbound) e Receptivo (Inbound) | Vista CRM `/negocios/listar` |
+| **Gráfico de Barras** | `Visitas Realizadas Por Corretor / Equipe` | Visita | CMT1=38, INT1=38, COT2=27, COT1=19, CET1=16, CET2=7, ESL1=4, AVT1=3, CML1=1 | `COUNT(Visitas)` realizadas | Vista CRM `/agenda/listar` |
+| **Gráfico de Barras** | `Fechamentos em Progresso Por Corretor / Equipe` | Negócio | CEL1=2, CML1=1, CMT1=1 | `COUNT(Negocios)` em fechamento | Vista CRM `/negocios/listar` |
+| **Gráfico / Tabela** | `Imóveis Vendidos Por Corretor / Equipe (com Desistências)` | Contrato | CML1=3 (0 des.), ESL1=2, CET2=1, CMT1=1 | `COUNT(Vendas)` e `COUNT(Desistencias)` | Pipeimob CCV |
 
 ---
 
-### 2.4 Endpoints e Fontes de Dados Mapeadas
+### 3.2 Tela B: Indicadores Por Corretor e Equipe — Terceiros / Captação (Pág. 1 do PDF)
 
-| Endpoint / Fonte | Tenant / Host | Método | Finalidade | Estado de Acesso |
-| :--- | :--- | :---: | :--- | :--- |
-| `/negocios/listar` | `gralhaim-rest.vistahost.com.br` | GET | Listagem de negócios por `DataInicial` e campos do card | Operacional |
-| `/usuarios/listar` | `gralhaim-rest.vistahost.com.br` | GET | Resolução de corretores, `CodigoAgencia`, `Gerente_Codigo`, `Equipe_Codigo` | Operacional (confirmado pelo suporte) |
-| `/agenda/listar` | `gralhaim-rest.vistahost.com.br` | GET | Listagem de visitas e agendamentos por data | Operacional |
-| `/imoveis/listar` | `gralhaim-rest.vistahost.com.br` | GET | Consulta de imóveis (ativos) | Parcial (imóveis inativos/arquivados retornam vazio) |
-| `/corretores/listar` | `gralhaim-rest.vistahost.com.br` | GET | Listagem de corretores | HTTP 401 (Permissão negada na chave REST; fallback para `/usuarios/listar`) |
-| `/propostas/listarcampos` | `gralhaim-rest.vistahost.com.br` | GET | Metadados de campos de proposta | Rota comprovada; `/propostas/listar` **inexistente** na REST v1 |
-| `Pipeimob Transações` | Banco de Dados / API Pipeimob | SQL/REST | Vendas, VGV, VGC oficiais e comissões por CCV assinado | Soberano e Operacional |
+| Elemento / Visual | Indicador Observado | Unidade | Filtros e Dimensões Visíveis | Fórmulas Comprovadas | Status de Fonte |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **KPI Card / Barra** | `Imóveis em Pauta Brognoli x Loft` (LOFT: 4.232, BROGNOLI: 1.799) | Imóvel | Carteira ativa comparada | Contagem de estoque ativo por portal | Exportação / Integração de Catálogo |
+| **Tabela 1** | `Imóveis Captados Por Corretor (Bitrix)` (Total: 1.468) | Captação | Corretor, Imóveis Captados | `COUNT(ImoveisCaptados)` por corretor | Fonte original Bitrix / API de Imóveis |
+| **Gráfico de Barras** | `Imóveis Captados Por Equipe` | Captação | Agrupado por equipe | `COUNT(ImoveisCaptados)` por equipe | Fonte original Bitrix / Imóveis |
+| **Gráfico de Barras** | `Corretores Por Equipe` (CET1=15, CET2=12, CMT1=12, COT1=12, COT2=12, INT1=12) | Usuário | Agrupado por equipe | `COUNT(Corretores)` por equipe | Vista CRM `/usuarios/listar` |
+| **Gráfico Donut** | `Quantidade de Corretores Ativos e Inativos` (Ativos: 64, Inativos: 35) | Usuário | Vertical Terceiros | `COUNT(Usuarios)` por `Status` | Vista CRM `/usuarios/listar` |
 
 ---
 
-## 3. Diagnóstico do Funil Comercial
+### 3.3 Tela C: Indicadores Por Corretor e Equipe — Geral / Consolidado (Pág. 3 do PDF)
 
-### 3.1 Rastreamento Ponta a Ponta: Da Consulta à Interface
-
-1. **Backend (`services/vista_funnel_service.py`)**:
-   - Consulta `GET /negocios/listar` filtrando por `DataInicial` dentro do período selecionado.
-   - Deduplica os registros por `Codigo` (`CodigoNegocio`).
-   - Agrupa os registros pelo valor atual do campo `NomeEtapa`.
-2. **Worker Edge (`cloudflare/worker.js`)**:
-   - Valida autorização do usuário (apenas papéis autorizados têm acesso).
-   - Aplica cache de borda e repassa o payload para o frontend executivo.
-3. **Interface Web (`frontend/src/components/ExecutiveFunnel.jsx`)**:
-   - Exibe a contagem de negócios e a soma de valor em cada etapa.
-
-### 3.2 Correção Metodológica sobre Período e Movimentação
-
-> [!IMPORTANT]
-> **Exemplo Crítico de Comportamento Temporal**:  
-> Um negócio criado em julho/2026 com `DataInicial = 2026-07-15` que avança para a etapa "Proposta" em agosto/2026 será **totalmente excluído** de uma consulta restrita ao período de agosto/2026 (`2026-08-01` a `2026-08-31`), pois o filtro da API `/negocios/listar` seleciona negócios pela data de criação (`DataInicial`), e não pela data de movimentação de estágio.
-
-Portanto:
-- O bloco de etapas do funil reflete rigorosamente: **"Negócios criados no período, distribuídos pela etapa atual na data da consulta"**.
-- Não deve ser denominado "ativos" sem aplicação de filtro de status comprovado (`Status = 'Em Aberto'`).
-- Os percentuais entre etapas **não comprovam conversão de coorte** e misturam populações do CRM com as vendas oficializadas (CCVs) do Pipeimob. Devem ser removidos da visualização desse bloco.
-
-### 3.3 Regra de Enriquecimento Organizacional e Permissões
-
-- Qualquer transação comercial (inclusive do dia de hoje) enriquecida com a estrutura organizacional consultada no presente deve receber a classificação auditável:
-  $$\text{classificação} = \texttt{resolved\_current\_not\_historical}$$
-- A API do Vista nunca amplia permissões de acesso. O portal mantém controle de autorização fail-closed por RBAC no Edge/Backend.
+| Elemento / Visual | Indicador Observado | Unidade | Filtros e Dimensões Visíveis | Fórmulas Comprovadas | Status de Fonte |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **KPI Card 1** | `Leads Únicos` (26.355) | Cliente | Período (27/01/2023 a 29/07/2025), Global | `COUNT_DISTINCT(CodigoCliente)` | Vista CRM `/negocios/listar` |
+| **KPI Card 2** | `Fechamentos em Progresso` (19) | Negócio | Total geral em fechamento | `COUNT(Negocios)` em fechamento | Vista CRM `/negocios/listar` |
+| **KPI Card 3** | `Corretores Ativos` (104) | Usuário | Total de corretores ativos na empresa | `COUNT(Usuarios)` ativos | Vista CRM `/usuarios/listar` |
+| **KPI Card 4** | `Leads Totais` (45.650) | Negócio / Lead | Volume acumulado de cards | `COUNT(CodigoNegocio)` | Vista CRM `/negocios/listar` |
+| **Gráfico Donut** | `Corretores Ativos Por Vertical` (Terceiros: 64, Lançamentos: 41) | Usuário | Vertical | `COUNT(Usuarios)` por vertical de atuação | Vista CRM `/usuarios/listar` |
+| **Tabela 1** | `Leads Acionados Por Corretor` | Negócio | Corretor, Leads Ativados (5.217), Leads Receptivos (24.964), Leads Totais (30.181) | Soma de ativados e receptivos por corretor | Vista CRM `/negocios/listar` |
+| **Gráfico de Barras** | `Leads Por Fonte / Mídia` | Lead | Facebook (10.100), Grupo ZAP (7.867), Reativação (5.796), Captação ativa (4.342), Sites Brognoli (3.193), Indicasse (2.491), Chaves na Mão (2.383), etc. | `COUNT(Negocios)` agrupado por `Midia` | Vista CRM `/negocios/listar` (campo `Veiculo`/`Midia`) |
+| **Tabela 2** | `Visitas Realizadas Por Corretor / Equipe` (Total: 162 visitas) | Visita | AVT1=3, CET1=18, CET2=8, CML1=2, etc. | `COUNT(Visitas)` | Vista CRM `/agenda/listar` |
+| **Tabela 3** | `Fechamentos em Progresso Por Corretor / Equipe` (Total: 19) | Negócio | CEL1=2, CET1=9, CET2=4, etc. | `COUNT(Negocios)` em fechamento | Vista CRM `/negocios/listar` |
+| **Tabela 4** | `Imóveis Vendidos Por Corretor / Equipe` (159 vendas, 23 desistências) | Contrato | CET1=30, CET2=24, CML1=21, INT1=19, COT1=17, ESL1=11, CMT1=10, BLB1=7, INL1=7, CEL1=4 | Vendas oficiais CCV | Pipeimob Transações |
 
 ---
 
-## 4. Classificação de Viabilidade Histórica
+## 4. Separação Estrita: Fórmulas Comprovadas × Fórmulas Desconhecidas
 
-```
-[A] Disponível e Comprovada          -> Pronta para consumo e homologada
-[B] Disponível, mas Não Integrada    -> API possui suporte; pendente integração
-[C] Depende de Exportação / Histórico -> Requer extração histórica contínua ou liberação de acesso
-[D] Não Comprovada / Indisponível    -> Não localizada nas fontes examinadas até o momento
-```
+### 4.1 Fórmulas Comprovadas no Código e nos Dados
+- **Vendas Oficializadas, VGV e VGC**: Originadas do Pipeimob CCV (`data_oficial_ccv`). $\text{VGV} = \sum \text{ValorCCV}$; $\text{VGC} = \sum \text{ComissaoCCV}$.
+- **Reconciliação Comercial (Partição Nativa de 6 Categorias)**: Total vinculado = $\text{fully\_audited} + \text{value\_matched\_date\_unresolved} + \text{value\_mismatch\_date\_unresolved} + \text{value\_only} + \text{date\_only} + \text{value\_and\_date}$.
+- **Distribuição de Negócios Criados por Etapa Atual**: `COUNT(CodigoNegocio)` por `NomeEtapa` onde `DataInicial` $\in [I, F]$.
+- **Visitas Realizadas por Equipe/Corretor**: `COUNT(Visitas)` onde `Status = Realizada` e `DataInicio` $\in [I, F]$.
+- **Contagem de Usuários e Equipes Ativas**: `COUNT(Usuarios)` agrupados por `Equipe` e `CodigoAgencia` via `/usuarios/listar`.
 
-| Categoria | Descrição | Itens Classificados |
-| :---: | :--- | :--- |
-| **A** | **Disponível e Comprovada** | - Vendas, VGV e VGC Oficiais Pipeimob (`data_oficial_ccv`)<br>- Reconciliação Vista × Pipeimob com partição nativa de 6 categorias<br>- Distribuição de negócios criados por etapa atual no Pipe 1 (`/negocios/listar`)<br>- Visitas agendadas e realizadas (`/agenda/listar`) |
-| **B** | **Disponível, mas Não Integrada** | - Resolução organizacional de Corretores $\to$ Equipe $\to$ Gerente $\to$ Agência (`/usuarios/listar`)<br>- Agrupamento de funil por Loja física (Centro, Trindade, Campeche, etc.)<br>- Comparativo de 2 períodos via chamadas paralelas na API |
-| **C** | **Depende de Exportação / Histórico Externo** | - Coorte de transição histórica de cards (inexistente na REST v1)<br>- Classificação Pronto vs. Lançamento (depende de permissão para 447 imóveis arquivados) |
-| **D** | **Não Comprovada / Indisponível** | - Controle de Placas em campo (instalação, retirada, tempo de exposição)<br>- Metas comerciais de corretores/equipes via API REST<br>- Endpoint `/propostas/listar` (inexistente na REST v1)<br>- Alinhamento 1:1 de atividades em `/negocios/atividades` |
+### 4.2 Fórmulas e Regras Desconhecidas / Pendentes
+- **`% Conversão Por Corretor` (Tela de Lançamentos)**: Não foi possível determinar se o denominador é `Leads Totais` ou `Leads Únicos` na medida DAX original.
+- **Diferenciação Inbound / Outbound (`Leads Ativados` vs `Leads Receptivos`)**: A regra exata que classifica um card como Ativado ou Receptivo no CRM (se por tipo de mídia ou por flag de ação ativa do corretor) requer mapeamento do campo de origem.
+- **Controle Histórico de Pauta de Imóveis (Brognoli x Loft)**: Regra de consolidação externa entre portais não documentada na API REST do Vista.
 
 ---
 
-## 5. Materiais Complementares e Validação de Fontes
+## 5. Lacunas Específicas de Conteúdo (Material Restante)
 
-Para consolidação e refinamento do inventário de substituição:
-1. **Evidência visual individual das telas operacionais (1 a 10) e do GuideLine** para conferência de componentes de interface.
-2. **Consulta a medidas DAX / arquivo `.pbix`** como fonte desejável para conferência de fórmulas de apoio (não pré-requisito absoluto).
-3. **Mapeamento das mídias/canais de captação** para validação dos nomes dos veículos de captação.
-4. **Esclarecimento do suporte Vista CRM (empresa 2662)** quanto à existência de rotas para agenciamentos, placas e acesso a imóveis inativos/arquivados.
+Com a leitura integral dos PDFs disponíveis, delimitamos exatamente quais partes do Power BI ainda não possuem registro visual direto:
+
+1. **Telas 5 a 10 do Power BI (Funis por Loja Física)**:
+   - Os PDFs cobrem as visões por vertical (`Lançamentos`, `Terceiros`, `Geral`). Faltam capturas específicas dos dashboards individuais das agências físicas: Centro (Tela 6), Campeche (Tela 7), Trindade (Tela 8), Pedra Branca (Tela 9) e Jurerê (Tela 10).
+2. **Tela 3 (Comparativo Entre Dois Períodos Independentes)**:
+   - A visualização exata de layout da tela de comparação lado a lado entre dois períodos arbitrários não está nos 3 PDFs examinados.
+3. **Controle de Placas em Campo (Metadados de Vistoria)**:
+   - Indicadores de tempo médio de placa e status de instalação não aparecem nos relatórios PDF examinados.
