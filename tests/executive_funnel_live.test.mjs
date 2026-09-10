@@ -75,11 +75,11 @@ test("3. Diferença entre valor nulo e zero real (null permanece nulo e não vir
 });
 
 // ---------------------------------------------------------------------------
-// 4. Relações superiores a 100% (chamadas de 'Relação entre etapas' e não conversão)
+// 4. Ausência de conversão entre etapas (não apresenta taxas sequenciais de coorte)
 // ---------------------------------------------------------------------------
-test("4. Relações superiores a 100% são rotuladas como 'Relação entre etapas'", () => {
-  assert.match(workerSource, /Relação entre etapas/);
+test("4. Não apresenta taxas de conversão sequencial de coorte no funil de estoque", () => {
   assert.doesNotMatch(workerSource, /Conversão entre etapas/i);
+  assert.doesNotMatch(workerSource, /class="cso-funnel-relation"/);
 });
 
 // ---------------------------------------------------------------------------
@@ -574,16 +574,20 @@ test("17. Bloco metodológico: exibido exatamente uma vez ao final do funil come
 
 
 // ---------------------------------------------------------------------------
-// 18. Exatamente cinco conectores entre seis etapas
+// 18. Semântica de Negócios e remoção de conectores percentuais de coorte
 // ---------------------------------------------------------------------------
-test("18. Conectores: exatamente 5 conectores entre as 6 etapas do funil", () => {
+test("18. Semântica: rotula Negócios criados no período e remove conectores de conversão", () => {
   assert.match(
     workerSource,
-    /for\s*\(\s*let i\s*=\s*0;\s*i\s*<\s*allStages\.length\s*-\s*1;\s*i\+\+\s*\)/
+    /<h2>FUNIL · Pipeline \(Negócios\)<\/h2>/
   );
   assert.match(
     workerSource,
-    /if\s*\(\s*idx\s*<\s*stages\.length\s*-\s*1\s*\)/
+    /Negócios criados no período, distribuídos pela etapa atual na data da consulta/
+  );
+  assert.doesNotMatch(
+    workerSource,
+    /class="cso-funnel-relation"/
   );
 });
 

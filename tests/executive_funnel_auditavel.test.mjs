@@ -585,7 +585,7 @@ test("UI & Behavioral: Scenario A renders compact homologation state and Scenari
   assert.ok(html.includes("cso-official-highlight"), "Official sales highlight container must be present");
 
   // Scenario B tokens
-  assert.ok(html.includes("Relação entre etapas no período"), "Relation explanation tooltip for >100% must be present");
+  assert.ok(html.includes("não constituem conversão sequencial de coorte"), "Cohort non-conversion warning must be present");
 });
 
 test("Contract & UI: VGC completeness provenance renders available, partial badge, and unavailable states", async () => {
